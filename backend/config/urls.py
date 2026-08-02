@@ -1,11 +1,43 @@
 from django.contrib import admin
 from django.urls import path
-from drf_spectacular.views import SpectacularAPIView
+from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
-from config.health import HealthView
+from config.health import (
+    CeleryReadinessView,
+    DatabaseReadinessView,
+    LivenessView,
+    ReadinessView,
+    RedisReadinessView,
+)
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/v1/health/", HealthView.as_view(), name="health"),
+    path("api/v1/health/live/", LivenessView.as_view(), name="health-live"),
+    path("api/v1/health/ready/", ReadinessView.as_view(), name="health-ready"),
+    path(
+        "api/v1/health/ready/database/",
+        DatabaseReadinessView.as_view(),
+        name="health-ready-database",
+    ),
+    path(
+        "api/v1/health/ready/redis/",
+        RedisReadinessView.as_view(),
+        name="health-ready-redis",
+    ),
+    path(
+        "api/v1/health/ready/celery/",
+        CeleryReadinessView.as_view(),
+        name="health-ready-celery",
+    ),
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="api-schema"),
+    path(
+        "api/v1/docs/",
+        SpectacularSwaggerView.as_view(url_name="api-schema"),
+        name="api-docs",
+    ),
+    path(
+        "api/v1/redoc/",
+        SpectacularRedocView.as_view(url_name="api-schema"),
+        name="api-redoc",
+    ),
 ]

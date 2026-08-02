@@ -26,6 +26,8 @@ Load balancer or Nginx edge
 
 Static/media handling, Nginx, CDN, and exact application server are chosen in the production phase. PostgreSQL and Redis must not be publicly reachable. Keep web, worker, and scheduler images based on one tested backend artifact while running distinct commands.
 
+The local topology now runs one Django web service, one Celery worker, and one single-instance Celery Beat scheduler from the same backend image. Liveness is used for process checks; aggregate readiness gates dependent frontend startup, while PostgreSQL, Redis, worker, and Beat have service-specific checks. Compose reads credentials from `.env` and refuses missing PostgreSQL values instead of embedding secret fallbacks. Production must use a managed secret store rather than an environment file.
+
 ## CI pipeline
 
 For every pull request:
@@ -78,4 +80,3 @@ Use GitHub Actions with least-privilege permissions, pinned action versions/comm
 ## Production readiness confirmations
 
 Business owners must approve launch region, expected concurrent/peak traffic, availability SLO, RPO/RTO, maintenance windows, budget, data residency, retention, vendor choices, on-call ownership, incident contacts, and rollback authority.
-

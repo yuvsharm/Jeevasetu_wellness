@@ -1,17 +1,22 @@
 services:
   postgres:
     image: postgres:17-alpine
+    env_file:
+      - path: .env
+        required: false
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-jeevasetu}
-      POSTGRES_USER: ${POSTGRES_USER:-jeevasetu}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jeevasetu}
+      POSTGRES_DB: ${POSTGRES_DB:?Copy .env.example to .env and set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Copy .env.example to .env and set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
-    volumes: [postgres_data:/var/lib/postgresql/data]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks: [jeevasetu]
+    restart: unless-stopped
 
   redis:
     image: redis:7.4-alpine
@@ -21,52 +26,143 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    volumes: [redis_data:/data]
+    volumes:
+      - redis_data:/data
     networks: [jeevasetu]
+    restart: unless-stopped
 
   backend:
     build:
       context: ./backend
       target: development
     command: python manage.py runserver 0.0.0.0:8000
+    env_file:
+      - path: .env
+        required: false
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.development
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-local-development-only-change-me}
-      DJANGO_DEBUG: "true"
-      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
-      DJANGO_CORS_ALLOWED_ORIGINS: http://localhost:3000
-      DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:3000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-jeevasetu}:${POSTGRES_PASSWORD:-jeevasetu}@postgres:5432/${POSTGRES_DB:-jeevasetu}
-      REDIS_URL: redis://redis:6379/0
     ports: ["8000:8000"]
-    volumes: [./backend:/app]
+    volumes:
+      - ./backend:/app
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready/', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
     networks: [jeevasetu]
+    init: true
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ./backend
+      target: development
+    command: celery -A config worker --loglevel=INFO --hostname=worker@%h
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --destination worker@$${HOSTNAME} --timeout=5 | grep -q pong",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    networks: [jeevasetu]
+    init: true
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ./backend
+      target: development
+    command: >-
+      celery -A config beat --loglevel=INFO --pidfile=/tmp/celerybeat.pid
+      --schedule=/var/lib/celery/celerybeat-schedule
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+    volumes:
+      - ./backend:/app
+      - celery_beat_data:/var/lib/celery
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid && kill -0 $$(cat /tmp/celerybeat.pid)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks: [jeevasetu]
+    init: true
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       target: development
     command: pnpm dev --hostname 0.0.0.0
+    env_file:
+      - path: .env
+        required: false
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
     ports: ["3000:3000"]
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
-    depends_on: [backend]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
     networks: [jeevasetu]
+    init: true
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
+  celery_beat_data:
   frontend_node_modules:
 
 networks:
   jeevasetu:
     driver: bridge
-

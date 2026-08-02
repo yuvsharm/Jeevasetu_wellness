@@ -4,7 +4,7 @@ Jeevasetu Wellness is a planned physiotherapy home-service platform connecting p
 
 ## Current status
 
-Phase 1A establishes the repository and development foundation. It includes the Next.js frontend, Django/DRF backend, local PostgreSQL and Redis service definitions, Celery configuration, automated quality checks, and container build definitions. No business-domain module or model has been created.
+Phase 1B hardens the backend infrastructure foundation. It includes environment-validated Django settings, PostgreSQL and Redis readiness, Celery worker/Beat wiring, structured JSON logging, versioned OpenAPI documentation, automated quality checks, and hardened container definitions. No business-domain module or model has been created.
 
 The custom Django user model must be introduced during the authentication phase before the first production migration.
 
@@ -47,9 +47,16 @@ Prerequisites are Python 3.12+, Node.js 24+, pnpm 11.9.0, and optionally Docker 
 1. Copy `.env.example` to `.env` and keep the local file out of Git.
 2. Create a virtual environment under `backend/.venv` and install `backend/requirements/development.txt`.
 3. Run `pnpm install --frozen-lockfile` from `frontend/`.
-4. Start individual development servers or run `docker compose up --build`.
+4. Start individual development servers or run `docker compose up --build`. Compose also starts the infrastructure-only Celery worker and Beat scheduler.
 
-The API health endpoint is `http://localhost:8000/api/v1/health/`; the frontend is served at `http://localhost:3000/`.
+The frontend is served at `http://localhost:3000/`. Backend infrastructure routes are:
+
+- Liveness: `http://localhost:8000/api/v1/health/live/`
+- Aggregate readiness: `http://localhost:8000/api/v1/health/ready/`
+- Component readiness: `/api/v1/health/ready/database/`, `/redis/`, and `/celery/`
+- OpenAPI schema: `http://localhost:8000/api/v1/schema/`
+- Swagger UI: `http://localhost:8000/api/v1/docs/`
+- Redoc: `http://localhost:8000/api/v1/redoc/`
 
 ## Quality commands
 

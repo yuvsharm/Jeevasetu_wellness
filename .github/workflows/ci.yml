@@ -27,6 +27,17 @@ jobs:
       - run: python -m ruff check .
       - run: python -m pytest
       - run: python manage.py check --settings=config.settings.test
+      - name: Production deployment check
+        env:
+          DJANGO_SECRET_KEY: safe-ci-only-9Qx7-mR2-vT8-kL4-pN6-dF3-zC5-hJ1-sW0-uY7-G
+          DJANGO_ALLOWED_HOSTS: api.example.test
+          DJANGO_CORS_ALLOWED_ORIGINS: https://app.example.test
+          DJANGO_CSRF_TRUSTED_ORIGINS: https://app.example.test
+          DATABASE_URL: postgresql://check_user:check_password@db.example.test:5432/check_db
+          REDIS_URL: rediss://redis.example.test:6379/0
+        run: python manage.py check --deploy --settings=config.settings.production
+      - name: Validate OpenAPI schema
+        run: python manage.py spectacular --settings=config.settings.test --validate --file openapi.yaml
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.test
 
   frontend:
@@ -51,4 +62,3 @@ jobs:
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build
-

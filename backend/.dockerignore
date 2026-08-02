@@ -6,4 +6,9 @@ __pycache__
 .coverage
 htmlcov
 .env
+.coverage
+db.sqlite3
+media
+staticfiles
+tests
 

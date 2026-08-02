@@ -150,6 +150,15 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Prefer idempotent commands, database constraints, and explicit state transitions for booking and payment workflows.
 - Use third-party providers behind adapters so payment, SMS, email, maps, and storage vendors can change.
 
+## Implemented infrastructure health contract
+
+- `/api/v1/health/live/` verifies only that the Django process can serve requests; it has no downstream dependency.
+- `/api/v1/health/ready/` reports aggregate PostgreSQL, Redis, and Celery configuration state with individual component routes for diagnosis.
+- Dependency failures return HTTP 503 and only `ok` or `unavailable`; connection strings and exception details are never returned.
+- Celery readiness validates application configuration. Worker process health is checked separately by the container runtime.
+- Redis is the Celery broker but remains non-authoritative. Task results are disabled by default and require an explicit `CELERY_RESULT_BACKEND` justification/configuration.
+- Celery Beat is wired with an empty schedule so scheduled business work can be added only in a later approved phase.
+
 ## Load-handling strategy
 
 1. Keep API instances stateless and scale Next.js, Django, and Celery independently.
@@ -173,4 +182,3 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Performance tests: baseline and peak scenarios with recorded thresholds; verify no double booking under concurrency.
 - CI quality gates: formatting, linting, type checks, tests, migration checks, dependency scanning, and production builds.
 - Test data: synthetic only; factories must not copy production patient or clinical information.
-

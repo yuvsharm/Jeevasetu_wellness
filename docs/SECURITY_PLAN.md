@@ -33,6 +33,9 @@ Protect patient, clinical, location, identity, and financial data against unauth
 - Use non-root, minimal containers; read-only filesystems where practical; separate runtime identities and network access by service.
 - Keep PostgreSQL and Redis private. Require authentication/TLS as supported, enforce timeouts, backups, and least-privilege database roles.
 - Verify webhook signatures, prevent replay, use idempotency, and treat all provider data as untrusted.
+- Emit structured JSON logs with timestamp, severity, logger, and safe message fields. A defensive filter redacts password, OTP, token, secret, cookie, authorization, and API-key-like values before formatting.
+- Keep request bodies, headers, cookies, authorization values, personal data, and clinical data out of routine logs. Exception logging records an exception type without serializing its message in the JSON formatter.
+- Health responses expose only component names and `ok`/`unavailable` state. Dependency exception text, hosts, credentials, and connection URLs remain server-side.
 
 ## Audit, detection, and response
 
@@ -55,4 +58,3 @@ Protect patient, clinical, location, identity, and financial data against unauth
 - Data residency, retention periods, age/minor consent, caregiver authority, and patient record access.
 - Clinical signature/amendment requirements and break-glass policy.
 - Exact authentication factors, identity proofing, GPS evidence, and payment/communication providers.
-
