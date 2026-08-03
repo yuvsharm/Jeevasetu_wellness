@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
 from config.health import (
@@ -13,6 +13,7 @@ from config.health import (
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/health/live/", LivenessView.as_view(), name="health-live"),
+    path("api/v1/tenancy/", include("apps.tenancy.urls")),
     path("api/v1/health/ready/", ReadinessView.as_view(), name="health-ready"),
     path(
         "api/v1/health/ready/database/",

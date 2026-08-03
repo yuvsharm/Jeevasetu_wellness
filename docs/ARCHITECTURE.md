@@ -159,6 +159,16 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Redis is the Celery broker but remains non-authoritative. Task results are disabled by default and require an explicit `CELERY_RESULT_BACKEND` justification/configuration.
 - Celery Beat is wired with an empty schedule so scheduled business work can be added only in a later approved phase.
 
+## Implemented tenancy foundation
+
+- `accounts.User` is the minimal UUID-based custom identity model reserved before the first migration. Authentication flows and verification policy are not implemented.
+- `Organization` is the tenant boundary. `Clinic` belongs to exactly one organization, and protected foreign keys prevent silent cascading deletion of tenant data.
+- Organization membership establishes tenant access. A separate clinic membership mapping is implemented because future authorization must support users who may access only selected clinics within an organization.
+- Development requests resolve organization context from `X-Organization-Slug`. Resolution is request-scoped, uses no global or thread-local state, and can later be replaced by a subdomain resolver.
+- Middleware resolves context only. DRF permissions independently require an authenticated identity and active organization membership, while clinic querysets also require an active clinic mapping.
+- Tenant-domain API querysets always start from the resolved organization. Controlled Django admin and migration code may use explicit unscoped model access.
+- No superuser bypass is enabled. A future audited platform-administration policy requires separate approval and complete authorization tests.
+
 ## Load-handling strategy
 
 1. Keep API instances stateless and scale Next.js, Django, and Celery independently.

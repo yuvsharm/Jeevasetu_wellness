@@ -14,9 +14,12 @@
 
 ### Identity and organization
 
-- `User`: login identity, verification state, active state; no role-specific profile fields.
+- `User` (implemented foundation): UUID primary key with Django's standard identity structure; no login, verification, OTP, JWT, or reset flow yet.
+- `Organization` (implemented): UUID primary key, legal/display names, globally unique slug, active state, optional timezone/default currency, and timestamps.
+- `Clinic` (implemented): protected organization relationship, organization-scoped unique slug, active state, optional address placeholders/timezone, and timestamps.
+- `OrganizationMembership` (implemented): protected user and organization relationships, active/disabled state, timestamps, and one mapping per user/organization.
+- `ClinicMembership` (implemented): protected organization-membership and clinic relationships, active/disabled state, timestamps, and one mapping per membership/clinic. Model validation rejects mappings across organizations.
 - `RoleMembership`: user-to-role assignment, optional organization/scope, validity period.
-- `Organization`: operating/legal entity or partner clinic if multi-organization support is confirmed.
 - `ConsentRecord`: versioned consent/policy acceptance, purpose, timestamp, evidence.
 - `AuthSession` or token metadata: only if required by the selected authentication design.
 
@@ -83,6 +86,10 @@
 
 ## Relationship and integrity rules
 
+- Tenant slugs are lowercase development-safe identifiers. Organization slugs are global; clinic slugs are unique only within an organization.
+- Tenant relationships use `PROTECT`; organization, clinic, membership, and user deletion cannot silently cascade through tenant data.
+- Tenant and clinic authorization uses active membership mappings and organization-scoped queries. Deactivation is preferred over deletion.
+
 - A booking belongs to one patient and service variant and has one active requested schedule at a time.
 - Assignment history is retained; only one active practitioner assignment per visit.
 - Practitioner availability, leave, and existing visits must be checked atomically when assigning.
@@ -97,4 +104,3 @@
 Candidate composite indexes include booking status/time, practitioner/time, patient/created time, visit/assignment state, notification state/schedule, payment provider reference, and active credential expiry. Final indexes must follow observed query plans.
 
 Retention and deletion must be policy-driven per data category. Account closure may deactivate access while legally retained clinical, audit, and financial records remain restricted. Define anonymization, legal holds, export, correction, and deletion workflows only after legal confirmation.
-

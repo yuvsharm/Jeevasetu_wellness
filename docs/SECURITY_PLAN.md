@@ -7,6 +7,9 @@ Protect patient, clinical, location, identity, and financial data against unauth
 ## Identity and access
 
 - Use Django's custom user model and mature authentication primitives; use modern password hashing with tuned parameters.
+- The Phase 1C custom-user schema is structural only. Tenant authorization currently denies by default unless the request has a resolved active organization and an active membership; clinic access additionally requires an active mapping.
+- Tenant middleware supplies request context but grants no authority. DRF permissions and organization-scoped object queries enforce the boundary again, and unknown/inactive tenant responses do not reveal tenant existence.
+- Platform superusers have no tenancy bypass. Any future bypass requires explicit policy, reason capture, audit events, and dedicated positive and negative tests.
 - Require verified contact before sensitive workflows. Add MFA for staff and administrators before production; strongly consider it for practitioners.
 - Use short session/token lifetimes appropriate to role, secure rotation/revocation, logout invalidation, and reauthentication for sensitive changes.
 - Cookies, if used, are `Secure`, `HttpOnly`, and appropriately `SameSite`; enforce CSRF protection. Never keep long-lived tokens in local storage.

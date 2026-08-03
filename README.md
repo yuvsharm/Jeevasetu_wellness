@@ -4,7 +4,7 @@ Jeevasetu Wellness is a planned physiotherapy home-service platform connecting p
 
 ## Current status
 
-Phase 1B hardens the backend infrastructure foundation. It includes environment-validated Django settings, PostgreSQL and Redis readiness, Celery worker/Beat wiring, structured JSON logging, versioned OpenAPI documentation, automated quality checks, and hardened container definitions. No business-domain module or model has been created.
+Phase 1C adds the organization and clinic tenancy foundation on top of the runtime-approved Phase 1B infrastructure. It includes a migration-safe minimal custom user, organization and clinic records, explicit membership mappings, request-scoped tenant resolution, and deny-by-default DRF permission foundations. Authentication flows, RBAC roles, and business-domain modules remain deferred.
 
 The custom Django user model must be introduced during the authentication phase before the first production migration.
 
@@ -57,6 +57,14 @@ The frontend is served at `http://localhost:3000/`. Backend infrastructure route
 - OpenAPI schema: `http://localhost:8000/api/v1/schema/`
 - Swagger UI: `http://localhost:8000/api/v1/docs/`
 - Redoc: `http://localhost:8000/api/v1/redoc/`
+
+Development tenancy verification routes use the `X-Organization-Slug` request header:
+
+- Active organization context: `GET /api/v1/tenancy/context/`
+- Clinics available through active clinic mappings: `GET /api/v1/tenancy/clinics/`
+- Tenant- and clinic-scoped lookup: `GET /api/v1/tenancy/clinics/{id}/`
+
+These routes require an authenticated Django request identity and active membership. They are isolation probes, not public business APIs; no privileged-user bypass is enabled.
 
 ## Quality commands
 

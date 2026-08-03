@@ -11,6 +11,14 @@ Each phase ends with reviewed documentation, passing automated checks, and a cle
 
 ## Phase 1 — Foundation and secure identity
 
+Completed subphases:
+
+- Phase 1A: repository and application foundation.
+- Phase 1B: runtime-approved infrastructure, health, logging, OpenAPI, Celery, and container hardening.
+- Phase 1C: organization/clinic schema, minimal migration-safe custom user, membership mappings, request-scoped tenant resolution, and deny-by-default tenancy permission/query foundations.
+
+Authentication, verification, RBAC roles, profiles, dashboards, audit foundations, consent, and public/business features below remain future work.
+
 - Initialize Git and repository conventions.
 - Scaffold Next.js and Django/DRF only in their approved directories.
 - Add PostgreSQL, Redis, Celery, and local Docker Compose.
@@ -76,4 +84,3 @@ Each phase ends with reviewed documentation, passing automated checks, and a cle
 10. Communication channels/providers, transactional consent, reminder timing, and marketing opt-in policy.
 11. Support hours, escalation rules, SLAs/SLOs, expected launch and peak volume, and business continuity targets.
 12. Whether patients may choose a named therapist or only preferences such as gender/language/specialty.
-

@@ -19,6 +19,10 @@ The list is a resource map, not a final contract. Actions are used only for genu
 /api/v1/health/live
 /api/v1/health/ready
 
+/api/v1/tenancy/context              # Phase 1C isolation probe
+/api/v1/tenancy/clinics              # Active mapped clinics only
+/api/v1/tenancy/clinics/{id}         # Tenant- and clinic-scoped lookup
+
 /api/v1/auth/register
 /api/v1/auth/login
 /api/v1/auth/logout
@@ -102,6 +106,8 @@ Transitions are server-controlled, permission-checked, validated against current
 
 Select same-site secure cookie sessions or short-lived tokens with rotated refresh credentials based on hosting topology. Do not store long-lived bearer credentials in browser local storage. CSRF protection is mandatory for cookie-authenticated unsafe requests. Every endpoint applies role, scope, ownership/assignment, record state, and minimum-necessary field rules.
 
+Phase 1C tenancy probes resolve `X-Organization-Slug` and require an authenticated `request.user`, active organization membership, and—where a clinic object is involved—an active clinic mapping. Missing context is rejected, while malformed, unknown, and inactive organization identifiers share a non-disclosing unavailable response. Middleware resolution is never sufficient authorization. No superuser bypass or role-specific RBAC is active.
+
 ## Integration boundaries
 
 - Payment provider webhooks: signature verified against raw body, timestamp/replay checked, event deduplicated, processing acknowledged quickly and completed asynchronously.
@@ -112,4 +118,3 @@ Select same-site secure cookie sessions or short-lived tokens with rotated refre
 ## API evolution
 
 Additive changes are preferred within `v1`. Deprecations are measured, communicated, and time-bounded. Breaking semantic or representation changes require a versioning decision. The frontend must consume a typed client generated from or validated against the OpenAPI contract, without duplicating server rules as authority.
-
