@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -19,6 +20,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "drf_spectacular",
+    "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
     "apps.tenancy",
 ]
@@ -77,10 +79,37 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.accounts.authentication.EnabledUserJWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
     "UNAUTHENTICATED_USER": None,
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {
+        "auth_register": "5/hour",
+        "auth_login": "10/minute",
+        "auth_refresh": "30/minute",
+        "auth_logout": "30/minute",
+        "auth_password_change": "10/hour",
+        "auth_password_reset": "5/hour",
+        "auth_profile": "60/minute",
+    },
+}
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": False,
+    "ALGORITHM": "HS256",
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "USER_AUTHENTICATION_RULE": "apps.accounts.authentication.enabled_user_authentication_rule",
+    "CHECK_REVOKE_TOKEN": True,
 }
 SPECTACULAR_SETTINGS = {
     "TITLE": "Jeevasetu Wellness API",
@@ -92,6 +121,16 @@ SPECTACULAR_SETTINGS = {
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 REDIS_SOCKET_CONNECT_TIMEOUT = env.float("REDIS_SOCKET_CONNECT_TIMEOUT", default=2.0)
 REDIS_SOCKET_TIMEOUT = env.float("REDIS_SOCKET_TIMEOUT", default=2.0)
+AUTH_RATE_LIMIT_REDIS_URL = env(
+    "AUTH_RATE_LIMIT_REDIS_URL", default=f"{REDIS_URL.rsplit('/', 1)[0]}/1"
+)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": AUTH_RATE_LIMIT_REDIS_URL,
+        "OPTIONS": {"socket_connect_timeout": REDIS_SOCKET_CONNECT_TIMEOUT},
+    }
+}
 
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=None)
@@ -119,8 +158,13 @@ CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_NAME = "jeevasetu_session"
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_HTTPONLY = True
+
+AUTH_PASSWORD_RESET_TIMEOUT_SECONDS = env.int("AUTH_PASSWORD_RESET_TIMEOUT_SECONDS", default=1800)
+AUTH_EXPOSE_PASSWORD_RESET_TOKEN = False
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"

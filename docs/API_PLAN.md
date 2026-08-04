@@ -23,13 +23,14 @@ The list is a resource map, not a final contract. Actions are used only for genu
 /api/v1/tenancy/clinics              # Active mapped clinics only
 /api/v1/tenancy/clinics/{id}         # Tenant- and clinic-scoped lookup
 
-/api/v1/auth/register
-/api/v1/auth/login
-/api/v1/auth/logout
-/api/v1/auth/refresh                 # If token architecture is selected
-/api/v1/auth/verify
-/api/v1/auth/password/reset
-/api/v1/auth/me
+/api/v1/auth/register                # Implemented Phase 1D
+/api/v1/auth/login                   # Email or mobile identifier
+/api/v1/auth/refresh                 # Rotating refresh token
+/api/v1/auth/logout                  # Refresh-token blacklist
+/api/v1/auth/password/change
+/api/v1/auth/password/reset/request
+/api/v1/auth/password/reset/confirm
+/api/v1/auth/profile                 # Safe identity profile
 
 /api/v1/patients/me
 /api/v1/patients/{patient_id}        # Scoped caregiver/staff access
@@ -107,6 +108,8 @@ Transitions are server-controlled, permission-checked, validated against current
 Select same-site secure cookie sessions or short-lived tokens with rotated refresh credentials based on hosting topology. Do not store long-lived bearer credentials in browser local storage. CSRF protection is mandatory for cookie-authenticated unsafe requests. Every endpoint applies role, scope, ownership/assignment, record state, and minimum-necessary field rules.
 
 Phase 1C tenancy probes resolve `X-Organization-Slug` and require an authenticated `request.user`, active organization membership, and—where a clinic object is involved—an active clinic mapping. Missing context is rejected, while malformed, unknown, and inactive organization identifiers share a non-disclosing unavailable response. Middleware resolution is never sufficient authorization. No superuser bypass or role-specific RBAC is active.
+
+Phase 1D uses five-minute bearer access tokens and one-day rotating refresh tokens. Rotation blacklists the submitted refresh token, logout blacklists the supplied token, and password changes blacklist all outstanding refresh tokens while invalidating access tokens through the password-revocation claim. Registration does not automatically authenticate. Password-reset request responses do not disclose account existence, and delivery remains a future provider-adapter concern.
 
 ## Integration boundaries
 

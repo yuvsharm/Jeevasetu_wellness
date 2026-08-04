@@ -16,8 +16,9 @@ Completed subphases:
 - Phase 1A: repository and application foundation.
 - Phase 1B: runtime-approved infrastructure, health, logging, OpenAPI, Celery, and container hardening.
 - Phase 1C: organization/clinic schema, minimal migration-safe custom user, membership mappings, request-scoped tenant resolution, and deny-by-default tenancy permission/query foundations.
+- Phase 1D: API-only JWT authentication, normalized registration/login identifiers, refresh rotation/blacklisting, logout, password/profile foundations, authentication audit/throttling, and non-authorizing role assignments.
 
-Authentication, verification, RBAC roles, profiles, dashboards, audit foundations, consent, and public/business features below remain future work.
+OTP/contact verification, role permissions/RBAC enforcement, dashboards, consent, general audit foundations, and public/business features below remain future work.
 
 - Initialize Git and repository conventions.
 - Scaffold Next.js and Django/DRF only in their approved directories.

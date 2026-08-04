@@ -169,6 +169,16 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Tenant-domain API querysets always start from the resolved organization. Controlled Django admin and migration code may use explicit unscoped model access.
 - No superuser bypass is enabled. A future audited platform-administration policy requires separate approval and complete authorization tests.
 
+## Implemented identity and authentication foundation
+
+- The UUID user identity stores normalized unique email/mobile identifiers, active and enabled states, names, and a URL-only profile-image placeholder.
+- Django password validators and hashers remain authoritative. Registration and profile APIs normalize identity values before enforcing database uniqueness.
+- DRF authenticates bearer access tokens through SimpleJWT. Access tokens are short-lived; refresh tokens rotate, blacklist after rotation/logout, and are rejected after password changes.
+- Login accepts email or E.164 mobile identifiers and returns access/refresh tokens plus a safe user summary. No browser storage or frontend flow is implemented.
+- Password-reset records contain only a SHA-256 digest of a random high-entropy token, an expiry, and single-use state. No email, SMS, or other delivery provider is connected.
+- Scoped authentication throttles use a dedicated non-authoritative Redis database. Authentication audit events store safe event/outcome metadata and hashed attempted identifiers, never credentials or tokens.
+- Role assignments contain only one of the approved role constants plus optional organization/clinic scope. They do not grant permissions or bypass tenancy checks.
+
 ## Load-handling strategy
 
 1. Keep API instances stateless and scale Next.js, Django, and Celery independently.

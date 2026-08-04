@@ -13,6 +13,8 @@ class IsActiveOrganizationMember(BasePermission):
         user = request.user
         if user is None or not user.is_authenticated:
             raise NotAuthenticated()
+        if not user.is_active or not user.is_enabled:
+            return False
         if request.tenant_resolution == "missing":
             raise ValidationError({"tenant": "Organization context is required."})
         if request.organization is None:

@@ -50,6 +50,12 @@ DATABASES["default"].update(
     }
 )
 REDIS_URL = require_url_scheme("REDIS_URL", env("REDIS_URL"), {"redis", "rediss"})
+AUTH_RATE_LIMIT_REDIS_URL = require_url_scheme(
+    "AUTH_RATE_LIMIT_REDIS_URL",
+    env("AUTH_RATE_LIMIT_REDIS_URL", default=f"{REDIS_URL.rsplit('/', 1)[0]}/1"),
+    {"redis", "rediss"},
+)
+CACHES["default"]["LOCATION"] = AUTH_RATE_LIMIT_REDIS_URL  # noqa: F405
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=None)
 if CELERY_RESULT_BACKEND:

@@ -1,5 +1,6 @@
 import pytest
 from django.urls import reverse
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.tenancy.models import Clinic, ClinicMembership, Organization, OrganizationMembership
 
@@ -107,7 +108,7 @@ def test_inactive_tenant_matches_invalid_tenant_response(api_client, tenant_data
 def test_unauthenticated_request_is_denied(api_client, tenant_data):
     response = api_client.get(reverse("tenant-context"), **{TENANT_HEADER: "first-org"})
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.django_db
@@ -185,3 +186,17 @@ def test_request_user_path_is_authenticator_agnostic(api_client, tenant_data):
     response = api_client.get(reverse("tenant-context"), **{TENANT_HEADER: "first-org"})
 
     assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_jwt_authenticated_user_remains_tenant_isolated(api_client, tenant_data):
+    member = tenant_data["member"]
+    access = str(RefreshToken.for_user(member).access_token)
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+
+    allowed = api_client.get(reverse("tenant-context"), **{TENANT_HEADER: "first-org"})
+    denied = api_client.get(reverse("tenant-context"), **{TENANT_HEADER: "second-org"})
+
+    assert allowed.status_code == 200
+    assert denied.status_code == 403
+    assert "Second Organization" not in str(denied.data)

@@ -10,6 +10,11 @@ Protect patient, clinical, location, identity, and financial data against unauth
 - The Phase 1C custom-user schema is structural only. Tenant authorization currently denies by default unless the request has a resolved active organization and an active membership; clinic access additionally requires an active mapping.
 - Tenant middleware supplies request context but grants no authority. DRF permissions and organization-scoped object queries enforce the boundary again, and unknown/inactive tenant responses do not reveal tenant existence.
 - Platform superusers have no tenancy bypass. Any future bypass requires explicit policy, reason capture, audit events, and dedicated positive and negative tests.
+- Phase 1D bearer authentication uses five-minute access tokens and rotating one-day refresh tokens. Refresh replay is blocked by the PostgreSQL-backed SimpleJWT outstanding/blacklist records; logout and password changes revoke refresh credentials.
+- Login, registration, refresh, logout, password operations, and profile access have scoped throttles backed by a dedicated Redis logical database. Redis remains non-authoritative.
+- Password-reset tokens are random, expire after 30 minutes, are stored only as SHA-256 digests, and are consumed once. Requests use non-enumerating responses, and no delivery provider is configured.
+- Authentication audit events exclude raw identifiers, passwords, and tokens. Attempted identifiers are hashed; malformed forwarded IP data is discarded.
+- Approved role constants and assignments are data-only. They grant no permissions and do not weaken tenant membership checks.
 - Require verified contact before sensitive workflows. Add MFA for staff and administrators before production; strongly consider it for practitioners.
 - Use short session/token lifetimes appropriate to role, secure rotation/revocation, logout invalidation, and reauthentication for sensitive changes.
 - Cookies, if used, are `Secure`, `HttpOnly`, and appropriately `SameSite`; enforce CSRF protection. Never keep long-lived tokens in local storage.

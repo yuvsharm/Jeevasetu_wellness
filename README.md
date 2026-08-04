@@ -4,7 +4,7 @@ Jeevasetu Wellness is a planned physiotherapy home-service platform connecting p
 
 ## Current status
 
-Phase 1C adds the organization and clinic tenancy foundation on top of the runtime-approved Phase 1B infrastructure. It includes a migration-safe minimal custom user, organization and clinic records, explicit membership mappings, request-scoped tenant resolution, and deny-by-default DRF permission foundations. Authentication flows, RBAC roles, and business-domain modules remain deferred.
+Phase 1D adds the API-only identity and authentication foundation on top of the approved tenancy infrastructure. It includes normalized registration, email/mobile login, short-lived JWT access tokens, rotating refresh tokens with blacklisting, logout, password change/reset foundations, profile maintenance, authentication throttling/audit events, and role constants/assignments that grant no permissions. Business-domain modules and frontend business pages remain deferred.
 
 The custom Django user model must be introduced during the authentication phase before the first production migration.
 
@@ -65,6 +65,14 @@ Development tenancy verification routes use the `X-Organization-Slug` request he
 - Tenant- and clinic-scoped lookup: `GET /api/v1/tenancy/clinics/{id}/`
 
 These routes require an authenticated Django request identity and active membership. They are isolation probes, not public business APIs; no privileged-user bypass is enabled.
+
+Identity API routes are under `/api/v1/auth/`:
+
+- `POST register/`, `login/`, `refresh/`, and `logout/`
+- `POST password/change/`, `password/reset/request/`, and `password/reset/confirm/`
+- `GET`, `PUT`, or `PATCH profile/`
+
+Access tokens expire after five minutes. Refresh tokens expire after one day, rotate on use, and blacklist the submitted token. Password-reset requests return a generic response and store only a single-use token digest; delivery-provider integration is intentionally absent.
 
 ## Quality commands
 

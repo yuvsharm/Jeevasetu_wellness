@@ -23,6 +23,12 @@ REDIS_URL = env("REDIS_URL")
 if urlparse(REDIS_URL).scheme not in {"redis", "rediss"}:
     raise ImproperlyConfigured("REDIS_URL must use Redis in development")
 CELERY_BROKER_URL = REDIS_URL
+AUTH_RATE_LIMIT_REDIS_URL = env(
+    "AUTH_RATE_LIMIT_REDIS_URL", default=f"{REDIS_URL.rsplit('/', 1)[0]}/1"
+)
+if urlparse(AUTH_RATE_LIMIT_REDIS_URL).scheme not in {"redis", "rediss"}:
+    raise ImproperlyConfigured("AUTH_RATE_LIMIT_REDIS_URL must use Redis in development")
+CACHES["default"]["LOCATION"] = AUTH_RATE_LIMIT_REDIS_URL  # noqa: F405
 CORS_ALLOWED_ORIGINS = env.list(  # noqa: F405
     "DJANGO_CORS_ALLOWED_ORIGINS", default=["http://localhost:3000"]
 )

@@ -5,12 +5,12 @@ import sys
 import pytest
 
 
-def load_production_settings(extra_environment):
+def load_production_settings(extra_environment, command=None):
     environment = os.environ.copy()
     environment.update(extra_environment)
     environment["DJANGO_SETTINGS_MODULE"] = "config.settings.production"
     return subprocess.run(
-        [sys.executable, "manage.py", "check"],
+        [sys.executable, "manage.py", *(command or ["check"])],
         capture_output=True,
         check=False,
         env=environment,
@@ -35,6 +35,22 @@ def test_production_settings_accept_safe_environment(safe_production_environment
 
     assert result.returncode == 0, result.stderr
     assert "System check identified no issues" in result.stdout
+
+
+def test_production_auth_cache_defaults_to_dedicated_redis_database(
+    safe_production_environment,
+):
+    result = load_production_settings(
+        safe_production_environment,
+        [
+            "shell",
+            "-c",
+            "from django.conf import settings; print(settings.CACHES['default']['LOCATION'])",
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "rediss://redis.example.com:6379/1" in result.stdout
 
 
 @pytest.mark.parametrize(
