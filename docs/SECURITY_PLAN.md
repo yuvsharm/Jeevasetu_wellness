@@ -66,3 +66,6 @@ Protect patient, clinical, location, identity, and financial data against unauth
 - Data residency, retention periods, age/minor consent, caregiver authority, and patient record access.
 - Clinical signature/amendment requirements and break-glass policy.
 - Exact authentication factors, identity proofing, GPS evidence, and payment/communication providers.
+# Phase 1E-A authorization controls
+
+All role checks require an enabled authenticated identity and active tenant chain. Cross-tenant actions, unsupported platform roles, manager-to-Owner escalation, self-broadening, and final-Owner removal are denied and audited with non-sensitive metadata. The final active Owner requires an approved transfer before disable/removal. Passwords, tokens, OTPs, authorization headers, clinical data, and confidential protocols are excluded from RBAC audit metadata.

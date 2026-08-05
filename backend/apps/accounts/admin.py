@@ -5,6 +5,7 @@ from apps.accounts.models import (
     AuthenticationAuditEvent,
     PasswordResetRequest,
     RoleAssignment,
+    RoleAuditEvent,
     User,
 )
 
@@ -27,6 +28,21 @@ class RoleAssignmentAdmin(admin.ModelAdmin):
     list_filter = ("role", "is_active")
     search_fields = ("user__email", "user__mobile_number")
     readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(RoleAuditEvent)
+class RoleAuditEventAdmin(admin.ModelAdmin):
+    list_display = ("event", "acting_user", "target_user", "organization", "created_at")
+    readonly_fields = tuple(field.name for field in RoleAuditEvent._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(PasswordResetRequest)

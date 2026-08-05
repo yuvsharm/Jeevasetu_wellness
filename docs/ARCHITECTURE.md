@@ -202,3 +202,6 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Performance tests: baseline and peak scenarios with recorded thresholds; verify no double booking under concurrency.
 - CI quality gates: formatting, linting, type checks, tests, migration checks, dependency scanning, and production builds.
 - Test data: synthetic only; factories must not copy production patient or clinical information.
+# Phase 1E-A RBAC foundation
+
+Tenant middleware only resolves request organization context. Reusable DRF permissions query active membership-backed role assignments and perform explicit organization, clinic, self, or assigned-user checks. Authorization state is request-local/database-backed; there is no thread-local state or superuser bypass. See `RBAC_MATRIX.md`. No RBAC API or business-domain module is included.

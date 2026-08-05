@@ -85,3 +85,6 @@ OTP/contact verification, role permissions/RBAC enforcement, dashboards, consent
 10. Communication channels/providers, transactional consent, reminder timing, and marketing opt-in policy.
 11. Support hours, escalation rules, SLAs/SLOs, expected launch and peak volume, and business continuity targets.
 12. Whether patients may choose a named therapist or only preferences such as gender/language/specialty.
+# Phase 1E-A: RBAC foundation
+
+Implemented as a backend foundation: four tenant-aware roles, membership/clinic scope validation, deny-by-default policy utilities, escalation protection, immutable audit events, migration, and focused tests. Role-management APIs, UI, dashboards, and every business-domain module remain future work and are not part of this phase.

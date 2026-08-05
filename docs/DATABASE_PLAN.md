@@ -104,3 +104,6 @@
 Candidate composite indexes include booking status/time, practitioner/time, patient/created time, visit/assignment state, notification state/schedule, payment provider reference, and active credential expiry. Final indexes must follow observed query plans.
 
 Retention and deletion must be policy-driven per data category. Account closure may deactivate access while legally retained clinical, audit, and financial records remain restricted. Define anonymization, legal holds, export, correction, and deletion workflows only after legal confirmation.
+# Phase 1E-A RBAC records
+
+`RoleAssignment` binds a user to an organization membership, optional matching clinic membership, one of four approved roles, lifecycle metadata, and a protected assigner. Named conditional unique constraints prevent duplicate active assignments at organization or clinic scope. `RoleAuditEvent` is append-only and uses protected tenant/identity references. Migration 0003 creates no assignments and does not modify authentication or tenancy rows.
