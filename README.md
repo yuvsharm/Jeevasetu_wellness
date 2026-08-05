@@ -4,9 +4,7 @@ Jeevasetu Wellness is a planned physiotherapy home-service platform connecting p
 
 ## Current status
 
-Phase 1D adds the API-only identity and authentication foundation on top of the approved tenancy infrastructure. It includes normalized registration, email/mobile login, short-lived JWT access tokens, rotating refresh tokens with blacklisting, logout, password change/reset foundations, profile maintenance, authentication throttling/audit events, and role constants/assignments that grant no permissions. Business-domain modules and frontend business pages remain deferred.
-
-The custom Django user model must be introduced during the authentication phase before the first production migration.
+Phase 1E-B adds tenant-scoped RBAC management APIs on top of the approved identity, tenancy, and role-assignment foundations. OWNER and delegated MANAGER operations are enforced server-side, PHYSIOTHERAPIST and CUSTOMER access is self-only, normal removal is audited deactivation, and no frontend or business-domain module is included.
 
 ## Approved architecture
 
@@ -73,6 +71,16 @@ Identity API routes are under `/api/v1/auth/`:
 - `GET`, `PUT`, or `PATCH profile/`
 
 Access tokens expire after five minutes. Refresh tokens expire after one day, rotate on use, and blacklist the submitted token. Password-reset requests return a generic response and store only a single-use token digest; delivery-provider integration is intentionally absent.
+
+RBAC routes require a bearer access token and `X-Organization-Slug`:
+
+- `GET /api/v1/access/me/`
+- `GET`, `POST /api/v1/access/roles/`
+- `GET`, `PATCH /api/v1/access/roles/{id}/`
+- `POST /api/v1/access/roles/{id}/activate/`
+- `POST /api/v1/access/roles/{id}/deactivate/`
+
+Role deletion and a public audit-event API are intentionally unavailable.
 
 ## Quality commands
 

@@ -88,3 +88,7 @@ OTP/contact verification, role permissions/RBAC enforcement, dashboards, consent
 # Phase 1E-A: RBAC foundation
 
 Implemented as a backend foundation: four tenant-aware roles, membership/clinic scope validation, deny-by-default policy utilities, escalation protection, immutable audit events, migration, and focused tests. Role-management APIs, UI, dashboards, and every business-domain module remain future work and are not part of this phase.
+
+## Phase 1E-B: RBAC management APIs
+
+Implemented as an API-only authorization layer: current-access summary, scoped role listing/detail, controlled assignment and clinic-scope correction, audited activation/deactivation, Owner/Manager boundaries, safe OpenAPI contracts, and regression tests. Frontend UI, dashboards, public/business APIs, and all business-domain modules remain future work.

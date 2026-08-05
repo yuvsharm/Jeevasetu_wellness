@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework.permissions import BasePermission
 
 from apps.accounts.models import Role, RoleAssignment
@@ -21,6 +22,13 @@ def active_roles(user, organization, *, clinic=None):
         is_active=True,
         organization_membership__is_active=True,
         organization_membership__organization__is_active=True,
+    ).filter(
+        Q(clinic__isnull=True)
+        | Q(
+            clinic__is_active=True,
+            clinic_membership__is_active=True,
+            clinic_membership__clinic__is_active=True,
+        )
     )
     if clinic is not None:
         if not clinic.is_active or clinic.organization_id != organization.id:

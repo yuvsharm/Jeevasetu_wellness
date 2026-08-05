@@ -32,6 +32,12 @@ The list is a resource map, not a final contract. Actions are used only for genu
 /api/v1/auth/password/reset/confirm
 /api/v1/auth/profile                 # Safe identity profile
 
+/api/v1/access/me                    # Active caller access summary
+/api/v1/access/roles                 # Scoped list and assignment
+/api/v1/access/roles/{id}            # Scoped detail and clinic correction
+/api/v1/access/roles/{id}/activate   # Audited activation
+/api/v1/access/roles/{id}/deactivate # Audited removal without DELETE
+
 /api/v1/patients/me
 /api/v1/patients/{patient_id}        # Scoped caregiver/staff access
 /api/v1/patients/{patient_id}/caregivers
@@ -110,6 +116,8 @@ Select same-site secure cookie sessions or short-lived tokens with rotated refre
 Phase 1C tenancy probes resolve `X-Organization-Slug` and require an authenticated `request.user`, active organization membership, and—where a clinic object is involved—an active clinic mapping. Missing context is rejected, while malformed, unknown, and inactive organization identifiers share a non-disclosing unavailable response. Middleware resolution is never sufficient authorization. No superuser bypass or role-specific RBAC is active.
 
 Phase 1D uses five-minute bearer access tokens and one-day rotating refresh tokens. Rotation blacklists the submitted refresh token, logout blacklists the supplied token, and password changes blacklist all outstanding refresh tokens while invalidating access tokens through the password-revocation claim. Registration does not automatically authenticate. Password-reset request responses do not disclose account existence, and delivery remains a future provider-adapter concern.
+
+Phase 1E-B access endpoints require JWT authentication, `X-Organization-Slug`, an active identity and organization membership, and at least one active role. OWNER sees and manages assignments only in the resolved organization. MANAGER sees and manages only PHYSIOTHERAPIST and CUSTOMER assignments inside delegated organization/clinic scope; OWNER/MANAGER assignment, self-promotion, and scope broadening are denied. PHYSIOTHERAPIST and CUSTOMER role reads are self-only and writes are denied. Role, target user, and organization are immutable through PATCH; only validated clinic-scope correction is supported. Deactivation replaces DELETE and requires a reason. Cross-tenant objects are excluded before lookup, and responses contain public UUIDs and authorization state only.
 
 ## Integration boundaries
 

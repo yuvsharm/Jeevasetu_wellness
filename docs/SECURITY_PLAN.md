@@ -69,3 +69,7 @@ Protect patient, clinical, location, identity, and financial data against unauth
 # Phase 1E-A authorization controls
 
 All role checks require an enabled authenticated identity and active tenant chain. Cross-tenant actions, unsupported platform roles, manager-to-Owner escalation, self-broadening, and final-Owner removal are denied and audited with non-sensitive metadata. The final active Owner requires an approved transfer before disable/removal. Passwords, tokens, OTPs, authorization headers, clinical data, and confidential protocols are excluded from RBAC audit metadata.
+
+## Phase 1E-B API-level controls
+
+Access endpoints enforce JWT, the resolved tenant, active membership, active role, actor-level policy, and object scope independently. Querysets are restricted before UUID lookup; hidden same-tenant and cross-tenant objects return non-disclosing responses and generate safe escalation events. OWNER has organization-only authority. MANAGER may manage only PHYSIOTHERAPIST/CUSTOMER roles within delegated scope and cannot manage peers, Owners, or self. PHYSIOTHERAPIST/CUSTOMER writes are denied. Role removal is reasoned deactivation, the last active OWNER is transactionally protected, and immutable audits contain no credentials, headers, contact information, or business/clinical data.

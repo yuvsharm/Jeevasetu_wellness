@@ -202,6 +202,10 @@ Use Django groups/permissions plus object-level policy checks in domain services
 - Performance tests: baseline and peak scenarios with recorded thresholds; verify no double booking under concurrency.
 - CI quality gates: formatting, linting, type checks, tests, migration checks, dependency scanning, and production builds.
 - Test data: synthetic only; factories must not copy production patient or clinical information.
-# Phase 1E-A RBAC foundation
+## Phase 1E-A RBAC foundation
 
-Tenant middleware only resolves request organization context. Reusable DRF permissions query active membership-backed role assignments and perform explicit organization, clinic, self, or assigned-user checks. Authorization state is request-local/database-backed; there is no thread-local state or superuser bypass. See `RBAC_MATRIX.md`. No RBAC API or business-domain module is included.
+Tenant middleware only resolves request organization context. Reusable DRF permissions query active membership-backed role assignments and perform explicit organization, clinic, self, or assigned-user checks. Authorization state is request-local/database-backed; there is no thread-local state or superuser bypass. See `RBAC_MATRIX.md`.
+
+## Phase 1E-B access API
+
+The `/api/v1/access/` module is an API boundary over the existing models. Views first apply JWT, tenant-membership, and active-role permissions, then obtain a tenant- and actor-scoped queryset. Serializers accept public identifiers and limited state-transition input, while `role_policy.py` derives memberships, validates management scope, performs assignment/state changes, and records immutable audit events. Request data never supplies organization memberships or authorization authority. No RBAC UI or business-domain model is present.
