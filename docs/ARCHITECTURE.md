@@ -209,3 +209,7 @@ Tenant middleware only resolves request organization context. Reusable DRF permi
 ## Phase 1E-B access API
 
 The `/api/v1/access/` module is an API boundary over the existing models. Views first apply JWT, tenant-membership, and active-role permissions, then obtain a tenant- and actor-scoped queryset. Serializers accept public identifiers and limited state-transition input, while `role_policy.py` derives memberships, validates management scope, performs assignment/state changes, and records immutable audit events. Request data never supplies organization memberships or authorization authority. No RBAC UI or business-domain model is present.
+
+## Phase 1F authenticated frontend shells
+
+Next.js provides a narrow same-origin session-mediation boundary over the existing Django auth/access endpoints. Django remains the only identity and authorization API. The mediator stores access and rotating refresh JWTs in HttpOnly, SameSite cookies, retries once after access expiry, and exposes only safe user/access summaries to React. Protected client gates render no shell until `/access/me/` confirms active tenant-scoped roles. Role checks select navigation only; Django continues to authorize every real operation. The tenant slug is deployment-configured until a separately approved organization-discovery/selection contract exists.

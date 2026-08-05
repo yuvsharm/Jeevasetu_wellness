@@ -1,0 +1,46 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { beforeEach, vi } from "vitest";
+
+import { DashboardRedirect } from "./dashboard-redirect";
+import { ProtectedPage } from "./protected-page";
+import { SessionProvider } from "./session-provider";
+
+const replace = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace, refresh: vi.fn() }), usePathname: () => "/owner" }));
+
+function wrapper(children: ReactNode) {
+  return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><SessionProvider>{children}</SessionProvider></QueryClientProvider>;
+}
+
+function session(role: "OWNER" | "MANAGER" | "PHYSIOTHERAPIST" | "CUSTOMER") {
+  return { user: { id: "u", first_name: "A", last_name: "User", email: "", mobile_number: null, profile_image: "", roles: [role] }, access: { user_id: "u", organization: { id: "o", slug: "jeevasetu" }, permitted_clinics: [], roles: [{ id: "r", user_id: "u", organization_id: "o", clinic_id: null, role, scope: "organization", is_active: true }] } };
+}
+
+describe("protected routing", () => {
+  beforeEach(() => { replace.mockReset(); vi.restoreAllMocks(); });
+
+  it.each([
+    ["OWNER", "/owner"],
+    ["MANAGER", "/manager"],
+    ["PHYSIOTHERAPIST", "/physiotherapist"],
+    ["CUSTOMER", "/customer"],
+  ] as const)("redirects backend-confirmed %s access", async (role, destination) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session(role)), { status: 200 }));
+    render(wrapper(<DashboardRedirect />));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(destination));
+  });
+
+  it("redirects an expired unauthenticated session to login", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "expired" }), { status: 401 }));
+    render(wrapper(<DashboardRedirect />));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?reason=expired"));
+  });
+
+  it("denies a wrong-role route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session("CUSTOMER")), { status: 200 }));
+    render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Secret owner shell</p></ProtectedPage>));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/unauthorized"));
+  });
+});

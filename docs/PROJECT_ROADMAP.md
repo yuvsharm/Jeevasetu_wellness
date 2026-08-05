@@ -92,3 +92,7 @@ Implemented as a backend foundation: four tenant-aware roles, membership/clinic 
 ## Phase 1E-B: RBAC management APIs
 
 Implemented as an API-only authorization layer: current-access summary, scoped role listing/detail, controlled assignment and clinic-scope correction, audited activation/deactivation, Owner/Manager boundaries, safe OpenAPI contracts, and regression tests. Frontend UI, dashboards, public/business APIs, and all business-domain modules remain future work.
+
+## Phase 1F: authenticated dashboard shells
+
+Implemented frontend foundation: login/registration/password-reset forms, HttpOnly server-mediated sessions, protected routes, deterministic backend-confirmed role redirects, responsive shared navigation, profile editing, and four placeholder-only dashboard shells. Logo/public branding, OTP, tenant discovery, and every operational/business module remain future work.

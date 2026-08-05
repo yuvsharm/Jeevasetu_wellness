@@ -20,3 +20,4 @@ Booking, patient, route, visit, attendance, inventory, payment, report, and dash
 - The last active OWNER cannot be disabled or removed. A separately approved ownership-transfer mechanism must first establish another active organization-scoped OWNER.
 - Normal role data accepts only OWNER, MANAGER, PHYSIOTHERAPIST, and CUSTOMER; no platform administrator role exists.
 - Normal removal uses audited deactivation rather than DELETE. No public audit API exists.
+- Phase 1F projects these active backend roles into navigation and dashboard shells only. Frontend redirects never grant authority, and disabled future-module links implement no business permission or capability.

@@ -73,3 +73,7 @@ All role checks require an enabled authenticated identity and active tenant chai
 ## Phase 1E-B API-level controls
 
 Access endpoints enforce JWT, the resolved tenant, active membership, active role, actor-level policy, and object scope independently. Querysets are restricted before UUID lookup; hidden same-tenant and cross-tenant objects return non-disclosing responses and generate safe escalation events. OWNER has organization-only authority. MANAGER may manage only PHYSIOTHERAPIST/CUSTOMER roles within delegated scope and cannot manage peers, Owners, or self. PHYSIOTHERAPIST/CUSTOMER writes are denied. Role removal is reasoned deactivation, the last active OWNER is transactionally protected, and immutable audits contain no credentials, headers, contact information, or business/clinical data.
+
+## Phase 1F browser session controls
+
+Access and refresh JWTs are held in HttpOnly, SameSite=Lax cookies and are Secure in production; they are never stored in localStorage/sessionStorage or returned by frontend session endpoints. Next.js performs same-origin checks for unsafe mediation requests, rotates refresh credentials server-side, clears cookies after revocation/failure, and maps backend failures to non-sensitive messages. Client role routing is explicitly UX-only. Missing/inactive tenant, membership, identity, or role state remains denied by Django and results in safe login/unauthorized states.

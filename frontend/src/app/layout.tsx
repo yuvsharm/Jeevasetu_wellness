@@ -8,8 +8,8 @@ import "./globals.css";
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Jeevasetu Wellness",
-  description: "Professional physiotherapy care at home.",
+  title: "JeevaSetu Wellness",
+  description: "Secure JeevaSetu Wellness workspace.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
@@ -21,4 +21,3 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
     </html>
   );
 }
-

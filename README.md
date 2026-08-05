@@ -4,7 +4,7 @@ Jeevasetu Wellness is a planned physiotherapy home-service platform connecting p
 
 ## Current status
 
-Phase 1E-B adds tenant-scoped RBAC management APIs on top of the approved identity, tenancy, and role-assignment foundations. OWNER and delegated MANAGER operations are enforced server-side, PHYSIOTHERAPIST and CUSTOMER access is self-only, normal removal is audited deactivation, and no frontend or business-domain module is included.
+Phase 1F adds the first frontend experience: authentication forms, secure server-mediated sessions, protected layouts, profile maintenance, and responsive dashboard shells for OWNER, MANAGER, PHYSIOTHERAPIST, and CUSTOMER. The shells contain no business data; future navigation is visibly disabled.
 
 ## Approved architecture
 
@@ -43,6 +43,7 @@ Jeevasetu_wellness/
 Prerequisites are Python 3.12+, Node.js 24+, pnpm 11.9.0, and optionally Docker Desktop with Compose.
 
 1. Copy `.env.example` to `.env` and keep the local file out of Git.
+   Set `NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG` to the organization used by this deployment.
 2. Create a virtual environment under `backend/.venv` and install `backend/requirements/development.txt`.
 3. Run `pnpm install --frozen-lockfile` from `frontend/`.
 4. Start individual development servers or run `docker compose up --build`. Compose also starts the infrastructure-only Celery worker and Beat scheduler.
@@ -81,6 +82,8 @@ RBAC routes require a bearer access token and `X-Organization-Slug`:
 - `POST /api/v1/access/roles/{id}/deactivate/`
 
 Role deletion and a public audit-event API are intentionally unavailable.
+
+Frontend routes include `/login`, `/register`, `/forgot-password`, `/reset-password`, `/dashboard`, `/owner`, `/manager`, `/physiotherapist`, `/customer`, and `/profile`. Refresh and access tokens are stored only in server-written HttpOnly cookies; browser JavaScript and localStorage never receive them. The current tenant is deployment-configured because tenant discovery/selection is not yet a backend contract.
 
 ## Quality commands
 
