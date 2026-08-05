@@ -77,3 +77,5 @@ Access endpoints enforce JWT, the resolved tenant, active membership, active rol
 ## Phase 1F browser session controls
 
 Access and refresh JWTs are held in HttpOnly, SameSite=Lax cookies and are Secure in production; they are never stored in localStorage/sessionStorage or returned by frontend session endpoints. Next.js performs same-origin checks for unsafe mediation requests, rotates refresh credentials server-side, clears cookies after revocation/failure, and maps backend failures to non-sensitive messages. Client role routing is explicitly UX-only. Missing/inactive tenant, membership, identity, or role state remains denied by Django and results in safe login/unauthorized states.
+
+The initial development Owner is provisioned only through the local `bootstrap_jeevasetu_owner` Django management command. It requires a registered active identity, accepts no password, runs atomically, validates existing tenancy/RBAC models, and creates an immutable assignment audit event. No bootstrap HTTP endpoint or production startup hook exists.

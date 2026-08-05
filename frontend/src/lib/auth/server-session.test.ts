@@ -46,4 +46,18 @@ describe("server session", () => {
     const request = new NextRequest("http://localhost/api/session/login", { headers: { host: "localhost", origin: "https://attacker.example" } });
     expect(() => requireSameOrigin(request)).toThrow(SessionError);
   });
+
+  it("explains when organization access has not been assigned", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Not found." }), { status: 404 }),
+    );
+    const { login } = await import("./server-session");
+
+    await expect(login({ identifier: "owner@example.com", password: "not-logged" })).rejects.toEqual(
+      expect.objectContaining({
+        status: 404,
+        detail: expect.stringMatching(/organization access has not been assigned yet/i),
+      }),
+    );
+  });
 });

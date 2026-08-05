@@ -48,6 +48,14 @@ Prerequisites are Python 3.12+, Node.js 24+, pnpm 11.9.0, and optionally Docker 
 3. Run `pnpm install --frozen-lockfile` from `frontend/`.
 4. Start individual development servers or run `docker compose up --build`. Compose also starts the infrastructure-only Celery worker and Beat scheduler.
 
+For the one-time local development tenant bootstrap, first register the intended Owner, then run:
+
+```shell
+python manage.py bootstrap_jeevasetu_owner --email owner@example.com
+```
+
+The command creates or reactivates only the fixed `jeevasetu-wellness` organization, Meerut clinic, memberships, and organization-scoped OWNER role. It is transactional and idempotent, requires an existing active user, accepts no password, and is not exposed through the API.
+
 The frontend is served at `http://localhost:3000/`. Backend infrastructure routes are:
 
 - Liveness: `http://localhost:8000/api/v1/health/live/`

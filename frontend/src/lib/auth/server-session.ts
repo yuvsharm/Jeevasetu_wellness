@@ -49,7 +49,12 @@ async function parseError(response: Response): Promise<SessionError> {
   if (response.status === 429) return new SessionError(429, "Too many attempts. Please try again later.");
   if (response.status === 401) return new SessionError(401, "The credentials or session are invalid.");
   if (response.status === 403) return new SessionError(403, "Your account does not have active access.");
-  if (response.status === 404) return new SessionError(404, "The organization context is unavailable.");
+  if (response.status === 404) {
+    return new SessionError(
+      404,
+      "Your account exists, but organization access has not been assigned yet. Please contact the Owner or system administrator.",
+    );
+  }
   const fields: Record<string, string> = {};
   if (body && typeof body === "object") {
     for (const [key, value] of Object.entries(body)) {

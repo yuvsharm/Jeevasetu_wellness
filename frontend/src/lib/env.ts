@@ -5,7 +5,7 @@ const publicEnvironmentSchema = z.object({
   NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG: z
     .string()
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
-    .default("jeevasetu"),
+    .default("jeevasetu-wellness"),
 });
 
 export const publicEnvironment = publicEnvironmentSchema.parse({
