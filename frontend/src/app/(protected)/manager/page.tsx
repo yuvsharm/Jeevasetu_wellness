@@ -1,6 +1,6 @@
 import { ProtectedPage } from "@/components/auth/protected-page";
-import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import { ManagerDashboard } from "@/components/staff/staff-management";
 
 export default function ManagerPage() {
-  return <ProtectedPage role="MANAGER" title="Manager dashboard"><DashboardShell role="MANAGER" /></ProtectedPage>;
+  return <ProtectedPage role="MANAGER" title="Operations team"><ManagerDashboard /></ProtectedPage>;
 }
