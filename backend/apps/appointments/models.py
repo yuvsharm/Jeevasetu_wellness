@@ -150,6 +150,9 @@ class ClinicOperatingHours(models.Model):
     opens_at = models.TimeField()
     closes_at = models.TimeField()
     is_active = models.BooleanField(default=True)
+    cancellation_cutoff_minutes = models.PositiveSmallIntegerField(default=120)
+    rescheduling_cutoff_minutes = models.PositiveSmallIntegerField(default=120)
+    maximum_reschedules = models.PositiveSmallIntegerField(default=3)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -164,6 +167,17 @@ class ClinicOperatingHours(models.Model):
 
 
 class Appointment(models.Model):
+    class CancellationCategory(models.TextChoices):
+        CUSTOMER_REQUEST = "CUSTOMER_REQUEST", "Customer request"
+        PHYSIOTHERAPIST_UNAVAILABLE = (
+            "PHYSIOTHERAPIST_UNAVAILABLE",
+            "Physiotherapist unavailable",
+        )
+        CLINIC_OPERATIONAL_ISSUE = "CLINIC_OPERATIONAL_ISSUE", "Clinic operational issue"
+        SCHEDULING_CONFLICT = "SCHEDULING_CONFLICT", "Scheduling conflict"
+        DUPLICATE_APPOINTMENT = "DUPLICATE_APPOINTMENT", "Duplicate appointment"
+        OTHER = "OTHER", "Other"
+
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         PENDING_ASSIGNMENT = "PENDING_ASSIGNMENT", "Pending assignment"
@@ -224,6 +238,19 @@ class Appointment(models.Model):
     region = models.CharField(max_length=120)
     pin_code = models.CharField(max_length=6, validators=[RegexValidator(r"^[1-9]\d{5}$")])
     operational_notes = models.CharField(max_length=500, blank=True)
+    reschedule_count = models.PositiveSmallIntegerField(default=0)
+    cancellation_category = models.CharField(
+        max_length=32, choices=CancellationCategory.choices, blank=True
+    )
+    cancellation_reason = models.CharField(max_length=255, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="cancelled_appointments",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_appointments"
     )
@@ -281,6 +308,13 @@ class AppointmentAuditEvent(models.Model):
         ASSIGNED = "ASSIGNED", "Assigned"
         REASSIGNED = "REASSIGNED", "Reassigned"
         STATUS_CHANGED = "STATUS_CHANGED", "Status changed"
+        CANCELLED = "CANCELLED", "Cancelled"
+        RESCHEDULE_REJECTED = "RESCHEDULE_REJECTED", "Reschedule rejected"
+        CANCELLATION_REJECTED = "CANCELLATION_REJECTED", "Cancellation rejected"
+
+    class Outcome(models.TextChoices):
+        SUCCEEDED = "SUCCEEDED", "Succeeded"
+        REJECTED = "REJECTED", "Rejected"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     appointment = models.ForeignKey(
@@ -308,6 +342,11 @@ class AppointmentAuditEvent(models.Model):
         related_name="new_assignment_audits",
     )
     reason = models.CharField(max_length=255, blank=True)
+    reason_category = models.CharField(max_length=32, blank=True)
+    outcome = models.CharField(max_length=12, choices=Outcome.choices, default=Outcome.SUCCEEDED)
+    override_used = models.BooleanField(default=False)
+    override_reason = models.CharField(max_length=255, blank=True)
+    rejection_code = models.CharField(max_length=48, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

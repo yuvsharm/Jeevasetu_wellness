@@ -137,6 +137,8 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "status",
             "physiotherapist_name",
+            "reschedule_count",
+            "cancellation_category",
         )
 
 
@@ -206,6 +208,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "pin_code",
             "physiotherapist_name",
             "physiotherapist_photo_url",
+            "cancellation_category",
         )
 
     def get_physiotherapist_photo_url(self, value) -> str | None:
@@ -265,25 +268,23 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
             or physiotherapist.staff_type != "PHYSIOTHERAPIST"
             or not RoleAssignment.objects.filter(
                 user=physiotherapist.user,
+                user__is_active=True,
+                user__is_enabled=True,
                 organization=organization,
                 clinic=clinic,
                 role=Role.PHYSIOTHERAPIST,
                 is_active=True,
+                organization_membership__is_active=True,
+                clinic_membership__is_active=True,
             ).exists()
         ):
             raise serializers.ValidationError(
                 {"physiotherapist": "The selected Physiotherapist is unavailable."}
             )
-        if (
-            self.instance
-            and self.instance.status
-            in (
-                Appointment.Status.IN_PROGRESS,
-                *Appointment.FINAL_STATUSES,
-            )
-            and any(field in attrs for field in ("scheduled_start", "duration_minutes", "clinic"))
+        if self.instance and any(
+            field in attrs for field in ("scheduled_start", "duration_minutes", "clinic")
         ):
-            raise serializers.ValidationError("This appointment cannot be rescheduled.")
+            raise serializers.ValidationError("Use the appointment rescheduling workflow.")
         if self.instance and "status" in attrs and attrs["status"] != self.instance.status:
             raise serializers.ValidationError("Use the appointment status workflow.")
         if (
@@ -322,22 +323,13 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         request = self.context["request"]
-        previous_start = instance.scheduled_start
         for field, value in validated_data.items():
             setattr(instance, field, value)
         instance.updated_by = request.user
         try:
-            value = save_scheduled_appointment(
-                instance,
-                actor=request.user,
-                event=AppointmentAuditEvent.Event.RESCHEDULED,
-            )
-            audit = value.audit_events.filter(event=AppointmentAuditEvent.Event.RESCHEDULED).latest(
-                "created_at"
-            )
-            audit.previous_start = previous_start
-            audit.save(update_fields=("previous_start",))
-            return value
+            instance.full_clean()
+            instance.save()
+            return instance
         except Exception as error:
             raise serializers.ValidationError(str(error)) from error
 
@@ -360,3 +352,53 @@ class AvailabilityQuerySerializer(serializers.Serializer):
     clinic = serializers.UUIDField()
     scheduled_start = serializers.DateTimeField()
     duration_minutes = serializers.IntegerField(min_value=30, max_value=180, default=60)
+
+
+class AppointmentRescheduleSerializer(serializers.Serializer):
+    scheduled_start = serializers.DateTimeField()
+    duration_minutes = serializers.IntegerField(min_value=30, max_value=180)
+    override = serializers.BooleanField(default=False)
+    override_reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class AppointmentCancellationSerializer(serializers.Serializer):
+    reason_category = serializers.ChoiceField(choices=Appointment.CancellationCategory.choices)
+    operational_reason = serializers.CharField(max_length=255, trim_whitespace=True)
+    override = serializers.BooleanField(default=False)
+    override_reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_operational_reason(self, value):
+        if len(value.strip()) < 3:
+            raise serializers.ValidationError("Provide a short operational reason.")
+        return value.strip()
+
+
+class AppointmentAuditSerializer(serializers.ModelSerializer):
+    actor_name = serializers.CharField(source="actor.get_full_name", read_only=True)
+    previous_physiotherapist_name = serializers.CharField(
+        source="previous_physiotherapist.user.get_full_name", read_only=True, default=None
+    )
+    new_physiotherapist_name = serializers.CharField(
+        source="new_physiotherapist.user.get_full_name", read_only=True, default=None
+    )
+
+    class Meta:
+        model = AppointmentAuditEvent
+        fields = (
+            "id",
+            "event",
+            "outcome",
+            "actor_name",
+            "previous_status",
+            "new_status",
+            "previous_start",
+            "new_start",
+            "previous_physiotherapist_name",
+            "new_physiotherapist_name",
+            "reason_category",
+            "reason",
+            "override_used",
+            "override_reason",
+            "rejection_code",
+            "created_at",
+        )

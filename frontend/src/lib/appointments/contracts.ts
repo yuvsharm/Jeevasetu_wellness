@@ -26,6 +26,8 @@ export type OperationalAppointment = {
   region?: string;
   pin_code?: string;
   physiotherapist_photo_url?: string | null;
+  reschedule_count?: number;
+  cancellation_category?: "CUSTOMER_REQUEST" | "PHYSIOTHERAPIST_UNAVAILABLE" | "CLINIC_OPERATIONAL_ISSUE" | "SCHEDULING_CONFLICT" | "DUPLICATE_APPOINTMENT" | "OTHER" | "";
 };
 
 export type OperationalAppointmentPage = {
@@ -33,4 +35,19 @@ export type OperationalAppointmentPage = {
   next: string | null;
   previous: string | null;
   results: OperationalAppointment[];
+};
+
+export type AppointmentAuditEvent = {
+  id: string;
+  event: string;
+  outcome: "SUCCEEDED" | "REJECTED";
+  actor_name: string;
+  previous_status: string;
+  new_status: string;
+  previous_start: string | null;
+  new_start: string | null;
+  reason_category: string;
+  override_used: boolean;
+  rejection_code: string;
+  created_at: string;
 };

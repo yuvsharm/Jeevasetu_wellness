@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from apps.accounts.models import Role, RoleAssignment
 from apps.appointments.models import Appointment, AppointmentAuditEvent, ClinicOperatingHours
 from apps.staff.models import StaffProfile
 
@@ -145,3 +146,235 @@ def transition_status(appointment, *, new_status, actor, reason=""):
         reason=reason,
     )
     return appointment
+
+
+CHANGEABLE_STATUSES = (
+    Appointment.Status.DRAFT,
+    Appointment.Status.PENDING_ASSIGNMENT,
+    Appointment.Status.SCHEDULED,
+    Appointment.Status.CONFIRMED,
+)
+
+
+def record_rejected_lifecycle_action(appointment, *, actor, event, code):
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=event,
+        outcome=AppointmentAuditEvent.Outcome.REJECTED,
+        rejection_code=code,
+    )
+
+
+def _policy_error(message, code):
+    return ValidationError(message, code=code)
+
+
+def _error_code(error):
+    if hasattr(error, "error_list") and error.error_list:
+        return error.error_list[0].code or "VALIDATION_FAILED"
+    return "VALIDATION_FAILED"
+
+
+def reschedule_appointment(
+    appointment,
+    *,
+    scheduled_start,
+    duration_minutes,
+    actor,
+    allow_override=False,
+    override_reason="",
+):
+    try:
+        with transaction.atomic():
+            appointment = (
+                Appointment.objects.select_for_update()
+                .select_related("clinic__organization")
+                .get(pk=appointment.pk)
+            )
+            policy = ClinicOperatingHours.objects.filter(
+                clinic=appointment.clinic, is_active=True
+            ).first()
+            if policy is None:
+                raise _policy_error(
+                    "Clinic operating hours have not been configured.", "POLICY_UNAVAILABLE"
+                )
+            if appointment.status not in CHANGEABLE_STATUSES:
+                raise _policy_error(
+                    "This appointment cannot be rescheduled.", "STATUS_NOT_RESCHEDULABLE"
+                )
+            now = timezone.now()
+            cutoff_breached = appointment.scheduled_start < now + timedelta(
+                minutes=policy.rescheduling_cutoff_minutes
+            )
+            limit_breached = appointment.reschedule_count >= policy.maximum_reschedules
+            override_needed = cutoff_breached or limit_breached
+            if allow_override and not override_needed:
+                raise _policy_error(
+                    "A policy override is not required for this appointment.",
+                    "OVERRIDE_NOT_REQUIRED",
+                )
+            if override_needed and not allow_override:
+                code = "RESCHEDULE_LIMIT_REACHED" if limit_breached else "RESCHEDULE_CUTOFF"
+                raise _policy_error(
+                    "The appointment rescheduling policy prevents this change.", code
+                )
+            if override_needed and not override_reason.strip():
+                raise _policy_error(
+                    "A structured override reason is required.", "OVERRIDE_REASON_REQUIRED"
+                )
+            if (
+                appointment.physiotherapist
+                and not RoleAssignment.objects.filter(
+                    user=appointment.physiotherapist.user,
+                    user__is_active=True,
+                    user__is_enabled=True,
+                    organization=appointment.organization,
+                    clinic=appointment.clinic,
+                    role=Role.PHYSIOTHERAPIST,
+                    is_active=True,
+                    organization_membership__is_active=True,
+                    clinic_membership__is_active=True,
+                ).exists()
+            ):
+                raise _policy_error(
+                    "The assigned Physiotherapist is unavailable.", "PHYSIOTHERAPIST_INELIGIBLE"
+                )
+            scheduled_end = validate_schedule(
+                clinic=appointment.clinic,
+                start=scheduled_start,
+                duration_minutes=duration_minutes,
+            )
+            if appointment.status in Appointment.BLOCKING_STATUSES:
+                if appointment.physiotherapist is None:
+                    raise _policy_error(
+                        "An assigned Physiotherapist is required.", "PHYSIOTHERAPIST_REQUIRED"
+                    )
+                ensure_no_overlap(
+                    physiotherapist=appointment.physiotherapist,
+                    start=scheduled_start,
+                    end=scheduled_end,
+                    exclude_id=appointment.pk,
+                )
+            previous_start = appointment.scheduled_start
+            appointment.scheduled_start = scheduled_start
+            appointment.scheduled_end = scheduled_end
+            appointment.duration_minutes = duration_minutes
+            appointment.reschedule_count += 1
+            appointment.updated_by = actor
+            appointment.full_clean()
+            appointment.save(
+                update_fields=(
+                    "scheduled_start",
+                    "scheduled_end",
+                    "duration_minutes",
+                    "reschedule_count",
+                    "updated_by",
+                    "updated_at",
+                )
+            )
+            AppointmentAuditEvent.objects.create(
+                appointment=appointment,
+                organization=appointment.organization,
+                actor=actor,
+                event=AppointmentAuditEvent.Event.RESCHEDULED,
+                previous_start=previous_start,
+                new_start=scheduled_start,
+                override_used=override_needed,
+                override_reason=override_reason.strip()[:255] if override_needed else "",
+            )
+            return appointment
+    except ValidationError as error:
+        record_rejected_lifecycle_action(
+            appointment,
+            actor=actor,
+            event=AppointmentAuditEvent.Event.RESCHEDULE_REJECTED,
+            code=_error_code(error),
+        )
+        raise
+
+
+def cancel_appointment(
+    appointment,
+    *,
+    category,
+    reason,
+    actor,
+    allow_override=False,
+    override_reason="",
+):
+    try:
+        with transaction.atomic():
+            appointment = (
+                Appointment.objects.select_for_update()
+                .select_related("clinic")
+                .get(pk=appointment.pk)
+            )
+            policy = ClinicOperatingHours.objects.filter(
+                clinic=appointment.clinic, is_active=True
+            ).first()
+            if policy is None:
+                raise _policy_error(
+                    "Clinic operating hours have not been configured.", "POLICY_UNAVAILABLE"
+                )
+            if appointment.status not in CHANGEABLE_STATUSES:
+                raise _policy_error(
+                    "This appointment cannot be cancelled.", "STATUS_NOT_CANCELLABLE"
+                )
+            cutoff_breached = appointment.scheduled_start < timezone.now() + timedelta(
+                minutes=policy.cancellation_cutoff_minutes
+            )
+            if allow_override and not cutoff_breached:
+                raise _policy_error(
+                    "A policy override is not required for this appointment.",
+                    "OVERRIDE_NOT_REQUIRED",
+                )
+            if cutoff_breached and not allow_override:
+                raise _policy_error(
+                    "The appointment cancellation cutoff has passed.", "CANCELLATION_CUTOFF"
+                )
+            if cutoff_breached and not override_reason.strip():
+                raise _policy_error(
+                    "A structured override reason is required.", "OVERRIDE_REASON_REQUIRED"
+                )
+            previous_status = appointment.status
+            appointment.status = Appointment.Status.CANCELLED
+            appointment.cancellation_category = category
+            appointment.cancellation_reason = reason.strip()[:255]
+            appointment.cancelled_at = timezone.now()
+            appointment.cancelled_by = actor
+            appointment.updated_by = actor
+            appointment.full_clean()
+            appointment.save(
+                update_fields=(
+                    "status",
+                    "cancellation_category",
+                    "cancellation_reason",
+                    "cancelled_at",
+                    "cancelled_by",
+                    "updated_by",
+                    "updated_at",
+                )
+            )
+            AppointmentAuditEvent.objects.create(
+                appointment=appointment,
+                organization=appointment.organization,
+                actor=actor,
+                event=AppointmentAuditEvent.Event.CANCELLED,
+                previous_status=previous_status,
+                new_status=Appointment.Status.CANCELLED,
+                reason=appointment.cancellation_reason,
+                reason_category=category,
+                override_used=cutoff_breached,
+                override_reason=override_reason.strip()[:255] if cutoff_breached else "",
+            )
+            return appointment
+    except ValidationError as error:
+        record_rejected_lifecycle_action(
+            appointment,
+            actor=actor,
+            event=AppointmentAuditEvent.Event.CANCELLATION_REJECTED,
+            code=_error_code(error),
+        )
+        raise

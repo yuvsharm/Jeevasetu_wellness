@@ -24,13 +24,19 @@ from apps.appointments.models import (
 )
 from apps.appointments.scheduling import (
     assign_physiotherapist,
+    cancel_appointment,
+    record_rejected_lifecycle_action,
+    reschedule_appointment,
     transition_status,
     validate_schedule,
 )
 from apps.appointments.serializers import (
+    AppointmentAuditSerializer,
+    AppointmentCancellationSerializer,
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
+    AppointmentRescheduleSerializer,
     AppointmentStatusSerializer,
     AppointmentWriteSerializer,
     AssignmentSerializer,
@@ -177,7 +183,7 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
 
     def get_queryset(self):
         queryset = self.scoped_queryset()
-        for key in ("clinic", "status", "physiotherapist", "patient"):
+        for key in ("clinic", "status", "therapy", "physiotherapist", "patient"):
             value = self.request.query_params.get(key)
             if value:
                 queryset = queryset.filter(**{key: value})
@@ -195,6 +201,26 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
         if level == Role.MANAGER and clinic.id not in (clinic_ids or ()):
             raise PermissionDenied("The selected clinic is unavailable.")
         serializer.save()
+
+
+class AppointmentCalendarView(OperationalAppointmentListCreateView):
+    http_method_names = ("get", "head", "options")
+
+
+class AppointmentOperationsQueueView(AppointmentCalendarView):
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.query_params.get("status"):
+            queryset = queryset.filter(
+                status__in=(
+                    Appointment.Status.DRAFT,
+                    Appointment.Status.PENDING_ASSIGNMENT,
+                    Appointment.Status.SCHEDULED,
+                    Appointment.Status.CONFIRMED,
+                    Appointment.Status.IN_PROGRESS,
+                )
+            )
+        return queryset
 
 
 class OperationalAppointmentDetailView(OperationalScopeMixin, generics.RetrieveUpdateAPIView):
@@ -277,10 +303,14 @@ class AppointmentAssignmentView(OperationalScopeMixin, GenericAPIView):
             or physiotherapist.staff_type != Role.PHYSIOTHERAPIST
             or not RoleAssignment.objects.filter(
                 user=physiotherapist.user,
+                user__is_active=True,
+                user__is_enabled=True,
                 organization=request.organization,
                 clinic=appointment.clinic,
                 role=Role.PHYSIOTHERAPIST,
                 is_active=True,
+                organization_membership__is_active=True,
+                clinic_membership__is_active=True,
             ).exists()
         ):
             raise ValidationError("The selected Physiotherapist is unavailable.")
@@ -294,6 +324,85 @@ class AppointmentAssignmentView(OperationalScopeMixin, GenericAPIView):
         except Exception as error:
             raise ValidationError(str(error)) from error
         return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class AppointmentRescheduleView(OperationalScopeMixin, GenericAPIView):
+    serializer_class = AppointmentRescheduleSerializer
+
+    def post(self, request, pk):
+        appointment = self.scoped_queryset().filter(pk=pk).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        level, _ = actor_role_scope(request.user, request.organization)
+        requested_override = serializer.validated_data["override"]
+        if requested_override and level != Role.OWNER:
+            record_rejected_lifecycle_action(
+                appointment,
+                actor=request.user,
+                event=AppointmentAuditEvent.Event.RESCHEDULE_REJECTED,
+                code="MANAGER_OVERRIDE_DENIED",
+            )
+            raise PermissionDenied("Managers cannot override appointment policies.")
+        try:
+            appointment = reschedule_appointment(
+                appointment,
+                scheduled_start=serializer.validated_data["scheduled_start"],
+                duration_minutes=serializer.validated_data["duration_minutes"],
+                actor=request.user,
+                allow_override=requested_override and level == Role.OWNER,
+                override_reason=serializer.validated_data.get("override_reason", ""),
+            )
+        except Exception as error:
+            raise ValidationError(str(error)) from error
+        return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class AppointmentCancellationView(OperationalScopeMixin, GenericAPIView):
+    serializer_class = AppointmentCancellationSerializer
+
+    def post(self, request, pk):
+        appointment = self.scoped_queryset().filter(pk=pk).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        level, _ = actor_role_scope(request.user, request.organization)
+        requested_override = serializer.validated_data["override"]
+        if requested_override and level != Role.OWNER:
+            record_rejected_lifecycle_action(
+                appointment,
+                actor=request.user,
+                event=AppointmentAuditEvent.Event.CANCELLATION_REJECTED,
+                code="MANAGER_OVERRIDE_DENIED",
+            )
+            raise PermissionDenied("Managers cannot override appointment policies.")
+        try:
+            appointment = cancel_appointment(
+                appointment,
+                category=serializer.validated_data["reason_category"],
+                reason=serializer.validated_data["operational_reason"],
+                actor=request.user,
+                allow_override=requested_override and level == Role.OWNER,
+                override_reason=serializer.validated_data.get("override_reason", ""),
+            )
+        except Exception as error:
+            raise ValidationError(str(error)) from error
+        return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class AppointmentAuditListView(OperationalScopeMixin, generics.ListAPIView):
+    serializer_class = AppointmentAuditSerializer
+    pagination_class = AppointmentPagination
+
+    def get_queryset(self):
+        appointment = self.scoped_queryset().filter(pk=self.kwargs["pk"]).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        return appointment.audit_events.select_related(
+            "actor", "previous_physiotherapist__user", "new_physiotherapist__user"
+        )
 
 
 class AppointmentStatusView(HasTenant, GenericAPIView):
@@ -370,6 +479,8 @@ class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
                 organization=request.organization,
                 clinic=clinic,
                 staff_type=Role.PHYSIOTHERAPIST,
+                user__is_active=True,
+                user__is_enabled=True,
             )
             .exclude(pk__in=busy)
             .filter(

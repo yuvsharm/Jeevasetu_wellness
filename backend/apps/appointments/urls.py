@@ -2,8 +2,13 @@ from django.urls import path
 
 from apps.appointments.views import (
     AppointmentAssignmentView,
+    AppointmentAuditListView,
+    AppointmentCalendarView,
+    AppointmentCancellationView,
     AppointmentCreateView,
+    AppointmentOperationsQueueView,
     AppointmentPhysiotherapistPhotoView,
+    AppointmentRescheduleView,
     AppointmentStatusView,
     AvailablePhysiotherapistView,
     ConvertAppointmentRequestView,
@@ -21,9 +26,30 @@ from apps.appointments.views import (
 
 urlpatterns = [
     path("schedule/", OperationalAppointmentListCreateView.as_view(), name="schedule-list"),
+    path("schedule/calendar/", AppointmentCalendarView.as_view(), name="schedule-calendar"),
+    path(
+        "schedule/operations/",
+        AppointmentOperationsQueueView.as_view(),
+        name="schedule-operations",
+    ),
     path("schedule/<uuid:pk>/", OperationalAppointmentDetailView.as_view(), name="schedule-detail"),
     path("schedule/<uuid:pk>/assign/", AppointmentAssignmentView.as_view(), name="schedule-assign"),
     path("schedule/<uuid:pk>/status/", AppointmentStatusView.as_view(), name="schedule-status"),
+    path(
+        "schedule/<uuid:pk>/reschedule/",
+        AppointmentRescheduleView.as_view(),
+        name="schedule-reschedule",
+    ),
+    path(
+        "schedule/<uuid:pk>/cancel/",
+        AppointmentCancellationView.as_view(),
+        name="schedule-cancel",
+    ),
+    path(
+        "schedule/<uuid:pk>/audit/",
+        AppointmentAuditListView.as_view(),
+        name="schedule-audit",
+    ),
     path(
         "schedule/<uuid:pk>/physiotherapist-photo/",
         AppointmentPhysiotherapistPhotoView.as_view(),
