@@ -8,12 +8,14 @@ const future = (labels: string[]): NavigationItem[] => labels.map((label) => ({ 
 export const roleNavigation: Record<Role, NavigationItem[]> = {
   OWNER: [
     { label: "Appointment Requests", href: roleDestinations.OWNER },
+    { label: "Appointment Schedule", href: roleDestinations.OWNER },
     { label: "Managers & Physiotherapists", href: roleDestinations.OWNER },
     { label: "Patients", href: roleDestinations.OWNER },
     ...future(["Operations", "Revenue & Payments", "Therapies & Pricing", "Inventory", "Reports", "Audit Logs", "Settings"]),
   ],
   MANAGER: [
     { label: "Dashboard", href: roleDestinations.MANAGER },
+    { label: "Appointment Schedule", href: roleDestinations.MANAGER },
     { label: "Physiotherapists", href: roleDestinations.MANAGER },
     { label: "Patients", href: roleDestinations.MANAGER },
     ...future(["Bookings & Dispatch", "Live Operations", "Therapies", "Inventory", "Payment Status", "Complaints", "Reports"]),
@@ -21,6 +23,7 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
   ],
   PHYSIOTHERAPIST: [
     { label: "Dashboard", href: roleDestinations.PHYSIOTHERAPIST },
+    { label: "My Appointments", href: roleDestinations.PHYSIOTHERAPIST },
     ...future(["Today's Visits", "Assigned Patients", "Navigation", "Session Notes", "Attendance", "Availability", "Notifications"]),
     { label: "Profile", href: "/profile" },
   ],

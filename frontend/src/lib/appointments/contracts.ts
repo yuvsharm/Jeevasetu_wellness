@@ -7,3 +7,30 @@ export type AppointmentRequest = {
   landmark: string; google_map_link: string; status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   owner_remarks: string; created_at: string; updated_at: string;
 };
+
+export type OperationalAppointment = {
+  id: string;
+  patient_identifier: string;
+  patient_name: string;
+  therapy_name: string;
+  clinic_name: string;
+  scheduled_start: string;
+  scheduled_end: string;
+  duration_minutes: number;
+  status: "DRAFT" | "PENDING_ASSIGNMENT" | "SCHEDULED" | "CONFIRMED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "NO_SHOW";
+  physiotherapist_name: string | null;
+  address_line_1?: string;
+  address_line_2?: string;
+  landmark?: string;
+  city?: string;
+  region?: string;
+  pin_code?: string;
+  physiotherapist_photo_url?: string | null;
+};
+
+export type OperationalAppointmentPage = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: OperationalAppointment[];
+};

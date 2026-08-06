@@ -121,6 +121,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "ENUM_NAME_OVERRIDES": {
         "AppointmentRequestStatus": "apps.appointments.models.AppointmentRequest.Status",
+        "OperationalAppointmentStatus": "apps.appointments.models.Appointment.Status",
     },
 }
 
