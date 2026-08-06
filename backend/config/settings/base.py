@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     "apps.tenancy",
     "apps.appointments",
     "apps.staff",
+    "apps.patients",
 ]
 
 MIDDLEWARE = [

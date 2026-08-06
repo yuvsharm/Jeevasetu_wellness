@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/v1/tenancy/", include("apps.tenancy.urls")),
     path("api/v1/appointments/", include("apps.appointments.urls")),
     path("api/v1/staff/", include("apps.staff.urls")),
+    path("api/v1/patients/", include("apps.patients.urls")),
     path("api/v1/health/ready/", ReadinessView.as_view(), name="health-ready"),
     path(
         "api/v1/health/ready/database/",
