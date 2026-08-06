@@ -1,0 +1,2 @@
+import { FaqList } from "@/components/public/faq-list"; import { PageHero } from "@/components/public/page-hero"; import { PublicShell } from "@/components/public/public-shell";
+export default function FaqPage(){return <PublicShell><main><PageHero eyebrow="Frequently asked questions" title="Clear guidance before care begins">Learn how home visits work, what to prepare, and how we approach suitability and customized packages.</PageHero><section className="section bg-[#f7f3e9]"><div className="site-container"><FaqList/></div></section></main></PublicShell>}

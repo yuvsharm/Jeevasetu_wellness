@@ -1,5 +1,6 @@
 import Link from "next/link";
+import { PublicShell } from "@/components/public/public-shell";
 
 export default function NotFound() {
-  return <main className="grid min-h-screen place-items-center px-6 text-center"><section><p className="text-sm font-bold tracking-widest text-emerald-700 uppercase">404</p><h1 className="mt-3 text-4xl font-bold text-slate-950">Page not found</h1><p className="mt-4 text-slate-600">The requested page is unavailable.</p><Link href="/dashboard" className="mt-8 inline-flex min-h-12 items-center rounded-xl bg-emerald-700 px-6 font-semibold text-white">Go to dashboard</Link></section></main>;
+  return <PublicShell><main className="grid min-h-[65vh] place-items-center bg-[#f7f3e9] px-6 text-center"><section><p className="eyebrow">404 · Lost in the leaves</p><h1 className="mt-4 font-serif text-5xl text-[#103c27]">This path needs a little healing.</h1><p className="mt-4 text-[#5b6c63]">The page you requested could not be found.</p><Link href="/" className="button-primary mt-8">Return home</Link></section></main></PublicShell>;
 }
