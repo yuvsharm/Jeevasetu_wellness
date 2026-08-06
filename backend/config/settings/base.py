@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
     "apps.tenancy",
+    "apps.appointments",
 ]
 
 MIDDLEWARE = [
@@ -116,6 +117,9 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Backend API for the Jeevasetu Wellness platform.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "ENUM_NAME_OVERRIDES": {
+        "AppointmentRequestStatus": "apps.appointments.models.AppointmentRequest.Status",
+    },
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")

@@ -1,0 +1,12 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { requestJson } from "@/lib/api/client";
+import type { AppointmentRequest } from "@/lib/appointments/contracts";
+
+export function CustomerRequests() {
+  const queryClient = useQueryClient(); const query = useQuery({ queryKey: ["my-appointments"], queryFn: () => requestJson<AppointmentRequest[]>("/api/appointment-requests") });
+  const cancel = useMutation({ mutationFn: (id: string) => requestJson(`/api/appointment-requests/${id}/cancel`, { method: "POST" }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["my-appointments"] }) });
+  return <section aria-labelledby="my-requests"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5"><h2 id="my-requests" className="text-2xl font-bold text-emerald-950">My appointment requests</h2><p className="mt-2 text-emerald-900">Track requests submitted while signed in. Only pending requests can be cancelled.</p><Link href="/book-appointment" className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-emerald-700 px-4 font-bold text-white">Request an appointment</Link></div><div className="mt-6 grid gap-4">{query.data?.map((request) => <article key={request.id} className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex justify-between gap-4"><div><h3 className="font-bold">{request.therapy_name}</h3><p className="text-sm text-slate-600">{request.preferred_date} · {request.preferred_time}</p></div><strong className="text-sm text-emerald-800">{request.status}</strong></div><dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2"><div><dt className="font-semibold">Patient</dt><dd>{request.patient_name}</dd></div><div><dt className="font-semibold">Location</dt><dd>{request.address}, {request.city} {request.pin_code}</dd></div>{request.owner_remarks && <div className="sm:col-span-2"><dt className="font-semibold">Owner remarks</dt><dd>{request.owner_remarks}</dd></div>}</dl>{request.status === "PENDING" && <button onClick={() => cancel.mutate(request.id)} className="mt-4 min-h-11 rounded-xl border border-red-300 px-4 font-bold text-red-700">Cancel request</button>}</article>)}</div>{query.isPending && <p className="mt-6">Loading requests…</p>}{query.isError && <p className="mt-6 text-red-700">Your requests could not be loaded.</p>}{query.data?.length === 0 && <p className="mt-8 text-slate-600">You have no submitted appointment requests.</p>}</section>;
+}

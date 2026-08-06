@@ -1,6 +1,6 @@
 import { ProtectedPage } from "@/components/auth/protected-page";
-import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import { OwnerRequests } from "@/components/appointments/owner-requests";
 
 export default function OwnerPage() {
-  return <ProtectedPage role="OWNER" title="Owner overview"><DashboardShell role="OWNER" /></ProtectedPage>;
+  return <ProtectedPage role="OWNER" title="Appointment requests"><OwnerRequests /></ProtectedPage>;
 }

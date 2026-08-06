@@ -21,7 +21,7 @@ export function PublicHeader() {
         </nav>
         <div className="hidden items-center gap-3 sm:flex">
           <Link href="/login" className="nav-link">Sign in</Link>
-          <Link href="/contact#booking" className="button-primary">Book appointment</Link>
+          <Link href="/book-appointment" className="button-primary">Book appointment</Link>
         </div>
         <button className="grid size-11 place-items-center rounded-full border border-[#0b6b3a]/20 lg:hidden" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="mobile-navigation" aria-label="Toggle navigation">
           <span aria-hidden="true" className="text-xl">{open ? "×" : "☰"}</span>
@@ -30,7 +30,7 @@ export function PublicHeader() {
       {open && <nav id="mobile-navigation" className="site-container grid gap-1 border-t border-[#0b6b3a]/10 py-4 lg:hidden" aria-label="Mobile navigation">
         {links.map(([label, href]) => <Link key={href} href={href} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 font-medium text-[#163c2a] hover:bg-[#edf7ef]">{label}</Link>)}
         <Link href="/login" className="rounded-xl px-3 py-3 font-medium text-[#163c2a]">Sign in</Link>
-        <Link href="/contact#booking" className="button-primary mt-2 text-center">Book appointment</Link>
+        <Link href="/book-appointment" className="button-primary mt-2 text-center">Book appointment</Link>
       </nav>}
     </header>
   );

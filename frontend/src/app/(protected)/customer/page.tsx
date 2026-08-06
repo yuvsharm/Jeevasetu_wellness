@@ -1,6 +1,6 @@
 import { ProtectedPage } from "@/components/auth/protected-page";
-import { DashboardShell } from "@/components/dashboard/dashboard-shell";
+import { CustomerRequests } from "@/components/appointments/customer-requests";
 
 export default function CustomerPage() {
-  return <ProtectedPage role="CUSTOMER" title="Customer dashboard"><DashboardShell role="CUSTOMER" /></ProtectedPage>;
+  return <ProtectedPage role="CUSTOMER" title="My appointment requests"><CustomerRequests /></ProtectedPage>;
 }

@@ -7,7 +7,7 @@ const future = (labels: string[]): NavigationItem[] => labels.map((label) => ({ 
 
 export const roleNavigation: Record<Role, NavigationItem[]> = {
   OWNER: [
-    { label: "Overview", href: roleDestinations.OWNER },
+    { label: "Appointment Requests", href: roleDestinations.OWNER },
     ...future(["Operations", "Managers", "Physiotherapists", "Customers", "Revenue & Payments", "Therapies & Pricing", "Inventory", "Reports", "Audit Logs", "Settings"]),
   ],
   MANAGER: [
@@ -21,8 +21,9 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
     { label: "Profile", href: "/profile" },
   ],
   CUSTOMER: [
-    { label: "Dashboard", href: roleDestinations.CUSTOMER },
-    ...future(["Book Service", "My Appointments", "My Family", "Treatment Progress", "Packages", "Payments & Invoices", "Notifications", "Support"]),
+    { label: "My Appointments", href: roleDestinations.CUSTOMER },
+    { label: "Book Service", href: "/book-appointment" },
+    ...future(["My Family", "Treatment Progress", "Packages", "Payments & Invoices", "Notifications", "Support"]),
     { label: "Profile", href: "/profile" },
   ],
 };
