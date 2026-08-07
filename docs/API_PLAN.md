@@ -119,6 +119,8 @@ Phase 1D uses five-minute bearer access tokens and one-day rotating refresh toke
 
 Phase 1E-B access endpoints require JWT authentication, `X-Organization-Slug`, an active identity and organization membership, and at least one active role. OWNER sees and manages assignments only in the resolved organization. MANAGER sees and manages only PHYSIOTHERAPIST and CUSTOMER assignments inside delegated organization/clinic scope; OWNER/MANAGER assignment, self-promotion, and scope broadening are denied. PHYSIOTHERAPIST and CUSTOMER role reads are self-only and writes are denied. Role, target user, and organization are immutable through PATCH; only validated clinic-scope correction is supported. Deactivation replaces DELETE and requires a reason. Cross-tenant objects are excluded before lookup, and responses contain public UUIDs and authorization state only.
 
+Phase 4B exposes authenticated applicant draft/status, competency, document and submit endpoints; clinic-scoped Manager/organization-scoped Owner review and verification endpoints; an authenticated Open to Work action; protected document streaming; and read-only public verified-profile endpoints. Public profile serializers use an explicit safe-field allowlist. No application endpoint grants a role, and approval alone does not honor a customer preference as an assignment.
+
 Phase 1F consumes the existing `/auth/` and `/access/me/` contracts through same-origin Next.js session mediation. Login, registration, password reset, refresh rotation, logout, profile updates, and active-role resolution still execute in Django. The frontend mediator never invents roles or tenant access and returns no JWTs to client code. Multi-organization discovery and switching are not implemented.
 
 ## Integration boundaries

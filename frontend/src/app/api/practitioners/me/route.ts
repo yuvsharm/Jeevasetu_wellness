@@ -1,0 +1,5 @@
+import { NextRequest } from "next/server";
+import { practitionerApi } from "@/lib/practitioners/server-api";
+export function GET(request:NextRequest){return practitionerApi(request,"/practitioners/applications/me/");}
+export async function POST(request:NextRequest){return practitionerApi(request,"/practitioners/applications/me/",{method:"POST",body:await request.text()});}
+

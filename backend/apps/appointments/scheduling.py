@@ -51,6 +51,13 @@ def ensure_no_overlap(*, physiotherapist, start, end, exclude_id=None):
         raise ValidationError("The Physiotherapist already has an overlapping appointment.")
 
 
+def ensure_practitioner_operationally_eligible(physiotherapist):
+    profile = getattr(physiotherapist, "practitioner_profile", None)
+    # Staff approved before Phase 4B remain operational; all new enrollment profiles are gated.
+    if profile is not None and (not profile.is_approved or not profile.is_open_to_work):
+        raise ValidationError("The Physiotherapist is not open to new assignments.")
+
+
 @transaction.atomic
 def save_scheduled_appointment(appointment, *, actor, event, reason=""):
     appointment.scheduled_end = validate_schedule(
@@ -68,6 +75,7 @@ def save_scheduled_appointment(appointment, *, actor, event, reason=""):
             exclude_id=appointment.pk,
         )
     if appointment.physiotherapist is not None:
+        ensure_practitioner_operationally_eligible(appointment.physiotherapist)
         ensure_physiotherapist_available(
             physiotherapist=appointment.physiotherapist,
             clinic=appointment.clinic,
@@ -106,6 +114,7 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
     from apps.appointments.visit_verification import invalidate_active_visit_verifications
 
     invalidate_active_visit_verifications(appointment, reason="ASSIGNMENT_CHANGED", actor=actor)
+    ensure_practitioner_operationally_eligible(physiotherapist)
     ensure_no_overlap(
         physiotherapist=physiotherapist,
         start=appointment.scheduled_start,

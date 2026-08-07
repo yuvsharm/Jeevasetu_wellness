@@ -17,6 +17,7 @@ Completed subphases:
 - Phase 1B: runtime-approved infrastructure, health, logging, OpenAPI, Celery, and container hardening.
 - Phase 1C: organization/clinic schema, minimal migration-safe custom user, membership mappings, request-scoped tenant resolution, and deny-by-default tenancy permission/query foundations.
 - Phase 1D: API-only JWT authentication, normalized registration/login identifiers, refresh rotation/blacklisting, logout, password/profile foundations, authentication audit/throttling, and non-authorizing role assignments.
+- Phase 4B: Practitioner self-enrollment, secure evidence verification, scoped Manager review, transactional RBAC/staff activation, Open to Work eligibility, verified public directory, and non-authoritative booking preference.
 
 OTP/contact verification, role permissions/RBAC enforcement, dashboards, consent, general audit foundations, and public/business features below remain future work.
 

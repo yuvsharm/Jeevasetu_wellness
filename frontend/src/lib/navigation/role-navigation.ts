@@ -18,6 +18,7 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
     { label: "Appointment Schedule", href: roleDestinations.MANAGER },
     { label: "Physiotherapists", href: roleDestinations.MANAGER },
     { label: "Patients", href: roleDestinations.MANAGER },
+    { label: "Practitioner Applications", href: roleDestinations.MANAGER },
     ...future(["Bookings & Dispatch", "Live Operations", "Therapies", "Inventory", "Payment Status", "Complaints", "Reports"]),
     { label: "Profile", href: "/profile" },
   ],
@@ -30,6 +31,7 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
   CUSTOMER: [
     { label: "My Appointments", href: roleDestinations.CUSTOMER },
     { label: "Book Service", href: "/book-appointment" },
+    { label: "Practitioner Application", href: "/practitioner-application" },
     ...future(["My Family", "Treatment Progress", "Packages", "Payments & Invoices", "Notifications", "Support"]),
     { label: "Profile", href: "/profile" },
   ],

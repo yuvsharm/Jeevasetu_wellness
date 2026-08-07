@@ -1,0 +1,5 @@
+"use client";
+import {useMutation} from "@tanstack/react-query";
+import {useState} from "react";
+import {requestJson} from "@/lib/api/client";
+export function OpenToWorkControl(){const [enabled,setEnabled]=useState(false);const update=useMutation({mutationFn:(value:boolean)=>requestJson<{is_open_to_work:boolean}>("/api/practitioners/open-to-work",{method:"POST",body:JSON.stringify({enabled:value})}),onSuccess:data=>setEnabled(data.is_open_to_work)});return <section className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-white p-5"><div><h2 className="text-xl font-bold">Open to Work</h2><p className="mt-1 text-sm text-slate-600">Turn off to stop new assignments. Existing appointments remain accessible.</p></div><button role="switch" aria-checked={enabled} onClick={()=>update.mutate(!enabled)} className={`min-h-12 rounded-full px-6 font-bold text-white ${enabled?"bg-emerald-700":"bg-slate-600"}`}>{enabled?"On":"Off"}</button>{update.isError&&<p role="alert" className="w-full text-sm text-red-700">Open to Work is available only after approval and operational activation.</p>}</section>}

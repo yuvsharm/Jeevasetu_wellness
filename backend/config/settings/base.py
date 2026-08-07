@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "apps.availability",
     "apps.staff",
     "apps.patients",
+    "apps.practitioners",
 ]
 
 MIDDLEWARE = [
@@ -129,6 +130,9 @@ SPECTACULAR_SETTINGS = {
             "apps.appointments.models.AppointmentChangeRequest.Status"
         ),
         "AvailabilityExceptionKind": "apps.availability.models.AvailabilityException.Kind",
+        "PractitionerApplicationStatus": "apps.practitioners.models.PractitionerApplication.Status",
+        "PractitionerCategory": "apps.practitioners.models.PractitionerApplication.Category",
+        "PractitionerDocumentKind": "apps.practitioners.models.PractitionerDocument.Kind",
         "AppointmentCancellationCategory": (
             "apps.appointments.models.Appointment.CancellationCategory"
         ),

@@ -212,6 +212,12 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None)
         user__role_assignments__is_active=True,
         user__role_assignments__organization_membership__is_active=True,
         user__role_assignments__clinic_membership__is_active=True,
+    ).filter(
+        Q(practitioner_profile__isnull=True)
+        | Q(
+            practitioner_profile__is_approved=True,
+            practitioner_profile__is_open_to_work=True,
+        )
     )
     if physiotherapist:
         profiles = profiles.filter(pk=physiotherapist.pk)

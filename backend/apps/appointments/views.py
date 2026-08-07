@@ -620,6 +620,13 @@ class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
                 user__role_assignments__role=Role.PHYSIOTHERAPIST,
                 user__role_assignments__is_active=True,
             )
+            .filter(
+                Q(practitioner_profile__isnull=True)
+                | Q(
+                    practitioner_profile__is_approved=True,
+                    practitioner_profile__is_open_to_work=True,
+                )
+            )
             .select_related("user")
         )
         available = []

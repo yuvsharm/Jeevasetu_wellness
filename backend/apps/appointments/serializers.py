@@ -31,6 +31,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "id",
             "therapy",
             "therapy_name",
+            "preferred_practitioner",
             "patient_name",
             "age",
             "gender",
@@ -73,6 +74,23 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
         if not value.is_active or value.organization_id != organization.id:
             raise serializers.ValidationError("Select an active therapy.")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        preferred = attrs.get("preferred_practitioner")
+        therapy = attrs.get("therapy")
+        if preferred and (
+            preferred.organization_id != self.context["request"].organization.id
+            or not preferred.is_approved
+            or not preferred.is_publicly_visible
+            or not preferred.source_application.competencies.filter(
+                therapy=therapy, verification_status="VERIFIED"
+            ).exists()
+        ):
+            raise serializers.ValidationError(
+                {"preferred_practitioner": "Select a verified practitioner for this service."}
+            )
+        return attrs
 
     def create(self, validated_data):
         request = self.context["request"]

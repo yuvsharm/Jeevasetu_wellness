@@ -64,6 +64,14 @@ class AppointmentRequest(models.Model):
     therapy = models.ForeignKey(
         TherapyOption, on_delete=models.PROTECT, related_name="appointment_requests"
     )
+    preferred_practitioner = models.ForeignKey(
+        "practitioners.PractitionerProfile",
+        on_delete=models.PROTECT,
+        related_name="preferred_appointment_requests",
+        null=True,
+        blank=True,
+        help_text="Customer preference only; never an operational assignment.",
+    )
     patient_name = models.CharField(max_length=160)
     age = models.PositiveSmallIntegerField(
         validators=[MinValueValidator(1), MaxValueValidator(120)]

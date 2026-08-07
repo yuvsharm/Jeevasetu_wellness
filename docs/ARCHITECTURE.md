@@ -210,6 +210,12 @@ Tenant middleware only resolves request organization context. Reusable DRF permi
 
 The `/api/v1/access/` module is an API boundary over the existing models. Views first apply JWT, tenant-membership, and active-role permissions, then obtain a tenant- and actor-scoped queryset. Serializers accept public identifiers and limited state-transition input, while `role_policy.py` derives memberships, validates management scope, performs assignment/state changes, and records immutable audit events. Request data never supplies organization memberships or authorization authority. No RBAC UI or business-domain model is present.
 
+## Practitioner enrollment and verification
+
+The `practitioners` domain owns public self-enrollment, structured qualifications, approved-catalogue competencies, private verification-document metadata, controlled review transitions, verified public profiles, and append-only audit events. Approval is transactional and idempotent. Physiotherapist approval links into the existing organization membership, clinic membership, `StaffProfile`, and RBAC role-policy layers; applicants never create their own operational role. Naturopathy / Wellness Practitioner is deliberately a professional category rather than a new authorization role until the RBAC contract explicitly adds one.
+
+`PractitionerProfile.is_open_to_work` is an additional eligibility gate over existing availability, leave, conflict, membership, role, clinic, and competency checks. It does not replace availability or remove access to existing appointments. Customer practitioner selection is stored as a non-authoritative preference on `AppointmentRequest`; Manager/system dispatch remains authoritative.
+
 ## Phase 1F authenticated frontend shells
 
 Next.js provides a narrow same-origin session-mediation boundary over the existing Django auth/access endpoints. Django remains the only identity and authorization API. The mediator stores access and rotating refresh JWTs in HttpOnly, SameSite cookies, retries once after access expiry, and exposes only safe user/access summaries to React. Protected client gates render no shell until `/access/me/` confirms active tenant-scoped roles. Role checks select navigation only; Django continues to authorize every real operation. The tenant slug is deployment-configured until a separately approved organization-discovery/selection contract exists.

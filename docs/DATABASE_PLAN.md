@@ -107,3 +107,5 @@ Retention and deletion must be policy-driven per data category. Account closure 
 # Phase 1E-A RBAC records
 
 `RoleAssignment` binds a user to an organization membership, optional matching clinic membership, one of four approved roles, lifecycle metadata, and a protected assigner. Named conditional unique constraints prevent duplicate active assignments at organization or clinic scope. `RoleAuditEvent` is append-only and uses protected tenant/identity references. Migration 0003 creates no assignments and does not modify authentication or tenancy rows.
+
+Phase 4B adds `PractitionerApplication`, `PractitionerDocument`, `PractitionerCompetency`, `PractitionerProfile`, and append-only `PractitionerAuditEvent`. One conditional open application is permitted per applicant and organization. Documents retain private storage keys plus portable metadata and SHA-256 checksums; storage paths and document contents are never serialized publicly. `AppointmentRequest.preferred_practitioner` records a preference only and is not an assignment foreign key.

@@ -1,0 +1,79 @@
+from django.urls import path
+
+from apps.practitioners import views
+
+urlpatterns = [
+    path(
+        "applications/me/",
+        views.MyApplicationListCreateView.as_view(),
+        name="practitioner-my-applications",
+    ),
+    path(
+        "applications/me/<uuid:pk>/",
+        views.MyApplicationDetailView.as_view(),
+        name="practitioner-my-application",
+    ),
+    path(
+        "applications/me/<uuid:pk>/submit/",
+        views.SubmitApplicationView.as_view(),
+        name="practitioner-submit",
+    ),
+    path(
+        "applications/me/<uuid:pk>/withdraw/",
+        views.WithdrawApplicationView.as_view(),
+        name="practitioner-withdraw",
+    ),
+    path(
+        "applications/me/<uuid:pk>/competencies/",
+        views.CompetencyListCreateView.as_view(),
+        name="practitioner-competencies",
+    ),
+    path(
+        "applications/me/<uuid:pk>/documents/",
+        views.DocumentUploadView.as_view(),
+        name="practitioner-documents",
+    ),
+    path(
+        "applications/me/<uuid:pk>/profile-photo/",
+        views.ProfilePhotoUploadView.as_view(),
+        name="practitioner-profile-photo",
+    ),
+    path(
+        "applications/",
+        views.ManagerApplicationListView.as_view(),
+        name="practitioner-applications",
+    ),
+    path(
+        "applications/<uuid:pk>/",
+        views.ManagerApplicationDetailView.as_view(),
+        name="practitioner-application",
+    ),
+    path(
+        "applications/<uuid:pk>/review/",
+        views.ReviewApplicationView.as_view(),
+        name="practitioner-review",
+    ),
+    path("documents/<uuid:pk>/", views.PrivateDocumentView.as_view(), name="practitioner-document"),
+    path(
+        "documents/<uuid:pk>/verify/",
+        views.VerifyDocumentView.as_view(),
+        name="practitioner-document-verify",
+    ),
+    path(
+        "competencies/<uuid:pk>/verify/",
+        views.VerifyCompetencyView.as_view(),
+        name="practitioner-competency-verify",
+    ),
+    path("me/open-to-work/", views.MyOpenToWorkView.as_view(), name="practitioner-open-to-work"),
+    path("public/", views.PublicPractitionerListView.as_view(), name="practitioner-public-list"),
+    path(
+        "public/<uuid:pk>/",
+        views.PublicPractitionerDetailView.as_view(),
+        name="practitioner-public-detail",
+    ),
+    path(
+        "public/<uuid:pk>/photo/",
+        views.PublicPractitionerPhotoView.as_view(),
+        name="practitioner-public-photo",
+    ),
+]
