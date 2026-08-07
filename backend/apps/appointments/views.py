@@ -14,6 +14,7 @@ from apps.accounts.permissions import (
     IsCustomer,
     IsEnabledAuthenticated,
     IsOwnerOrManager,
+    IsPhysiotherapist,
     active_roles,
 )
 from apps.accounts.role_policy import actor_role_scope
@@ -54,6 +55,12 @@ from apps.appointments.serializers import (
     PhysiotherapistWorkloadSerializer,
     TherapyOptionSerializer,
     UnassignmentSerializer,
+    VisitOtpSubmissionSerializer,
+)
+from apps.appointments.visit_verification import (
+    issue_visit_otp,
+    verify_visit_otp,
+    visit_verification_status,
 )
 from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
@@ -705,6 +712,100 @@ class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView
                 )
         except IntegrityError as error:
             raise ValidationError("An equivalent change request is already pending.") from error
+
+
+class CustomerVisitVerificationView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = CustomerAppointmentSerializer
+
+    def get_appointment(self, request, pk):
+        appointment = (
+            Appointment.objects.filter(
+                pk=pk,
+                organization=request.organization,
+                patient__user=request.user,
+            )
+            .select_related(
+                "organization",
+                "clinic",
+                "patient__user",
+                "physiotherapist__user",
+            )
+            .first()
+        )
+        if appointment is None:
+            raise NotFound("Visit verification is unavailable.")
+        return appointment
+
+    def get(self, request, pk):
+        appointment = self.get_appointment(request, pk)
+        return Response(visit_verification_status(appointment, actor=request.user))
+
+    def post(self, request, pk):
+        appointment = self.get_appointment(request, pk)
+        try:
+            verification, delivery = issue_visit_otp(appointment, customer=request.user)
+        except DjangoValidationError as error:
+            raise ValidationError(str(error)) from error
+        response = visit_verification_status(appointment, actor=request.user)
+        response.update(
+            {
+                "otp": delivery.otp,
+                "expires_at": delivery.expires_at,
+                "verification_id": str(verification.id),
+            }
+        )
+        return Response(response, status=status.HTTP_201_CREATED)
+
+
+class PhysiotherapistVisitVerificationView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
+    serializer_class = VisitOtpSubmissionSerializer
+
+    def get_appointment(self, request, pk):
+        appointment = (
+            Appointment.objects.filter(pk=pk, organization=request.organization)
+            .select_related(
+                "organization",
+                "clinic",
+                "patient__user",
+                "physiotherapist__user",
+            )
+            .first()
+        )
+        if appointment is None:
+            raise NotFound("Visit verification is unavailable.")
+        return appointment
+
+    def get(self, request, pk):
+        appointment = self.get_appointment(request, pk)
+        if (
+            appointment.physiotherapist is None
+            or appointment.physiotherapist.user_id != request.user.id
+        ):
+            raise NotFound("Visit verification is unavailable.")
+        return Response(visit_verification_status(appointment, actor=request.user))
+
+    def post(self, request, pk):
+        appointment = self.get_appointment(request, pk)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            verification = verify_visit_otp(
+                appointment,
+                physiotherapist_user=request.user,
+                otp=serializer.validated_data["otp"],
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(str(error)) from error
+        return Response(
+            {
+                "status": "VERIFIED",
+                "verified_at": verification.verified_at,
+                "expires_at": None,
+                "failed_attempt_warning": verification.failed_attempt_count > 0,
+            }
+        )
 
 
 class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):

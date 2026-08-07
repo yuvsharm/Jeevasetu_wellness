@@ -416,3 +416,83 @@ class AppointmentChangeRequest(models.Model):
 
     def __str__(self):
         return f"{self.appointment_id}:{self.kind}:{self.status}"
+
+
+class VisitVerification(models.Model):
+    class State(models.TextChoices):
+        AWAITING = "AWAITING", "Awaiting verification"
+        VERIFIED = "VERIFIED", "Verified check-in"
+        EXPIRED = "EXPIRED", "Expired"
+        LOCKED = "LOCKED", "Locked"
+        INVALIDATED = "INVALIDATED", "Invalidated"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.ForeignKey(
+        Appointment, on_delete=models.PROTECT, related_name="visit_verifications"
+    )
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="customer_visit_verifications",
+    )
+    physiotherapist = models.ForeignKey(
+        "staff.StaffProfile", on_delete=models.PROTECT, related_name="visit_verifications"
+    )
+    state = models.CharField(max_length=16, choices=State.choices, default=State.AWAITING)
+    otp_hash = models.CharField(max_length=255)
+    issued_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    failed_attempt_count = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=5)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    invalidation_reason = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("appointment", "state"), name="appt_visit_verify_state_idx"),
+            models.Index(fields=("organization", "created_at"), name="appt_visit_verify_org_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.appointment_id}:{self.state}"
+
+
+class VisitVerificationAuditEvent(models.Model):
+    class Event(models.TextChoices):
+        ISSUED = "ISSUED", "OTP issued"
+        REISSUED = "REISSUED", "OTP reissued"
+        ATTEMPTED = "ATTEMPTED", "Verification attempted"
+        SUCCEEDED = "SUCCEEDED", "Verification succeeded"
+        EXPIRED = "EXPIRED", "OTP expired"
+        INVALIDATED = "INVALIDATED", "OTP invalidated"
+        LOCKED = "LOCKED", "OTP locked"
+        UNAUTHORIZED = "UNAUTHORIZED", "Unauthorized attempt"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    verification = models.ForeignKey(
+        VisitVerification, on_delete=models.PROTECT, related_name="audit_events"
+    )
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="visit_verification_audits",
+    )
+    event = models.CharField(max_length=16, choices=Event.choices)
+    outcome = models.CharField(max_length=16, blank=True)
+    reason_code = models.CharField(max_length=48, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at",)
+
+    def __str__(self):
+        return f"{self.verification_id}:{self.event}"

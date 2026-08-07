@@ -103,6 +103,9 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
     ):
         raise ValidationError("This appointment can no longer be assigned or reassigned.")
     previous = appointment.physiotherapist
+    from apps.appointments.visit_verification import invalidate_active_visit_verifications
+
+    invalidate_active_visit_verifications(appointment, reason="ASSIGNMENT_CHANGED", actor=actor)
     ensure_no_overlap(
         physiotherapist=physiotherapist,
         start=appointment.scheduled_start,
@@ -163,6 +166,9 @@ def unassign_physiotherapist(appointment, *, actor, reason):
     if appointment.physiotherapist is None:
         raise ValidationError("This appointment is already unassigned.")
     previous = appointment.physiotherapist
+    from apps.appointments.visit_verification import invalidate_active_visit_verifications
+
+    invalidate_active_visit_verifications(appointment, reason="ASSIGNMENT_REMOVED", actor=actor)
     appointment.physiotherapist = None
     appointment.assignment_status = Appointment.AssignmentStatus.UNASSIGNED
     appointment.assigned_by = actor
@@ -200,6 +206,12 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
         raise ValidationError("This assignment has already been answered.")
     if not accept and len(reason.strip()) < 3:
         raise ValidationError("A short rejection reason is required.")
+    if not accept:
+        from apps.appointments.visit_verification import invalidate_active_visit_verifications
+
+        invalidate_active_visit_verifications(
+            appointment, reason="ASSIGNMENT_REJECTED", actor=actor
+        )
     appointment.assignment_status = (
         Appointment.AssignmentStatus.ACCEPTED if accept else Appointment.AssignmentStatus.REJECTED
     )
@@ -252,6 +264,11 @@ def transition_status(appointment, *, new_status, actor, reason=""):
             end=appointment.scheduled_end,
             exclude_id=appointment.pk,
         )
+    if new_status == Appointment.Status.IN_PROGRESS:
+        from apps.appointments.visit_verification import can_start_visit
+
+        if not can_start_visit(appointment):
+            raise ValidationError("Customer arrival verification is required before visit start.")
     previous = appointment.status
     appointment.status = new_status
     appointment.updated_by = actor
@@ -387,6 +404,11 @@ def reschedule_appointment(
                     exclude_id=appointment.pk,
                 )
             previous_start = appointment.scheduled_start
+            from apps.appointments.visit_verification import invalidate_active_visit_verifications
+
+            invalidate_active_visit_verifications(
+                appointment, reason="APPOINTMENT_RESCHEDULED", actor=actor
+            )
             appointment.scheduled_start = scheduled_start
             appointment.scheduled_end = scheduled_end
             appointment.duration_minutes = duration_minutes
@@ -468,6 +490,11 @@ def cancel_appointment(
                     "A structured override reason is required.", "OVERRIDE_REASON_REQUIRED"
                 )
             previous_status = appointment.status
+            from apps.appointments.visit_verification import invalidate_active_visit_verifications
+
+            invalidate_active_visit_verifications(
+                appointment, reason="APPOINTMENT_CANCELLED", actor=actor
+            )
             appointment.status = Appointment.Status.CANCELLED
             appointment.cancellation_category = category
             appointment.cancellation_reason = reason.strip()[:255]

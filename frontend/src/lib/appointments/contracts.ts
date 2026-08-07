@@ -36,6 +36,15 @@ export type OperationalAppointment = {
   physiotherapist_photo_url?: string | null;
   reschedule_count?: number;
   cancellation_category?: "CUSTOMER_REQUEST" | "PHYSIOTHERAPIST_UNAVAILABLE" | "CLINIC_OPERATIONAL_ISSUE" | "SCHEDULING_CONFLICT" | "DUPLICATE_APPOINTMENT" | "OTHER" | "";
+  visit_verification: VisitVerificationStatus;
+};
+
+export type VisitVerificationStatus = {
+  status: "NOT_READY" | "AWAITING_VERIFICATION" | "VERIFIED" | "EXPIRED" | "LOCKED";
+  verified_at: string | null;
+  expires_at: string | null;
+  failed_attempt_warning: boolean;
+  otp?: string;
 };
 
 export type PhysiotherapistWorkload = {

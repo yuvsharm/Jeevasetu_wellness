@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from django.contrib.auth.hashers import make_password
 from django.db import close_old_connections, connection, connections
 from django.urls import reverse
 from django.utils import timezone
@@ -14,6 +15,7 @@ from apps.appointments.models import (
     AppointmentRequest,
     ClinicOperatingHours,
     TherapyOption,
+    VisitVerification,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
 from apps.availability.models import ApprovalStatus, AvailabilityRule
@@ -152,6 +154,21 @@ def headers(organization):
     return {"HTTP_X_ORGANIZATION_SLUG": organization.slug}
 
 
+def mark_arrival_verified(appointment):
+    now = timezone.now()
+    return VisitVerification.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        customer=appointment.patient.user,
+        physiotherapist=appointment.physiotherapist,
+        state=VisitVerification.State.VERIFIED,
+        otp_hash=make_password("test-only-visit-otp"),
+        issued_at=now,
+        expires_at=now + timedelta(minutes=15),
+        verified_at=now,
+    )
+
+
 def appointment_payload(
     clinic, patient, therapy, address, physiotherapist=None, status="DRAFT", start=None
 ):
@@ -233,6 +250,8 @@ def test_status_flow_and_final_state_reschedule_protection(api_client):
     appointment_id = created.data["id"]
     statuses = []
     for new_status in ("CONFIRMED", "IN_PROGRESS", "COMPLETED"):
+        if new_status == "IN_PROGRESS":
+            mark_arrival_verified(Appointment.objects.get(pk=appointment_id))
         result = api_client.post(
             reverse("schedule-status", args=[appointment_id]),
             {"status": new_status, "reason": "Approved workflow"},
@@ -398,6 +417,7 @@ def test_physiotherapist_only_sees_assigned_and_allowed_transitions(api_client):
         format="json",
         **headers(organization),
     )
+    mark_arrival_verified(Appointment.objects.get(pk=created.data["id"]))
     started = api_client.post(
         reverse("schedule-status", args=[created.data["id"]]),
         {"status": "IN_PROGRESS"},

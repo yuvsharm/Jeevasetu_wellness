@@ -1,5 +1,6 @@
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.models import Role, RoleAssignment
@@ -116,6 +117,15 @@ class CancelAppointmentSerializer(serializers.Serializer):
         raise NotImplementedError
 
 
+class VisitVerificationStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=("NOT_READY", "AWAITING_VERIFICATION", "VERIFIED", "EXPIRED", "LOCKED")
+    )
+    verified_at = serializers.DateTimeField(allow_null=True)
+    expires_at = serializers.DateTimeField(allow_null=True)
+    failed_attempt_warning = serializers.BooleanField()
+
+
 class AppointmentListSerializer(serializers.ModelSerializer):
     patient_identifier = serializers.CharField(source="patient.patient_identifier", read_only=True)
     patient_name = serializers.CharField(source="patient.full_name", read_only=True)
@@ -127,6 +137,7 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     assigned_manager_name = serializers.CharField(
         source="assigned_by.get_full_name", read_only=True, default=None
     )
+    visit_verification = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -145,7 +156,16 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "assigned_manager_name",
             "reschedule_count",
             "cancellation_category",
+            "visit_verification",
         )
+
+    @extend_schema_field(VisitVerificationStatusSerializer)
+    def get_visit_verification(self, value):
+        from apps.appointments.visit_verification import visit_verification_status
+
+        request = self.context.get("request")
+        actor = request.user if request and request.user.is_authenticated else None
+        return visit_verification_status(value, actor=actor)
 
 
 class AppointmentDetailSerializer(AppointmentListSerializer):
@@ -214,6 +234,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     physiotherapist_experience_years = serializers.IntegerField(
         source="physiotherapist.experience_years", read_only=True, default=None
     )
+    visit_verification = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -236,6 +257,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "assignment_status",
             "manager_remarks",
             "cancellation_category",
+            "visit_verification",
         )
 
     def get_physiotherapist_photo_url(self, value) -> str | None:
@@ -244,6 +266,18 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         path = f"/api/v1/appointments/schedule/{value.pk}/physiotherapist-photo/"
         return request.build_absolute_uri(path) if request else path
+
+    @extend_schema_field(VisitVerificationStatusSerializer)
+    def get_visit_verification(self, value):
+        from apps.appointments.visit_verification import visit_verification_status
+
+        request = self.context.get("request")
+        actor = request.user if request and request.user.is_authenticated else None
+        return visit_verification_status(value, actor=actor)
+
+
+class VisitOtpSubmissionSerializer(serializers.Serializer):
+    otp = serializers.RegexField(r"^\d{6}$", write_only=True)
 
 
 class AppointmentWriteSerializer(serializers.ModelSerializer):
