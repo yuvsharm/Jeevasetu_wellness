@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import FileResponse
@@ -47,6 +48,7 @@ from apps.appointments.serializers import (
     PhysiotherapistAppointmentSerializer,
     TherapyOptionSerializer,
 )
+from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
 
 
@@ -491,12 +493,19 @@ class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
             )
             .select_related("user")
         )
-        return Response(
-            [
-                {"id": str(profile.id), "full_name": profile.user.get_full_name()}
-                for profile in profiles
-            ]
-        )
+        available = []
+        for profile in profiles:
+            try:
+                ensure_physiotherapist_available(
+                    physiotherapist=profile,
+                    clinic=clinic,
+                    start=start,
+                    end=end,
+                )
+            except DjangoValidationError:
+                continue
+            available.append({"id": str(profile.id), "full_name": profile.user.get_full_name()})
+        return Response(available)
 
 
 class MyAssignedAppointmentListView(HasTenant, generics.ListAPIView):

@@ -1,0 +1,4 @@
+export type AvailabilityRule = { id:string; physiotherapist:string; physiotherapist_name:string; clinic:string; weekday:number; starts_at:string; ends_at:string; effective_from:string; effective_until:string|null; approval_status:"PENDING"|"APPROVED"|"REJECTED"; is_active:boolean; review_reason:string; created_at:string };
+export type AvailabilityException = { id:string; physiotherapist:string; physiotherapist_name:string; clinic:string; kind:"UNAVAILABLE"|"ADDITIONAL_AVAILABILITY"; starts_at:string; ends_at:string; reason:string; approval_status:"PENDING"|"APPROVED"|"REJECTED"; is_active:boolean; review_reason:string; created_at:string };
+export type Page<T> = {count:number;next:string|null;previous:string|null;results:T[]};
+export type Slot = {physiotherapist_id:string;physiotherapist_name:string;scheduled_start:string;scheduled_end:string;duration_minutes:number};

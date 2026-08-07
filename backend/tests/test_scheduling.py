@@ -16,6 +16,7 @@ from apps.appointments.models import (
     TherapyOption,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
+from apps.availability.models import ApprovalStatus, AvailabilityRule
 from apps.patients.models import PatientAddress, PatientProfile
 from apps.staff.models import StaffProfile
 from apps.tenancy.models import Clinic, ClinicMembership, Organization, OrganizationMembership
@@ -88,6 +89,20 @@ def setup_domain(slug="schedule"):
         pin_code="250004",
         joining_date=date.today(),
     )
+    for weekday in range(7):
+        AvailabilityRule.objects.create(
+            organization=organization,
+            clinic=clinic,
+            physiotherapist=physiotherapist,
+            weekday=weekday,
+            starts_at=time(8),
+            ends_at=time(20),
+            effective_from=timezone.localdate(),
+            approval_status=ApprovalStatus.APPROVED,
+            is_active=True,
+            submitted_by=owner,
+            reviewed_by=owner,
+        )
     patient = PatientProfile.objects.create(
         organization=organization,
         clinic=clinic,
@@ -322,6 +337,20 @@ def test_manager_scope_assignment_and_reassignment_audit(api_client):
         pin_code="250004",
         joining_date=date.today(),
     )
+    for weekday in range(7):
+        AvailabilityRule.objects.create(
+            organization=organization,
+            clinic=clinic,
+            physiotherapist=second,
+            weekday=weekday,
+            starts_at=time(8),
+            ends_at=time(20),
+            effective_from=timezone.localdate(),
+            approval_status=ApprovalStatus.APPROVED,
+            is_active=True,
+            submitted_by=owner,
+            reviewed_by=owner,
+        )
     api_client.force_authenticate(owner)
     created = api_client.post(
         reverse("schedule-list"),

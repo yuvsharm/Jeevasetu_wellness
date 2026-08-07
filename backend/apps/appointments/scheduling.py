@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from apps.accounts.models import Role, RoleAssignment
 from apps.appointments.models import Appointment, AppointmentAuditEvent, ClinicOperatingHours
+from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
 
 
@@ -66,6 +67,14 @@ def save_scheduled_appointment(appointment, *, actor, event, reason=""):
             end=appointment.scheduled_end,
             exclude_id=appointment.pk,
         )
+    if appointment.physiotherapist is not None:
+        ensure_physiotherapist_available(
+            physiotherapist=appointment.physiotherapist,
+            clinic=appointment.clinic,
+            start=appointment.scheduled_start,
+            end=appointment.scheduled_end,
+            exclude_id=appointment.pk,
+        )
     appointment.full_clean()
     appointment.save()
     AppointmentAuditEvent.objects.create(
@@ -92,6 +101,13 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
     previous = appointment.physiotherapist
     ensure_no_overlap(
         physiotherapist=physiotherapist,
+        start=appointment.scheduled_start,
+        end=appointment.scheduled_end,
+        exclude_id=appointment.pk,
+    )
+    ensure_physiotherapist_available(
+        physiotherapist=physiotherapist,
+        clinic=appointment.clinic,
         start=appointment.scheduled_start,
         end=appointment.scheduled_end,
         exclude_id=appointment.pk,
@@ -127,6 +143,13 @@ def transition_status(appointment, *, new_status, actor, reason=""):
             raise ValidationError("An assigned Physiotherapist is required for this status.")
         ensure_no_overlap(
             physiotherapist=appointment.physiotherapist,
+            start=appointment.scheduled_start,
+            end=appointment.scheduled_end,
+            exclude_id=appointment.pk,
+        )
+        ensure_physiotherapist_available(
+            physiotherapist=appointment.physiotherapist,
+            clinic=appointment.clinic,
             start=appointment.scheduled_start,
             end=appointment.scheduled_end,
             exclude_id=appointment.pk,
@@ -253,6 +276,14 @@ def reschedule_appointment(
                     )
                 ensure_no_overlap(
                     physiotherapist=appointment.physiotherapist,
+                    start=scheduled_start,
+                    end=scheduled_end,
+                    exclude_id=appointment.pk,
+                )
+            if appointment.physiotherapist is not None:
+                ensure_physiotherapist_available(
+                    physiotherapist=appointment.physiotherapist,
+                    clinic=appointment.clinic,
                     start=scheduled_start,
                     end=scheduled_end,
                     exclude_id=appointment.pk,

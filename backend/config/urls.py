@@ -17,6 +17,7 @@ urlpatterns = [
     path("api/v1/health/live/", LivenessView.as_view(), name="health-live"),
     path("api/v1/tenancy/", include("apps.tenancy.urls")),
     path("api/v1/appointments/", include("apps.appointments.urls")),
+    path("api/v1/availability/", include("apps.availability.urls")),
     path("api/v1/staff/", include("apps.staff.urls")),
     path("api/v1/patients/", include("apps.patients.urls")),
     path("api/v1/health/ready/", ReadinessView.as_view(), name="health-ready"),
