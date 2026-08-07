@@ -75,6 +75,10 @@ def save_scheduled_appointment(appointment, *, actor, event, reason=""):
             end=appointment.scheduled_end,
             exclude_id=appointment.pk,
         )
+        if appointment.assignment_status == Appointment.AssignmentStatus.UNASSIGNED:
+            appointment.assignment_status = Appointment.AssignmentStatus.PENDING
+            appointment.assigned_by = actor
+            appointment.assigned_at = timezone.now()
     appointment.full_clean()
     appointment.save()
     AppointmentAuditEvent.objects.create(
@@ -113,9 +117,25 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
         exclude_id=appointment.pk,
     )
     appointment.physiotherapist = physiotherapist
+    appointment.assignment_status = Appointment.AssignmentStatus.PENDING
+    appointment.assigned_by = actor
+    appointment.assigned_at = timezone.now()
+    appointment.assignment_responded_at = None
+    appointment.assignment_rejection_reason = ""
     appointment.updated_by = actor
     appointment.full_clean()
-    appointment.save(update_fields=("physiotherapist", "updated_by", "updated_at"))
+    appointment.save(
+        update_fields=(
+            "physiotherapist",
+            "assignment_status",
+            "assigned_by",
+            "assigned_at",
+            "assignment_responded_at",
+            "assignment_rejection_reason",
+            "updated_by",
+            "updated_at",
+        )
+    )
     AppointmentAuditEvent.objects.create(
         appointment=appointment,
         organization=appointment.organization,
@@ -128,6 +148,84 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
         previous_physiotherapist=previous,
         new_physiotherapist=physiotherapist,
         reason=reason,
+    )
+    return appointment
+
+
+@transaction.atomic
+def unassign_physiotherapist(appointment, *, actor, reason):
+    appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if (
+        appointment.status in Appointment.FINAL_STATUSES
+        or appointment.status == Appointment.Status.IN_PROGRESS
+    ):
+        raise ValidationError("This assignment can no longer be cancelled.")
+    if appointment.physiotherapist is None:
+        raise ValidationError("This appointment is already unassigned.")
+    previous = appointment.physiotherapist
+    appointment.physiotherapist = None
+    appointment.assignment_status = Appointment.AssignmentStatus.UNASSIGNED
+    appointment.assigned_by = actor
+    appointment.assignment_responded_at = None
+    appointment.assignment_rejection_reason = ""
+    appointment.updated_by = actor
+    appointment.save(
+        update_fields=(
+            "physiotherapist",
+            "assignment_status",
+            "assigned_by",
+            "assignment_responded_at",
+            "assignment_rejection_reason",
+            "updated_by",
+            "updated_at",
+        )
+    )
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=AppointmentAuditEvent.Event.UNASSIGNED,
+        previous_physiotherapist=previous,
+        reason=reason.strip()[:255],
+    )
+    return appointment
+
+
+@transaction.atomic
+def respond_to_assignment(appointment, *, actor, accept, reason=""):
+    appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if appointment.physiotherapist_id is None or appointment.physiotherapist.user_id != actor.id:
+        raise ValidationError("This assignment is unavailable.")
+    if appointment.assignment_status != Appointment.AssignmentStatus.PENDING:
+        raise ValidationError("This assignment has already been answered.")
+    if not accept and len(reason.strip()) < 3:
+        raise ValidationError("A short rejection reason is required.")
+    appointment.assignment_status = (
+        Appointment.AssignmentStatus.ACCEPTED if accept else Appointment.AssignmentStatus.REJECTED
+    )
+    appointment.assignment_responded_at = timezone.now()
+    appointment.assignment_rejection_reason = "" if accept else reason.strip()[:255]
+    appointment.updated_by = actor
+    appointment.save(
+        update_fields=(
+            "assignment_status",
+            "assignment_responded_at",
+            "assignment_rejection_reason",
+            "updated_by",
+            "updated_at",
+        )
+    )
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=(
+            AppointmentAuditEvent.Event.ASSIGNMENT_ACCEPTED
+            if accept
+            else AppointmentAuditEvent.Event.ASSIGNMENT_REJECTED
+        ),
+        new_physiotherapist=appointment.physiotherapist,
+        reason=appointment.assignment_rejection_reason,
     )
     return appointment
 

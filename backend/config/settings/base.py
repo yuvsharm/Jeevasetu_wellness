@@ -123,6 +123,12 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "AppointmentRequestStatus": "apps.appointments.models.AppointmentRequest.Status",
         "OperationalAppointmentStatus": "apps.appointments.models.Appointment.Status",
+        "AppointmentAssignmentStatus": ("apps.appointments.models.Appointment.AssignmentStatus"),
+        "AppointmentChangeRequestKind": ("apps.appointments.models.AppointmentChangeRequest.Kind"),
+        "AppointmentChangeRequestStatus": (
+            "apps.appointments.models.AppointmentChangeRequest.Status"
+        ),
+        "AvailabilityExceptionKind": "apps.availability.models.AvailabilityException.Kind",
         "AppointmentCancellationCategory": (
             "apps.appointments.models.Appointment.CancellationCategory"
         ),

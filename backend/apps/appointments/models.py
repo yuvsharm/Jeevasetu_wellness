@@ -167,6 +167,12 @@ class ClinicOperatingHours(models.Model):
 
 
 class Appointment(models.Model):
+    class AssignmentStatus(models.TextChoices):
+        UNASSIGNED = "UNASSIGNED", "Unassigned"
+        PENDING = "PENDING", "Pending response"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        REJECTED = "REJECTED", "Rejected by Physiotherapist"
+
     class CancellationCategory(models.TextChoices):
         CUSTOMER_REQUEST = "CUSTOMER_REQUEST", "Customer request"
         PHYSIOTHERAPIST_UNAVAILABLE = (
@@ -238,6 +244,20 @@ class Appointment(models.Model):
     region = models.CharField(max_length=120)
     pin_code = models.CharField(max_length=6, validators=[RegexValidator(r"^[1-9]\d{5}$")])
     operational_notes = models.CharField(max_length=500, blank=True)
+    manager_remarks = models.CharField(max_length=500, blank=True)
+    assignment_status = models.CharField(
+        max_length=16, choices=AssignmentStatus.choices, default=AssignmentStatus.UNASSIGNED
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="dispatched_appointments",
+    )
+    assigned_at = models.DateTimeField(null=True, blank=True)
+    assignment_responded_at = models.DateTimeField(null=True, blank=True)
+    assignment_rejection_reason = models.CharField(max_length=255, blank=True)
     reschedule_count = models.PositiveSmallIntegerField(default=0)
     cancellation_category = models.CharField(
         max_length=32, choices=CancellationCategory.choices, blank=True
@@ -307,6 +327,10 @@ class AppointmentAuditEvent(models.Model):
         RESCHEDULED = "RESCHEDULED", "Rescheduled"
         ASSIGNED = "ASSIGNED", "Assigned"
         REASSIGNED = "REASSIGNED", "Reassigned"
+        UNASSIGNED = "UNASSIGNED", "Assignment cancelled"
+        ASSIGNMENT_ACCEPTED = "ASSIGNMENT_ACCEPTED", "Assignment accepted"
+        ASSIGNMENT_REJECTED = "ASSIGNMENT_REJECTED", "Assignment rejected"
+        CUSTOMER_CHANGE_REQUESTED = "CUSTOMER_CHANGE_REQUESTED", "Customer change requested"
         STATUS_CHANGED = "STATUS_CHANGED", "Status changed"
         CANCELLED = "CANCELLED", "Cancelled"
         RESCHEDULE_REJECTED = "RESCHEDULE_REJECTED", "Reschedule rejected"
@@ -322,7 +346,7 @@ class AppointmentAuditEvent(models.Model):
     )
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    event = models.CharField(max_length=24, choices=Event.choices)
+    event = models.CharField(max_length=32, choices=Event.choices)
     previous_status = models.CharField(max_length=24, blank=True)
     new_status = models.CharField(max_length=24, blank=True)
     previous_start = models.DateTimeField(null=True, blank=True)
@@ -354,3 +378,41 @@ class AppointmentAuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.appointment_id}:{self.event}"
+
+
+class AppointmentChangeRequest(models.Model):
+    class Kind(models.TextChoices):
+        RESCHEDULE = "RESCHEDULE", "Reschedule"
+        CANCELLATION = "CANCELLATION", "Cancellation"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+        WITHDRAWN = "WITHDRAWN", "Withdrawn"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.ForeignKey(
+        Appointment, on_delete=models.PROTECT, related_name="change_requests"
+    )
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    requested_start = models.DateTimeField(null=True, blank=True)
+    reason = models.CharField(max_length=255)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("appointment", "kind"),
+                condition=models.Q(status="PENDING"),
+                name="appt_pending_change_kind_uniq",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.appointment_id}:{self.kind}:{self.status}"

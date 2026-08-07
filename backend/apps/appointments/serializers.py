@@ -6,6 +6,7 @@ from apps.accounts.models import Role, RoleAssignment
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
+    AppointmentChangeRequest,
     AppointmentRequest,
     TherapyOption,
 )
@@ -99,7 +100,7 @@ class OwnerAppointmentUpdateSerializer(serializers.ModelSerializer):
 
     def validate_status(self, value):
         if value not in (AppointmentRequest.Status.APPROVED, AppointmentRequest.Status.REJECTED):
-            raise serializers.ValidationError("Owners may approve or reject requests.")
+            raise serializers.ValidationError("Owners and Managers may approve or reject requests.")
         return value
 
 
@@ -123,6 +124,9 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     physiotherapist_name = serializers.CharField(
         source="physiotherapist.user.get_full_name", read_only=True, default=None
     )
+    assigned_manager_name = serializers.CharField(
+        source="assigned_by.get_full_name", read_only=True, default=None
+    )
 
     class Meta:
         model = Appointment
@@ -137,6 +141,8 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "status",
             "physiotherapist_name",
+            "assignment_status",
+            "assigned_manager_name",
             "reschedule_count",
             "cancellation_category",
         )
@@ -159,6 +165,8 @@ class AppointmentDetailSerializer(AppointmentListSerializer):
             "region",
             "pin_code",
             "operational_notes",
+            "manager_remarks",
+            "assignment_rejection_reason",
             "profile_photo_url",
             "created_at",
             "updated_at",
@@ -174,6 +182,11 @@ class AppointmentDetailSerializer(AppointmentListSerializer):
 
 
 class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
+    patient_mobile = serializers.CharField(source="patient.mobile_number", read_only=True)
+    problem_description = serializers.CharField(
+        source="originating_request.problem_description", read_only=True, default=""
+    )
+
     class Meta(AppointmentListSerializer.Meta):
         fields = AppointmentListSerializer.Meta.fields + (
             "address_line_1",
@@ -182,6 +195,10 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "city",
             "region",
             "pin_code",
+            "patient_mobile",
+            "problem_description",
+            "manager_remarks",
+            "assignment_rejection_reason",
         )
 
 
@@ -191,6 +208,12 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         source="physiotherapist.user.get_full_name", read_only=True, default=None
     )
     physiotherapist_photo_url = serializers.SerializerMethodField()
+    physiotherapist_qualification = serializers.CharField(
+        source="physiotherapist.qualification", read_only=True, default=""
+    )
+    physiotherapist_experience_years = serializers.IntegerField(
+        source="physiotherapist.experience_years", read_only=True, default=None
+    )
 
     class Meta:
         model = Appointment
@@ -208,6 +231,10 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "pin_code",
             "physiotherapist_name",
             "physiotherapist_photo_url",
+            "physiotherapist_qualification",
+            "physiotherapist_experience_years",
+            "assignment_status",
+            "manager_remarks",
             "cancellation_category",
         )
 
@@ -238,6 +265,7 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
             "region",
             "pin_code",
             "operational_notes",
+            "manager_remarks",
         )
         read_only_fields = ("id",)
         extra_kwargs = {"duration_minutes": {"required": False}}
@@ -343,6 +371,38 @@ class AssignmentSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class UnassignmentSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, trim_whitespace=True)
+
+    def validate_reason(self, value):
+        if len(value) < 3:
+            raise serializers.ValidationError("A short operational reason is required.")
+        return value
+
+
+class AssignmentResponseSerializer(serializers.Serializer):
+    accept = serializers.BooleanField()
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class AppointmentChangeRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppointmentChangeRequest
+        fields = ("id", "appointment", "kind", "requested_start", "reason", "status", "created_at")
+        read_only_fields = ("id", "appointment", "status", "created_at")
+
+    def validate(self, attrs):
+        if attrs["kind"] == AppointmentChangeRequest.Kind.RESCHEDULE and not attrs.get(
+            "requested_start"
+        ):
+            raise serializers.ValidationError(
+                {"requested_start": "A preferred date and time is required."}
+            )
+        if len(attrs["reason"].strip()) < 3:
+            raise serializers.ValidationError({"reason": "Provide a short reason."})
+        return attrs
+
+
 class AppointmentStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Appointment.Status.choices)
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
@@ -352,6 +412,14 @@ class AvailabilityQuerySerializer(serializers.Serializer):
     clinic = serializers.UUIDField()
     scheduled_start = serializers.DateTimeField()
     duration_minutes = serializers.IntegerField(min_value=30, max_value=180, default=60)
+
+
+class PhysiotherapistWorkloadSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    full_name = serializers.CharField()
+    clinic = serializers.CharField()
+    active_assignments = serializers.IntegerField()
+    upcoming_assignments = serializers.IntegerField()
 
 
 class AppointmentRescheduleSerializer(serializers.Serializer):

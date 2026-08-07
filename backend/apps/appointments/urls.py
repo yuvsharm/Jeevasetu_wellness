@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.appointments.views import (
+    AppointmentAssignmentResponseView,
     AppointmentAssignmentView,
     AppointmentAuditListView,
     AppointmentCalendarView,
@@ -10,9 +11,11 @@ from apps.appointments.views import (
     AppointmentPhysiotherapistPhotoView,
     AppointmentRescheduleView,
     AppointmentStatusView,
+    AppointmentUnassignmentView,
     AvailablePhysiotherapistView,
     ConvertAppointmentRequestView,
     CustomerAppointmentCancelView,
+    CustomerAppointmentChangeRequestView,
     CustomerAppointmentDetailView,
     CustomerAppointmentListView,
     CustomerOperationalAppointmentListView,
@@ -21,6 +24,7 @@ from apps.appointments.views import (
     OperationalAppointmentListCreateView,
     OwnerAppointmentDetailView,
     OwnerAppointmentListView,
+    PhysiotherapistWorkloadView,
     TherapyListView,
 )
 
@@ -34,6 +38,16 @@ urlpatterns = [
     ),
     path("schedule/<uuid:pk>/", OperationalAppointmentDetailView.as_view(), name="schedule-detail"),
     path("schedule/<uuid:pk>/assign/", AppointmentAssignmentView.as_view(), name="schedule-assign"),
+    path(
+        "schedule/<uuid:pk>/unassign/",
+        AppointmentUnassignmentView.as_view(),
+        name="schedule-unassign",
+    ),
+    path(
+        "schedule/<uuid:pk>/assignment-response/",
+        AppointmentAssignmentResponseView.as_view(),
+        name="schedule-assignment-response",
+    ),
     path("schedule/<uuid:pk>/status/", AppointmentStatusView.as_view(), name="schedule-status"),
     path(
         "schedule/<uuid:pk>/reschedule/",
@@ -66,6 +80,11 @@ urlpatterns = [
         name="schedule-available",
     ),
     path(
+        "schedule/physiotherapist-workload/",
+        PhysiotherapistWorkloadView.as_view(),
+        name="schedule-physiotherapist-workload",
+    ),
+    path(
         "schedule/assigned-to-me/",
         MyAssignedAppointmentListView.as_view(),
         name="schedule-assigned-me",
@@ -74,6 +93,11 @@ urlpatterns = [
         "schedule/my-appointments/",
         CustomerOperationalAppointmentListView.as_view(),
         name="schedule-customer-me",
+    ),
+    path(
+        "schedule/my-appointments/<uuid:pk>/change-requests/",
+        CustomerAppointmentChangeRequestView.as_view(),
+        name="schedule-customer-change-requests",
     ),
     path("therapies/", TherapyListView.as_view(), name="appointment-therapy-list"),
     path("requests/", AppointmentCreateView.as_view(), name="appointment-create"),

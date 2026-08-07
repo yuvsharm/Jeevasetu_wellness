@@ -1,7 +1,8 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import FileResponse
+from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.generics import GenericAPIView
@@ -12,7 +13,6 @@ from apps.accounts.models import Role, RoleAssignment
 from apps.accounts.permissions import (
     IsCustomer,
     IsEnabledAuthenticated,
-    IsOwner,
     IsOwnerOrManager,
     active_roles,
 )
@@ -20,6 +20,7 @@ from apps.accounts.role_policy import actor_role_scope
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
+    AppointmentChangeRequest,
     AppointmentRequest,
     TherapyOption,
 )
@@ -28,25 +29,31 @@ from apps.appointments.scheduling import (
     cancel_appointment,
     record_rejected_lifecycle_action,
     reschedule_appointment,
+    respond_to_assignment,
     transition_status,
+    unassign_physiotherapist,
     validate_schedule,
 )
 from apps.appointments.serializers import (
     AppointmentAuditSerializer,
     AppointmentCancellationSerializer,
+    AppointmentChangeRequestSerializer,
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
     AppointmentRescheduleSerializer,
     AppointmentStatusSerializer,
     AppointmentWriteSerializer,
+    AssignmentResponseSerializer,
     AssignmentSerializer,
     AvailabilityQuerySerializer,
     CancelAppointmentSerializer,
     CustomerAppointmentSerializer,
     OwnerAppointmentUpdateSerializer,
     PhysiotherapistAppointmentSerializer,
+    PhysiotherapistWorkloadSerializer,
     TherapyOptionSerializer,
+    UnassignmentSerializer,
 )
 from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
@@ -104,16 +111,13 @@ class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.Upda
 
 
 class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
-    permission_classes = (IsEnabledAuthenticated, IsOwner)
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
     serializer_class = AppointmentRequestSerializer
 
     def get_queryset(self):
-        if (
-            not active_roles(self.request.user, self.request.organization)
-            .filter(role=Role.OWNER, clinic__isnull=True)
-            .exists()
-        ):
-            raise PermissionDenied("Owner access is required.")
+        level, _ = actor_role_scope(self.request.user, self.request.organization)
+        if level not in (Role.OWNER, Role.MANAGER):
+            raise PermissionDenied("Operations access is required.")
         queryset = AppointmentRequest.objects.filter(
             organization=self.request.organization
         ).select_related("therapy", "creator")
@@ -132,16 +136,13 @@ class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
 
 
 class OwnerAppointmentDetailView(HasTenant, generics.RetrieveUpdateAPIView):
-    permission_classes = (IsEnabledAuthenticated, IsOwner)
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
     serializer_class = AppointmentRequestSerializer
 
     def get_queryset(self):
-        if (
-            not active_roles(self.request.user, self.request.organization)
-            .filter(role=Role.OWNER, clinic__isnull=True)
-            .exists()
-        ):
-            raise PermissionDenied("Owner access is required.")
+        level, _ = actor_role_scope(self.request.user, self.request.organization)
+        if level not in (Role.OWNER, Role.MANAGER):
+            raise PermissionDenied("Operations access is required.")
         return AppointmentRequest.objects.filter(
             organization=self.request.organization
         ).select_related("therapy", "creator")
@@ -169,7 +170,12 @@ class OperationalScopeMixin(HasTenant):
         if level == Role.MANAGER:
             queryset = queryset.filter(clinic_id__in=clinic_ids or ())
         return queryset.select_related(
-            "clinic", "patient", "therapy", "physiotherapist__user", "originating_request"
+            "clinic",
+            "patient",
+            "therapy",
+            "physiotherapist__user",
+            "originating_request",
+            "assigned_by",
         )
 
 
@@ -189,6 +195,27 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             value = self.request.query_params.get(key)
             if value:
                 queryset = queryset.filter(**{key: value})
+        search = self.request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(patient__full_name__icontains=search)
+                | Q(patient__patient_identifier__icontains=search)
+                | Q(physiotherapist__user__first_name__icontains=search)
+                | Q(physiotherapist__user__last_name__icontains=search)
+                | Q(assigned_by__first_name__icontains=search)
+                | Q(assigned_by__last_name__icontains=search)
+                | Q(status__icontains=search)
+            )
+        view = self.request.query_params.get("view")
+        today = timezone.localdate()
+        if view == "today":
+            queryset = queryset.filter(scheduled_start__date=today)
+        elif view == "upcoming":
+            queryset = queryset.filter(scheduled_start__date__gt=today).exclude(
+                status=Appointment.Status.CANCELLED
+            )
+        elif view == "cancelled":
+            queryset = queryset.filter(status=Appointment.Status.CANCELLED)
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
         if date_from:
@@ -326,6 +353,101 @@ class AppointmentAssignmentView(OperationalScopeMixin, GenericAPIView):
         except Exception as error:
             raise ValidationError(str(error)) from error
         return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class AppointmentUnassignmentView(OperationalScopeMixin, GenericAPIView):
+    serializer_class = UnassignmentSerializer
+
+    def post(self, request, pk):
+        appointment = self.scoped_queryset().filter(pk=pk).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appointment = unassign_physiotherapist(
+                appointment, actor=request.user, reason=serializer.validated_data["reason"]
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(str(error)) from error
+        return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class AppointmentAssignmentResponseView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated,)
+    serializer_class = AssignmentResponseSerializer
+
+    def post(self, request, pk):
+        if (
+            not active_roles(request.user, request.organization)
+            .filter(role=Role.PHYSIOTHERAPIST)
+            .exists()
+        ):
+            raise PermissionDenied("Physiotherapist access is required.")
+        appointment = Appointment.objects.filter(
+            pk=pk,
+            organization=request.organization,
+            physiotherapist__user=request.user,
+        ).first()
+        if appointment is None:
+            raise NotFound("Assignment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appointment = respond_to_assignment(
+                appointment,
+                actor=request.user,
+                accept=serializer.validated_data["accept"],
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(str(error)) from error
+        return Response(
+            PhysiotherapistAppointmentSerializer(appointment, context={"request": request}).data
+        )
+
+
+class PhysiotherapistWorkloadView(OperationalScopeMixin, GenericAPIView):
+    serializer_class = PhysiotherapistWorkloadSerializer
+
+    def get(self, request):
+        level, clinic_ids = actor_role_scope(request.user, request.organization)
+        profiles = StaffProfile.objects.filter(
+            organization=request.organization,
+            staff_type=Role.PHYSIOTHERAPIST,
+            user__is_active=True,
+            user__is_enabled=True,
+        )
+        if level == Role.MANAGER:
+            profiles = profiles.filter(clinic_id__in=clinic_ids or ())
+        profiles = profiles.select_related("user", "clinic").annotate(
+            active_assignments=Count(
+                "appointments",
+                filter=Q(appointments__status__in=Appointment.BLOCKING_STATUSES),
+            ),
+            upcoming_assignments=Count(
+                "appointments",
+                filter=Q(
+                    appointments__scheduled_start__gte=timezone.now(),
+                    appointments__status__in=(
+                        Appointment.Status.SCHEDULED,
+                        Appointment.Status.CONFIRMED,
+                    ),
+                ),
+            ),
+        )
+        return Response(
+            [
+                {
+                    "id": str(profile.id),
+                    "full_name": profile.user.get_full_name(),
+                    "clinic": profile.clinic.name,
+                    "active_assignments": profile.active_assignments,
+                    "upcoming_assignments": profile.upcoming_assignments,
+                }
+                for profile in profiles
+            ]
+        )
 
 
 class AppointmentRescheduleView(OperationalScopeMixin, GenericAPIView):
@@ -522,7 +644,14 @@ class MyAssignedAppointmentListView(HasTenant, generics.ListAPIView):
         return Appointment.objects.filter(
             organization=self.request.organization,
             physiotherapist__user=self.request.user,
-        ).select_related("clinic", "patient", "therapy", "physiotherapist__user")
+        ).select_related(
+            "clinic",
+            "patient",
+            "therapy",
+            "physiotherapist__user",
+            "originating_request",
+            "assigned_by",
+        )
 
 
 class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
@@ -534,6 +663,48 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
             organization=self.request.organization,
             patient__user=self.request.user,
         ).select_related("clinic", "patient", "therapy", "physiotherapist__user")
+
+
+class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = AppointmentChangeRequestSerializer
+
+    def get_queryset(self):
+        return AppointmentChangeRequest.objects.filter(
+            organization=self.request.organization,
+            appointment__patient__user=self.request.user,
+        ).select_related("appointment")
+
+    def perform_create(self, serializer):
+        appointment = Appointment.objects.filter(
+            pk=self.kwargs["pk"],
+            organization=self.request.organization,
+            patient__user=self.request.user,
+            status__in=(
+                Appointment.Status.DRAFT,
+                Appointment.Status.PENDING_ASSIGNMENT,
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.CONFIRMED,
+            ),
+        ).first()
+        if appointment is None:
+            raise NotFound("Appointment change requests are unavailable.")
+        try:
+            with transaction.atomic():
+                value = serializer.save(
+                    appointment=appointment,
+                    organization=self.request.organization,
+                    requested_by=self.request.user,
+                )
+                AppointmentAuditEvent.objects.create(
+                    appointment=appointment,
+                    organization=self.request.organization,
+                    actor=self.request.user,
+                    event=AppointmentAuditEvent.Event.CUSTOMER_CHANGE_REQUESTED,
+                    reason=value.kind,
+                )
+        except IntegrityError as error:
+            raise ValidationError("An equivalent change request is already pending.") from error
 
 
 class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):

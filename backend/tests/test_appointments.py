@@ -147,6 +147,32 @@ def test_owner_searches_and_updates_tenant_requests(api_client):
     assert request_value.status == AppointmentRequest.Status.APPROVED
 
 
+def test_manager_searches_and_updates_tenant_requests(api_client):
+    organization, manager, therapy = setup_identity(Role.MANAGER)
+    request_value = AppointmentRequest.objects.create(
+        organization=organization,
+        creator=manager,
+        therapy=therapy,
+        **{k: v for k, v in payload(therapy).items() if k != "therapy"},
+    )
+    api_client.force_authenticate(manager)
+    listed = api_client.get(
+        reverse("appointment-owner-list"),
+        {"search": "Asha", "status": "PENDING"},
+        **tenant(organization.slug),
+    )
+    assert listed.status_code == 200 and len(listed.data) == 1
+    updated = api_client.patch(
+        reverse("appointment-owner-detail", args=[request_value.id]),
+        {"status": "APPROVED", "owner_remarks": "Confirmed by manager."},
+        format="json",
+        **tenant(organization.slug),
+    )
+    assert updated.status_code == 200
+    request_value.refresh_from_db()
+    assert request_value.status == AppointmentRequest.Status.APPROVED
+
+
 def test_non_owner_cannot_access_owner_queue(api_client):
     organization, customer, _ = setup_identity(Role.CUSTOMER)
     api_client.force_authenticate(customer)
