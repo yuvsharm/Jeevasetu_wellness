@@ -5,15 +5,27 @@ import { beforeEach, vi } from "vitest";
 import { ForgotPasswordForm, LoginForm, RegistrationForm } from "./auth-forms";
 
 const replace = vi.fn();
+let query = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => query,
 }));
 
 describe("authentication forms", () => {
   beforeEach(() => {
     replace.mockReset();
+    query = new URLSearchParams();
     vi.restoreAllMocks();
+  });
+
+  it("returns an applicant to onboarding after sign in", async () => {
+    query = new URLSearchParams("returnTo=/practitioner-application");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ user: {}, access: { roles: [] } }), { status: 200 }));
+    render(<LoginForm />);
+    await userEvent.type(screen.getByLabelText(/email or mobile/i), "applicant@example.com");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "StrongPassword42");
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/practitioner-application"));
   });
 
   it("provides accessible login labels and client validation", async () => {

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
 import { DashboardRedirect } from "./dashboard-redirect";
+import { ApplicantPage } from "./applicant-page";
 import { ProtectedPage } from "./protected-page";
 import { SessionProvider } from "./session-provider";
 
@@ -16,6 +17,10 @@ function wrapper(children: ReactNode) {
 
 function session(role: "OWNER" | "MANAGER" | "PHYSIOTHERAPIST" | "CUSTOMER") {
   return { user: { id: "u", first_name: "A", last_name: "User", email: "", mobile_number: null, profile_image: "", roles: [role] }, access: { user_id: "u", organization: { id: "o", slug: "jeevasetu" }, permitted_clinics: [], roles: [{ id: "r", user_id: "u", organization_id: "o", clinic_id: null, role, scope: "organization", is_active: true }] } };
+}
+
+function applicantSession() {
+  return { user: { id: "u", first_name: "A", last_name: "Applicant", email: "", mobile_number: null, profile_image: "", roles: [] }, access: { user_id: "u", organization: { id: "o", slug: "jeevasetu" }, permitted_clinics: [], roles: [] } };
 }
 
 describe("protected routing", () => {
@@ -40,6 +45,19 @@ describe("protected routing", () => {
 
   it("denies a wrong-role route", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session("CUSTOMER")), { status: 200 }));
+    render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Secret owner shell</p></ProtectedPage>));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/unauthorized"));
+  });
+
+  it("allows an authenticated applicant without an operational role into only the application shell", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
+    render(wrapper(<ApplicantPage><p>My practitioner application</p></ApplicantPage>));
+    await waitFor(() => expect(document.body).toHaveTextContent("My practitioner application"));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("denies an applicant without an operational role from protected dashboards", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
     render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Secret owner shell</p></ProtectedPage>));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/unauthorized"));
   });

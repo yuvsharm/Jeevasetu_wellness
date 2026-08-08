@@ -10,7 +10,10 @@ DATABASES = {
         "OPTIONS": {},
     }
 }
-PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.MD5PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+]
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 CORS_ALLOWED_ORIGINS = []
 CSRF_TRUSTED_ORIGINS = []

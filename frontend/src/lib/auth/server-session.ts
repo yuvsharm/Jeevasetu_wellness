@@ -94,9 +94,7 @@ export async function login(payload: unknown) {
   const access = await checkedJson<AccessSummary>(
     await djangoFetch(djangoEndpoints.access, {}, tokens.access),
   );
-  if (!tokens.user || access.roles.length === 0) {
-    throw new SessionError(403, "Your account does not have an active role.");
-  }
+  if (!tokens.user) throw new SessionError(401, "The credentials or session are invalid.");
   return { tokens, session: { user: tokens.user, access } satisfies Session };
 }
 
@@ -117,7 +115,6 @@ async function loadSessionWithAccess(access: string): Promise<Session> {
     profileResponse.json(),
     accessResponse.json(),
   ])) as [UserSummary, AccessSummary];
-  if (roleAccess.roles.length === 0) throw new SessionError(403, "Your account does not have an active role.");
   return { user, access: roleAccess };
 }
 

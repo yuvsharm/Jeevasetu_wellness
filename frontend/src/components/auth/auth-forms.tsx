@@ -55,6 +55,11 @@ const linkClass = "font-semibold text-emerald-800 underline-offset-4 hover:under
 
 export function LoginForm() {
   const router = useRouter();
+  const search = useSearchParams();
+  const requestedReturn = search.get("returnTo");
+  const returnTo = requestedReturn?.startsWith("/") && !requestedReturn.startsWith("//")
+    ? requestedReturn
+    : "/dashboard";
   const [message, setMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const form = useForm<LoginInput>({ defaultValues: { identifier: "", password: "" } });
@@ -64,7 +69,7 @@ export function LoginForm() {
     if (!payload) return;
     try {
       await requestJson(sessionEndpoints.login, { method: "POST", body: JSON.stringify(payload) });
-      router.replace("/dashboard");
+      router.replace(returnTo);
     } catch (error) {
       applyApiError(error, form.setError, setMessage);
     }
@@ -81,7 +86,7 @@ export function LoginForm() {
       </div>
       <div className="flex items-center justify-between gap-4 text-sm">
         <Link className={linkClass} href="/forgot-password">Forgot password?</Link>
-        <Link className={linkClass} href="/register">Create account</Link>
+        <Link className={linkClass} href={`/register?returnTo=${encodeURIComponent(returnTo)}`}>Create account</Link>
       </div>
       <button className={submitClass} disabled={form.formState.isSubmitting} type="submit">
         {form.formState.isSubmitting ? "Signing in…" : "Sign in"}
@@ -91,6 +96,12 @@ export function LoginForm() {
 }
 
 export function RegistrationForm() {
+  const search = useSearchParams();
+  const requestedReturn = search.get("returnTo");
+  const returnTo = requestedReturn?.startsWith("/") && !requestedReturn.startsWith("//")
+    ? requestedReturn
+    : "/dashboard";
+  const loginHref = `/login?returnTo=${encodeURIComponent(returnTo)}`;
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
   const form = useForm<RegistrationInput>({ defaultValues: { first_name: "", last_name: "", mobile_number: "", email: "", password: "", confirm_password: "", consent: false } });
@@ -107,7 +118,7 @@ export function RegistrationForm() {
       applyApiError(error, form.setError, setMessage);
     }
   });
-  if (success) return <StatusPanel tone="success">Your account was created. Access is granted only after backend membership and role policy are satisfied. <Link href="/login" className={linkClass}>Continue to sign in</Link>.</StatusPanel>;
+  if (success) return <StatusPanel tone="success">Your account was created. Practitioner operational access still requires approval. <Link href={loginHref} className={linkClass}>Continue to sign in</Link>.</StatusPanel>;
   return (
     <form onSubmit={submit} className="space-y-5" noValidate>
       {message && <StatusPanel tone="error">{message}</StatusPanel>}
@@ -127,7 +138,7 @@ export function RegistrationForm() {
         {form.formState.errors.consent?.message && <p className="mt-2 text-sm font-medium text-red-700" role="alert">{form.formState.errors.consent.message}</p>}
       </div>
       <button className={submitClass} disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? "Creating account…" : "Create account"}</button>
-      <p className="text-center text-sm text-slate-600">Already registered? <Link href="/login" className={linkClass}>Sign in</Link></p>
+      <p className="text-center text-sm text-slate-600">Already registered? <Link href={loginHref} className={linkClass}>Sign in</Link></p>
     </form>
   );
 }

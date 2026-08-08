@@ -81,7 +81,9 @@ class AccessPermissionMixin:
         return self.request.headers.get("X-Request-ID", "")[:64]
 
 
-class AccessSummaryView(AccessPermissionMixin, APIView):
+class AccessSummaryView(APIView):
+    permission_classes = (IsEnabledAuthenticated, IsActiveOrganizationMember)
+
     @extend_schema(
         parameters=[TENANT_PARAMETER],
         responses={200: AccessSummarySerializer, **ACCESS_ERRORS},

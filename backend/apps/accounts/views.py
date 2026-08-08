@@ -35,6 +35,7 @@ from apps.accounts.services import (
     issue_password_reset,
 )
 from apps.accounts.validators import normalize_email_address, normalize_mobile_number
+from apps.tenancy.models import OrganizationMembership
 
 
 def eligible_user(identifier):
@@ -60,6 +61,10 @@ class RegistrationView(APIView):
             user = serializer.save()
         except IntegrityError as error:
             raise ValidationError("Email or mobile number is already registered.") from error
+        if getattr(request, "organization", None) is not None:
+            OrganizationMembership.objects.get_or_create(
+                user=user, organization=request.organization
+            )
         record_auth_event(
             request,
             AuthenticationAuditEvent.Event.REGISTRATION,

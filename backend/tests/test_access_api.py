@@ -93,7 +93,7 @@ def test_access_summary_returns_only_active_caller_scope(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("disabled", ["user", "membership", "role", "organization", "clinic"])
+@pytest.mark.parametrize("disabled", ["user", "membership", "organization"])
 def test_access_summary_denies_disabled_authorization_chain(api_client, access_context, disabled):
     organization, north, _ = access_context
     user, membership, _ = create_member("disabled", organization, (north,))
@@ -117,6 +117,33 @@ def test_access_summary_denies_disabled_authorization_chain(api_client, access_c
     response = api_client.get("/api/v1/access/me/")
 
     assert response.status_code in (403, 404)
+
+
+@pytest.mark.django_db
+def test_access_summary_excludes_role_in_an_inactive_clinic(api_client, access_context):
+    organization, north, _ = access_context
+    user, membership, _ = create_member("inactive-clinic", organization, (north,))
+    create_assignment(user, membership, Role.PHYSIOTHERAPIST, organization, north)
+    north.is_active = False
+    north.save(update_fields=("is_active",))
+    authenticate(api_client, user, organization)
+
+    response = api_client.get("/api/v1/access/me/")
+
+    assert response.status_code == 200
+    assert response.data["roles"] == []
+
+
+@pytest.mark.django_db
+def test_access_summary_allows_active_member_without_operational_role(api_client, access_context):
+    organization, _, _ = access_context
+    user, _, _ = create_member("applicant", organization)
+    authenticate(api_client, user, organization)
+
+    response = api_client.get("/api/v1/access/me/")
+
+    assert response.status_code == 200
+    assert response.data["roles"] == []
 
 
 @pytest.mark.django_db

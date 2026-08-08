@@ -9,6 +9,7 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from apps.accounts.models import AuthenticationAuditEvent, PasswordResetRequest, User
+from apps.tenancy.models import Organization, OrganizationMembership
 
 PASSWORD = "Str0ng!FoundationPass"
 NEW_PASSWORD = "An0ther!FoundationPass"
@@ -75,6 +76,25 @@ def test_registration_normalizes_identity_and_hashes_password(api_client):
         outcome=AuthenticationAuditEvent.Outcome.SUCCESS,
         user=user,
     ).exists()
+
+
+@pytest.mark.django_db
+def test_registration_creates_tenant_membership_without_a_role(api_client):
+    organization = Organization.objects.create(
+        legal_name="JeevaSetu", display_name="JeevaSetu", slug="applicant-registration"
+    )
+
+    response = api_client.post(
+        reverse("auth-register"),
+        registration_payload(),
+        format="json",
+        HTTP_X_ORGANIZATION_SLUG=organization.slug,
+    )
+
+    user = User.objects.get(pk=response.data["id"])
+    assert response.status_code == 201
+    assert OrganizationMembership.objects.filter(user=user, organization=organization).exists()
+    assert not user.role_assignments.exists()
 
 
 @pytest.mark.django_db

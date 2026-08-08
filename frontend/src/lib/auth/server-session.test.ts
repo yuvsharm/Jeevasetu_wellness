@@ -47,6 +47,21 @@ describe("server session", () => {
     expect(() => requireSameOrigin(request)).toThrow(SessionError);
   });
 
+  it("establishes an applicant session without an operational role", async () => {
+    const applicant = { ...user, roles: [] };
+    const applicantAccess = { ...access, roles: [] };
+    const responses = [
+      new Response(JSON.stringify({ access: "applicant-access", refresh: "applicant-refresh", user: applicant }), { status: 200 }),
+      new Response(JSON.stringify(applicantAccess), { status: 200 }),
+    ];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => responses.shift()!);
+    const { login } = await import("./server-session");
+
+    const result = await login({ identifier: "applicant@example.com", password: "StrongPassword42" });
+
+    expect(result.session.access.roles).toEqual([]);
+  });
+
   it("explains when organization access has not been assigned", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Not found." }), { status: 404 }),

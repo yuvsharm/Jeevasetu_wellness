@@ -30,14 +30,15 @@ def identity(organization, username, role=Role.CUSTOMER, clinic=None):
         if clinic
         else None
     )
-    RoleAssignment.objects.create(
-        user=user,
-        organization=organization,
-        organization_membership=membership,
-        clinic=clinic,
-        clinic_membership=clinic_membership,
-        role=role,
-    )
+    if role is not None:
+        RoleAssignment.objects.create(
+            user=user,
+            organization=organization,
+            organization_membership=membership,
+            clinic=clinic,
+            clinic_membership=clinic_membership,
+            role=role,
+        )
     return user
 
 
@@ -50,7 +51,7 @@ def domain():
     therapy = TherapyOption.objects.create(
         organization=organization, name="Physiotherapy", slug="physiotherapy"
     )
-    applicant = identity(organization, "applicant")
+    applicant = identity(organization, "applicant", role=None)
     manager = identity(organization, "manager", Role.MANAGER, clinic)
     owner = identity(organization, "owner", Role.OWNER)
     return organization, clinic, therapy, applicant, manager, owner
@@ -119,6 +120,42 @@ def test_applicant_isolation_and_cross_tenant_denial(api_client, domain):
         ).status_code
         == 200
     )
+
+
+def test_applicant_without_operational_role_can_open_and_submit_own_application(
+    api_client, domain
+):
+    organization, _, _, applicant, _, _ = domain
+    value = application(domain)
+    api_client.force_authenticate(applicant)
+
+    opened = api_client.get(
+        reverse("practitioner-my-application", args=[value.id]), **headers(organization)
+    )
+    submitted = api_client.post(
+        reverse("practitioner-submit", args=[value.id]), {}, format="json", **headers(organization)
+    )
+
+    assert opened.status_code == 200
+    assert submitted.status_code == 200
+    assert submitted.data["status"] == "SUBMITTED"
+    assert not RoleAssignment.objects.filter(user=applicant).exists()
+
+
+def test_applicant_cannot_access_another_application(api_client, domain):
+    organization, clinic, _, applicant, _, _ = domain
+    other = identity(organization, "second-applicant", role=None)
+    value = application(domain)
+    value.applicant = other
+    value.clinic = clinic
+    value.save(update_fields=("applicant", "clinic"))
+    api_client.force_authenticate(applicant)
+
+    response = api_client.get(
+        reverse("practitioner-my-application", args=[value.id]), **headers(organization)
+    )
+
+    assert response.status_code == 404
 
 
 def test_private_document_denies_customer_and_other_applicant(api_client, domain):
