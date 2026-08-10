@@ -76,6 +76,7 @@ export function LoginForm() {
   });
   return (
     <form onSubmit={submit} className="space-y-5" noValidate>
+      {search.get("reason") === "expired" && <StatusPanel tone="info">Your session expired for security. Sign in again to continue your saved application.</StatusPanel>}
       {message && <StatusPanel tone="error">{message}</StatusPanel>}
       <FormField label="Email or mobile number" autoComplete="username" required {...form.register("identifier")} error={form.formState.errors.identifier?.message} />
       <div>

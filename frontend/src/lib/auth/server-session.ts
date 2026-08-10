@@ -10,6 +10,8 @@ const REFRESH_COOKIE = "jeevasetu_refresh";
 const API_BASE_URL = process.env.DJANGO_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const ORGANIZATION_SLUG = process.env.NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG ?? "";
 const secureCookies = process.env.NODE_ENV === "production";
+const ACCESS_COOKIE_SECONDS = 30 * 60;
+const REFRESH_COOKIE_SECONDS = 8 * 60 * 60;
 
 type TokenPair = { access: string; refresh: string; user?: UserSummary };
 
@@ -169,14 +171,14 @@ export function setSessionCookies(response: NextResponse, tokens: TokenPair) {
     secure: secureCookies,
     sameSite: "lax",
     path: "/",
-    maxAge: 5 * 60,
+    maxAge: ACCESS_COOKIE_SECONDS,
   });
   response.cookies.set(REFRESH_COOKIE, tokens.refresh, {
     httpOnly: true,
     secure: secureCookies,
     sameSite: "lax",
     path: "/",
-    maxAge: 24 * 60 * 60,
+    maxAge: REFRESH_COOKIE_SECONDS,
   });
 }
 

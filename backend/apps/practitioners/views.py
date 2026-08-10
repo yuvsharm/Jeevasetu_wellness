@@ -1,3 +1,6 @@
+import mimetypes
+from pathlib import Path
+
 from django.db.models import Q
 from django.http import FileResponse
 from django.utils import timezone
@@ -36,6 +39,20 @@ from apps.practitioners.services import (
     submit_application,
 )
 from apps.tenancy.permissions import IsActiveOrganizationMember
+
+
+def profile_photo_content_type(name):
+    known_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    return (
+        known_types.get(Path(name).suffix.lower())
+        or mimetypes.guess_type(name)[0]
+        or "application/octet-stream"
+    )
 
 
 class ApplicantMixin:
@@ -143,6 +160,68 @@ class ProfilePhotoUploadView(ApplicantMixin, generics.GenericAPIView):
         application.profile_photo = serializer.validated_data["profile_photo"]
         application.save(update_fields=("profile_photo", "updated_at"))
         return Response({"detail": "Profile photograph uploaded."})
+
+    def get(self, request, pk):
+        application = PractitionerApplication.objects.filter(
+            pk=pk, applicant=request.user, organization=request.organization
+        ).first()
+        if application is None or not application.profile_photo:
+            raise NotFound("Profile photograph is unavailable.")
+        application.profile_photo.open("rb")
+        return FileResponse(
+            application.profile_photo,
+            content_type=profile_photo_content_type(application.profile_photo.name),
+        )
+
+    def delete(self, request, pk):
+        application = PractitionerApplication.objects.filter(
+            pk=pk,
+            applicant=request.user,
+            organization=request.organization,
+            status__in=("DRAFT", "CORRECTION_REQUIRED"),
+        ).first()
+        if application is None:
+            raise NotFound("Editable application is unavailable.")
+        if application.profile_photo:
+            application.profile_photo.delete(save=False)
+            application.profile_photo = ""
+            application.save(update_fields=("profile_photo", "updated_at"))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ApplicantDocumentDetailView(ApplicantMixin, generics.GenericAPIView):
+    serializer_class = DocumentUploadSerializer
+
+    def get(self, request, pk, document_pk):
+        document = PractitionerDocument.objects.filter(
+            pk=document_pk,
+            application_id=pk,
+            application__applicant=request.user,
+            application__organization=request.organization,
+        ).first()
+        if document is None:
+            raise NotFound("Document is unavailable.")
+        document.file.open("rb")
+        return FileResponse(
+            document.file,
+            as_attachment=False,
+            filename=document.original_name,
+            content_type=document.content_type,
+        )
+
+    def delete(self, request, pk, document_pk):
+        document = PractitionerDocument.objects.filter(
+            pk=document_pk,
+            application_id=pk,
+            application__applicant=request.user,
+            application__organization=request.organization,
+            application__status__in=("DRAFT", "CORRECTION_REQUIRED"),
+        ).first()
+        if document is None:
+            raise NotFound("Document is unavailable.")
+        document.file.delete(save=False)
+        document.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ManagerApplicationListView(generics.ListAPIView):
@@ -261,7 +340,7 @@ class VerifyCompetencyView(generics.GenericAPIView):
 
 
 class PrivateDocumentView(generics.GenericAPIView):
-    permission_classes = (IsEnabledAuthenticated,)
+    permission_classes = (IsEnabledAuthenticated, IsActiveOrganizationMember)
     serializer_class = DocumentUploadSerializer
 
     def get(self, request, pk):
@@ -277,7 +356,35 @@ class PrivateDocumentView(generics.GenericAPIView):
         ):
             raise PermissionDenied("Private document access is denied.")
         document.file.open("rb")
-        return FileResponse(document.file, as_attachment=True, filename=document.original_name)
+        return FileResponse(
+            document.file,
+            as_attachment=False,
+            filename=document.original_name,
+            content_type=document.content_type,
+        )
+
+
+class PrivateApplicationPhotoView(generics.GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsActiveOrganizationMember)
+    serializer_class = ProfilePhotoUploadSerializer
+
+    def get(self, request, pk):
+        application = PractitionerApplication.objects.filter(
+            pk=pk, organization=request.organization
+        ).first()
+        if application is None or not application.profile_photo:
+            raise NotFound("Profile photograph is unavailable.")
+        if application.applicant_id != request.user.id and not manager_can_access(
+            request.user, application
+        ):
+            raise PermissionDenied("Private photograph access is denied.")
+        application.profile_photo.open("rb")
+        return FileResponse(
+            application.profile_photo,
+            as_attachment=False,
+            filename="profile-photo",
+            content_type=profile_photo_content_type(application.profile_photo.name),
+        )
 
 
 class MyOpenToWorkView(generics.GenericAPIView):
@@ -335,4 +442,9 @@ class PublicPractitionerPhotoView(generics.GenericAPIView):
         if profile is None or not profile.source_application.profile_photo:
             raise NotFound("Photo is unavailable.")
         profile.source_application.profile_photo.open("rb")
-        return FileResponse(profile.source_application.profile_photo)
+        return FileResponse(
+            profile.source_application.profile_photo,
+            content_type=profile_photo_content_type(
+                profile.source_application.profile_photo.name
+            ),
+        )

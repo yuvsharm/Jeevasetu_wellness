@@ -48,24 +48,32 @@ class PractitionerApplication(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.DRAFT)
-    category = models.CharField(max_length=24, choices=Category.choices)
-    full_legal_name = models.CharField(max_length=255)
-    date_of_birth = models.DateField()
-    gender = models.CharField(max_length=24, choices=Gender.choices)
-    mobile_number = models.CharField(max_length=16)
+    category = models.CharField(
+        max_length=24, choices=Category.choices, default=Category.PHYSIOTHERAPIST
+    )
+    full_legal_name = models.CharField(max_length=255, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    gender = models.CharField(
+        max_length=24, choices=Gender.choices, default=Gender.PREFER_NOT_TO_SAY
+    )
+    mobile_number = models.CharField(max_length=16, blank=True)
     alternate_mobile = models.CharField(max_length=16, blank=True)
-    email = models.EmailField()
+    email = models.EmailField(blank=True)
     profile_photo = models.FileField(upload_to="practitioners/private/profile/%Y/%m/", blank=True)
-    current_address = models.CharField(max_length=500)
-    city = models.CharField(max_length=120)
-    state = models.CharField(max_length=120)
-    pin_code = models.CharField(max_length=6, validators=[RegexValidator(r"^[1-9]\d{5}$")])
-    highest_qualification = models.CharField(max_length=32, choices=Qualification.choices)
+    current_address = models.CharField(max_length=500, blank=True)
+    city = models.CharField(max_length=120, blank=True)
+    state = models.CharField(max_length=120, blank=True, default="Uttar Pradesh")
+    pin_code = models.CharField(
+        max_length=6, blank=True, validators=[RegexValidator(r"^[1-9]\d{5}$")]
+    )
+    highest_qualification = models.CharField(
+        max_length=32, choices=Qualification.choices, default=Qualification.BPT
+    )
     specialization = models.CharField(max_length=160, blank=True)
-    college_institute = models.CharField(max_length=255)
-    awarding_body = models.CharField(max_length=255)
+    college_institute = models.CharField(max_length=255, blank=True)
+    awarding_body = models.CharField(max_length=255, blank=True)
     passing_year = models.PositiveSmallIntegerField(
-        validators=[MinValueValidator(1950), MaxValueValidator(2100)]
+        null=True, blank=True, validators=[MinValueValidator(1950), MaxValueValidator(2100)]
     )
     registration_number = models.CharField(max_length=120, blank=True)
     registration_authority = models.CharField(max_length=255, blank=True)
@@ -79,8 +87,10 @@ class PractitionerApplication(models.Model):
     recent_organization = models.CharField(max_length=255, blank=True)
     previous_experience = models.CharField(max_length=1000, blank=True)
     has_home_service_experience = models.BooleanField(default=False)
-    bio = models.TextField(max_length=1500)
+    bio = models.TextField(max_length=1500, blank=True)
     languages = models.JSONField(default=list, blank=True)
+    availability_notes = models.CharField(max_length=500, blank=True)
+    last_completed_step = models.PositiveSmallIntegerField(default=0)
     correction_reason = models.CharField(max_length=500, blank=True)
     rejection_reason = models.CharField(max_length=500, blank=True)
     internal_review_notes = models.TextField(max_length=2000, blank=True)

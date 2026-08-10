@@ -56,6 +56,12 @@ describe("protected routing", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
+  it("returns a truly expired applicant session to login with the application return URL", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "expired" }), { status: 401 }));
+    render(wrapper(<ApplicantPage><p>Application</p></ApplicantPage>));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?reason=expired&returnTo=%2Fpractitioner-application"));
+  });
+
   it("denies an applicant without an operational role from protected dashboards", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
     render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Secret owner shell</p></ProtectedPage>));

@@ -34,6 +34,11 @@ urlpatterns = [
         name="practitioner-documents",
     ),
     path(
+        "applications/me/<uuid:pk>/documents/<uuid:document_pk>/",
+        views.ApplicantDocumentDetailView.as_view(),
+        name="practitioner-document-delete",
+    ),
+    path(
         "applications/me/<uuid:pk>/profile-photo/",
         views.ProfilePhotoUploadView.as_view(),
         name="practitioner-profile-photo",
@@ -52,6 +57,11 @@ urlpatterns = [
         "applications/<uuid:pk>/review/",
         views.ReviewApplicationView.as_view(),
         name="practitioner-review",
+    ),
+    path(
+        "applications/<uuid:pk>/profile-photo/",
+        views.PrivateApplicationPhotoView.as_view(),
+        name="practitioner-private-profile-photo",
     ),
     path("documents/<uuid:pk>/", views.PrivateDocumentView.as_view(), name="practitioner-document"),
     path(

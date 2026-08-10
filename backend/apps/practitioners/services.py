@@ -1,8 +1,10 @@
 import hashlib
 
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from apps.accounts.models import Role, RoleAssignment
 from apps.accounts.role_policy import actor_role_scope, assign_role
@@ -51,11 +53,39 @@ def submit_application(application, *, actor):
         PractitionerApplication.Status.CORRECTION_REQUIRED,
     ):
         raise ValidationError("This application cannot be submitted.")
-    application.full_clean()
+    required_fields = {
+        "full_legal_name": application.full_legal_name,
+        "date_of_birth": application.date_of_birth,
+        "mobile_number": application.mobile_number,
+        "email": application.email,
+        "current_address": application.current_address,
+        "city": application.city,
+        "state": application.state,
+        "pin_code": application.pin_code,
+        "college_institute": application.college_institute,
+        "awarding_body": application.awarding_body,
+        "passing_year": application.passing_year,
+        "bio": application.bio,
+    }
+    missing = [name.replace("_", " ") for name, value in required_fields.items() if not value]
+    if missing:
+        raise ValidationError(f"Complete the required fields: {', '.join(missing)}.")
+    try:
+        application.full_clean()
+    except DjangoValidationError as error:
+        raise ValidationError(
+            error.message_dict if hasattr(error, "message_dict") else error.messages
+        ) from error
     required = {"GOVERNMENT_ID", "QUALIFICATION"}
     uploaded = set(application.documents.values_list("kind", flat=True))
     if not required.issubset(uploaded):
         raise ValidationError("Government identity and qualification documents are required.")
+    if not application.profile_photo:
+        raise ValidationError("A profile photograph is required.")
+    if application.experience_years and "EXPERIENCE" not in uploaded:
+        raise ValidationError("An experience certificate is required for stated experience.")
+    if application.registration_number and "REGISTRATION" not in uploaded:
+        raise ValidationError("A registration or licence certificate is required.")
     previous = application.status
     application.status = PractitionerApplication.Status.SUBMITTED
     application.submitted_at = timezone.now()

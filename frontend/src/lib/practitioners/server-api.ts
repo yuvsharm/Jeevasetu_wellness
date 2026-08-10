@@ -1,15 +1,31 @@
 import "server-only";
-import type { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+
+import { refreshSession, SessionError, setSessionCookies } from "@/lib/auth/server-session";
 
 const API_BASE_URL = process.env.DJANGO_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const ORGANIZATION_SLUG = process.env.NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG ?? "";
 
 export async function practitionerApi(request: NextRequest, path: string, init?: RequestInit, authenticated = true) {
-  const access = request.cookies.get("jeevasetu_access")?.value;
+  let access = request.cookies.get("jeevasetu_access")?.value;
   if (authenticated && !access) return Response.json({detail:"Your session has expired."},{status:401});
   try {
-    const response = await fetch(`${API_BASE_URL.replace(/\/$/, "")}${path}`, { ...init, cache:"no-store", headers:{ ...(request.headers.get("content-type") ? {"Content-Type":request.headers.get("content-type")!}:{}), "X-Organization-Slug":ORGANIZATION_SLUG, ...(access?{Authorization:`Bearer ${access}`}:{}) } });
-    return new Response(response.body,{status:response.status,headers:{"Content-Type":response.headers.get("content-type")??"application/json","Content-Disposition":response.headers.get("content-disposition")??""}});
-  } catch { return Response.json({detail:"The practitioner service is temporarily unavailable."},{status:503}); }
+    const send = (token?: string) => fetch(`${API_BASE_URL.replace(/\/$/, "")}${path}`, { ...init, cache:"no-store", headers:{ ...(request.headers.get("content-type") ? {"Content-Type":request.headers.get("content-type")!}:{}), "X-Organization-Slug":ORGANIZATION_SLUG, ...(token?{Authorization:`Bearer ${token}`}:{}) } });
+    let response = await send(access);
+    let rotated = null;
+    if (authenticated && response.status === 401) {
+      const refresh = request.cookies.get("jeevasetu_refresh")?.value;
+      if (!refresh) return Response.json({detail:"Your session has expired."},{status:401});
+      rotated = await refreshSession(refresh);
+      access = rotated.tokens.access;
+      response = await send(access);
+    }
+    const outgoing = new NextResponse(response.body,{status:response.status,headers:{"Content-Type":response.headers.get("content-type")??"application/json","Content-Disposition":response.headers.get("content-disposition")??""}});
+    if (rotated) setSessionCookies(outgoing, rotated.tokens);
+    return outgoing;
+  } catch (error) {
+    if (error instanceof SessionError && error.status === 401) return Response.json({detail:"Your session has expired."},{status:401});
+    return Response.json({detail:"The practitioner service is temporarily unavailable."},{status:503});
+  }
 }
 

@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AssignedAppointments, CustomerAppointments, ScheduleOperations } from "@/components/appointments/operational-schedule";
 
 function wrap(ui:React.ReactNode){return render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}>{ui}</QueryClientProvider>)}
-const appointment={id:"a1",patient_identifier:"PAT-000001",patient_name:"Asha Sharma",therapy_name:"Physiotherapy",clinic_name:"Meerut",scheduled_start:"2026-08-08T10:00:00+05:30",scheduled_end:"2026-08-08T11:00:00+05:30",duration_minutes:60,status:"CONFIRMED",physiotherapist_name:"Dr Physio User",assignment_status:"PENDING",assigned_manager_name:"Manager User",address_line_1:"Shastri Nagar",city:"Meerut",pin_code:"250004",physiotherapist_photo_url:null};
+const scheduledStart = new Date(Date.now() + 60 * 60 * 1000);
+const appointment={id:"a1",patient_identifier:"PAT-000001",patient_name:"Asha Sharma",therapy_name:"Physiotherapy",clinic_name:"Meerut",scheduled_start:scheduledStart.toISOString(),scheduled_end:new Date(scheduledStart.getTime()+60*60*1000).toISOString(),duration_minutes:60,status:"CONFIRMED",physiotherapist_name:"Dr Physio User",assignment_status:"PENDING",assigned_manager_name:"Manager User",address_line_1:"Shastri Nagar",city:"Meerut",pin_code:"250004",physiotherapist_photo_url:null};
 
 describe("operational scheduling",()=>{
   beforeEach(()=>vi.restoreAllMocks());

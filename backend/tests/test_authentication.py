@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.conf import settings
 from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
@@ -58,6 +59,11 @@ def login(api_client, identifier="identity@example.com", password=PASSWORD):
 def authorize(api_client, access):
     api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return api_client
+
+
+def test_authenticated_session_policy_supports_long_application_flow():
+    assert settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"] == timedelta(minutes=30)
+    assert settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"] == timedelta(hours=8)
 
 
 @pytest.mark.django_db

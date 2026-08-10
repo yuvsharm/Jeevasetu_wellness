@@ -15,7 +15,7 @@ export function ApplicantPage({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (session.error && status === 401) {
-      router.replace("/login?returnTo=%2Fpractitioner-application");
+      router.replace("/login?reason=expired&returnTo=%2Fpractitioner-application");
     } else if (session.error && (status === 403 || status === 404)) {
       router.replace("/unauthorized");
     }

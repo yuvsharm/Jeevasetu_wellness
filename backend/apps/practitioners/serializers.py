@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -13,8 +14,6 @@ from apps.practitioners.services import upload_checksum
 
 ALLOWED_UPLOADS = {
     "application/pdf": {".pdf"},
-    "image/jpeg": {".jpg", ".jpeg"},
-    "image/png": {".png"},
 }
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
@@ -59,23 +58,28 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
         if value.size > MAX_UPLOAD_BYTES:
             raise serializers.ValidationError("Files must not exceed 8 MB.")
         if content_type not in ALLOWED_UPLOADS or suffix not in ALLOWED_UPLOADS[content_type]:
-            raise serializers.ValidationError("Upload a PDF, JPEG, or PNG file.")
+            raise serializers.ValidationError("Upload a PDF file.")
         header = value.read(8)
         value.seek(0)
-        valid_signature = (
-            header.startswith(b"%PDF-")
-            or header.startswith(b"\xff\xd8\xff")
-            or header.startswith(b"\x89PNG\r\n\x1a\n")
-        )
-        if not valid_signature:
+        if not header.startswith(b"%PDF-"):
             raise serializers.ValidationError("The file content does not match an allowed format.")
         return value
 
     def create(self, validated_data):
         file = validated_data["file"]
+        application = self.context["application"]
+        kind = validated_data["kind"]
+        if kind not in (
+            PractitionerDocument.Kind.EXPERIENCE,
+            PractitionerDocument.Kind.TRAINING,
+            PractitionerDocument.Kind.ADDITIONAL,
+        ):
+            for previous in application.documents.filter(kind=kind):
+                previous.file.delete(save=False)
+                previous.delete()
         return PractitionerDocument.objects.create(
-            application=self.context["application"],
-            kind=validated_data["kind"],
+            application=application,
+            kind=kind,
             file=file,
             original_name=Path(file.name).name[:255],
             content_type=file.content_type,
@@ -90,14 +94,15 @@ class ProfilePhotoUploadSerializer(serializers.Serializer):
     def validate_profile_photo(self, value):
         if value.size > 5 * 1024 * 1024:
             raise serializers.ValidationError("Profile photographs must not exceed 5 MB.")
-        if getattr(value, "content_type", "") not in ("image/jpeg", "image/png"):
-            raise serializers.ValidationError("Upload a JPEG or PNG photograph.")
+        if getattr(value, "content_type", "") not in ("image/jpeg", "image/png", "image/webp"):
+            raise serializers.ValidationError("Upload a JPEG, PNG, or WebP photograph.")
         return value
 
 
 class ApplicationSerializer(serializers.ModelSerializer):
     competencies = CompetencySerializer(many=True, read_only=True)
     documents = DocumentMetadataSerializer(many=True, read_only=True)
+    has_profile_photo = serializers.SerializerMethodField()
 
     class Meta:
         model = PractitionerApplication
@@ -113,16 +118,24 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "approved_profile",
             "created_at",
             "updated_at",
+            "profile_photo",
         )
 
     def validate_date_of_birth(self, value):
+        if value is None:
+            return value
         today = timezone.localdate()
         age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
         if age < 18 or age > 85:
             raise serializers.ValidationError("Applicants must be between 18 and 85 years old.")
         return value
 
+    def get_has_profile_photo(self, value) -> bool:
+        return bool(value.profile_photo)
+
     def validate_passing_year(self, value):
+        if value is None:
+            return value
         if value > timezone.localdate().year:
             raise serializers.ValidationError("Passing year cannot be in the future.")
         return value
@@ -135,6 +148,11 @@ class ApplicationSerializer(serializers.ModelSerializer):
         ):
             raise serializers.ValidationError("Provide a list of languages.")
         return [item.strip()[:60] for item in value]
+
+    def validate_last_completed_step(self, value):
+        if value > 5:
+            raise serializers.ValidationError("Application step must be between 0 and 5.")
+        return value
 
     def validate(self, attrs):
         instance = self.instance
@@ -162,6 +180,20 @@ class ApplicationSerializer(serializers.ModelSerializer):
         value.full_clean()
         value.save()
         return value
+
+    def update(self, instance, validated_data):
+        original_values = {field: getattr(instance, field) for field in validated_data}
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        try:
+            instance.full_clean(exclude={"profile_photo"})
+        except DjangoValidationError as error:
+            for field, value in original_values.items():
+                setattr(instance, field, value)
+            detail = getattr(error, "message_dict", {"detail": error.messages})
+            raise serializers.ValidationError(detail) from error
+        instance.save()
+        return instance
 
 
 class ManagerApplicationSerializer(ApplicationSerializer):
