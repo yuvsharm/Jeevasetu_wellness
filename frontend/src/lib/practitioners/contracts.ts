@@ -1,4 +1,4 @@
-export type PractitionerStatus = "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "CORRECTION_REQUIRED" | "APPROVED" | "REJECTED" | "WITHDRAWN";
+export type PractitionerStatus = "DRAFT" | "SUBMITTED" | "RESUBMITTED" | "UNDER_REVIEW" | "CORRECTION_REQUIRED" | "APPROVED" | "REJECTED" | "WITHDRAWN";
 export type PractitionerApplication = {
   id: string; status: PractitionerStatus; category: "PHYSIOTHERAPIST" | "WELLNESS"; full_legal_name: string;
   date_of_birth: string; gender: string; mobile_number: string; alternate_mobile: string; email: string;

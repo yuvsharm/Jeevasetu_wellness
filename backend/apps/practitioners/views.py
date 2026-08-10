@@ -79,7 +79,7 @@ class SubmitApplicationView(ApplicantMixin, generics.GenericAPIView):
         application = self.get_queryset().filter(pk=pk).first()
         if application is None:
             raise NotFound("Application is unavailable.")
-        submit_application(application, actor=request.user)
+        application = submit_application(application, actor=request.user)
         return Response(ApplicationSerializer(application, context={"request": request}).data)
 
 
@@ -241,6 +241,15 @@ class ManagerApplicationListView(generics.ListAPIView):
         search = self.request.query_params.get("search", "").strip()
         if status_value:
             queryset = queryset.filter(status=status_value)
+        else:
+            queryset = queryset.filter(
+                status__in=(
+                    PractitionerApplication.Status.SUBMITTED,
+                    PractitionerApplication.Status.RESUBMITTED,
+                    PractitionerApplication.Status.UNDER_REVIEW,
+                    PractitionerApplication.Status.CORRECTION_REQUIRED,
+                )
+            )
         if search:
             queryset = queryset.filter(
                 Q(full_legal_name__icontains=search)
@@ -293,6 +302,12 @@ class VerifyDocumentView(generics.GenericAPIView):
         )
         if document is None or not manager_can_access(request.user, document.application):
             raise NotFound("Document is unavailable.")
+        if document.application.status not in (
+            PractitionerApplication.Status.SUBMITTED,
+            PractitionerApplication.Status.RESUBMITTED,
+            PractitionerApplication.Status.UNDER_REVIEW,
+        ):
+            raise ValidationError("This document is not in an actionable review state.")
         serializer = VerificationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         document.verification_status = (

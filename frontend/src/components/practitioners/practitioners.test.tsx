@@ -87,10 +87,10 @@ describe("practitioner enrollment",()=>{
     vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify([withDocument]),{status:200}));
     wrap(<EnrollmentForm/>);
     expect((await screen.findAllByText("identity-proof.pdf")).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Government identity proof · 428 KB/i)).toBeInTheDocument();
-    expect(screen.getByRole("button",{name:"View document"})).toBeInTheDocument();
-    expect(screen.getByText("Replace")).toBeInTheDocument();
-    expect(screen.getByRole("button",{name:"Remove"})).toBeInTheDocument();
+    expect(screen.getByText("428 KB")).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"View Government identity proof"})).toBeInTheDocument();
+    expect(screen.getByText("Change PDF")).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"Remove Government identity proof"})).toBeInTheDocument();
   });
 
   it("renders only safe verified directory information",async()=>{vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify([{id:"1",display_name:"Dr Asha Sharma",category:"PHYSIOTHERAPIST",highest_qualification:"MPT",qualification_specialization:"Orthopaedic",experience_years:9,languages:["Hindi"],bio:"Home service specialist",service_area:"Meerut",verified_services:["Physiotherapy"],photo_url:""}]),{status:200}));wrap(<PublicPractitionerDirectory/>);expect(await screen.findByText("Dr Asha Sharma")).toBeInTheDocument();expect(screen.getByText("JeevaSetu Verified")).toBeInTheDocument();expect(screen.queryByText(/email|mobile|government/i)).not.toBeInTheDocument();});

@@ -47,6 +47,25 @@ describe("server session", () => {
     expect(() => requireSameOrigin(request)).toThrow(SessionError);
   });
 
+  it("deduplicates concurrent refresh rotation for the same token", async () => {
+    const responses = [
+      new Response(JSON.stringify({ access: "shared-access", refresh: "shared-refresh" }), { status: 200 }),
+      new Response(JSON.stringify(user), { status: 200 }),
+      new Response(JSON.stringify(access), { status: 200 }),
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => responses.shift()!);
+    const { refreshSession } = await import("./server-session");
+
+    const [first, second] = await Promise.all([
+      refreshSession("same-rotating-token"),
+      refreshSession("same-rotating-token"),
+    ]);
+
+    expect(first.tokens.refresh).toBe("shared-refresh");
+    expect(second.tokens.refresh).toBe("shared-refresh");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("establishes an applicant session without an operational role", async () => {
     const applicant = { ...user, roles: [] };
     const applicantAccess = { ...access, roles: [] };

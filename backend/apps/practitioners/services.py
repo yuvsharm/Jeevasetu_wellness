@@ -18,6 +18,27 @@ from apps.tenancy.models import ClinicMembership, OrganizationMembership
 
 SAFE_AUDIT_KEYS = {"reason", "status", "document_kind", "therapy_id", "enabled"}
 
+SUBMISSION_REQUIREMENTS = {
+    "personal_details": {
+        "full_legal_name": "Full legal name",
+        "date_of_birth": "Date of birth",
+        "mobile_number": "Mobile number",
+        "email": "Email address",
+        "current_address": "Current address",
+    },
+    "professional_details": {
+        "college_institute": "College / institute",
+        "awarding_body": "University / awarding body",
+        "passing_year": "Passing year",
+        "bio": "Professional bio",
+    },
+    "service_availability": {
+        "city": "Service city",
+        "state": "State",
+        "pin_code": "Service area PIN code",
+    },
+}
+
 
 def record_event(application, *, actor, action, metadata=None):
     safe = {key: value for key, value in (metadata or {}).items() if key in SAFE_AUDIT_KEYS}
@@ -45,49 +66,69 @@ def require_manager_scope(actor, application):
         raise PermissionDenied("Practitioner application is unavailable in this scope.")
 
 
+def submission_missing_requirements(application):
+    missing = []
+    for section, fields in SUBMISSION_REQUIREMENTS.items():
+        for field, label in fields.items():
+            if not getattr(application, field):
+                missing.append({"section": section, "code": field, "label": label})
+    if not application.profile_photo:
+        missing.append(
+            {"section": "personal_details", "code": "profile_photo", "label": "Profile photo"}
+        )
+    uploaded = set(application.documents.values_list("kind", flat=True))
+    for kind, label in (
+        ("GOVERNMENT_ID", "Government identity proof"),
+        ("QUALIFICATION", "Highest qualification certificate"),
+    ):
+        if kind not in uploaded:
+            missing.append({"section": "documents", "code": kind, "label": label})
+    if application.registration_number and "REGISTRATION" not in uploaded:
+        missing.append(
+            {
+                "section": "documents",
+                "code": "REGISTRATION",
+                "label": "Professional registration / licence certificate",
+            }
+        )
+    return missing
+
+
+@transaction.atomic
 def submit_application(application, *, actor):
+    application = PractitionerApplication.objects.select_for_update().get(pk=application.pk)
     if application.applicant_id != actor.id:
         raise PermissionDenied("Only the applicant can submit this application.")
+    if application.status in (
+        PractitionerApplication.Status.SUBMITTED,
+        PractitionerApplication.Status.RESUBMITTED,
+    ):
+        return application
     if application.status not in (
         PractitionerApplication.Status.DRAFT,
         PractitionerApplication.Status.CORRECTION_REQUIRED,
     ):
         raise ValidationError("This application cannot be submitted.")
-    required_fields = {
-        "full_legal_name": application.full_legal_name,
-        "date_of_birth": application.date_of_birth,
-        "mobile_number": application.mobile_number,
-        "email": application.email,
-        "current_address": application.current_address,
-        "city": application.city,
-        "state": application.state,
-        "pin_code": application.pin_code,
-        "college_institute": application.college_institute,
-        "awarding_body": application.awarding_body,
-        "passing_year": application.passing_year,
-        "bio": application.bio,
-    }
-    missing = [name.replace("_", " ") for name, value in required_fields.items() if not value]
+    missing = submission_missing_requirements(application)
     if missing:
-        raise ValidationError(f"Complete the required fields: {', '.join(missing)}.")
+        raise ValidationError(
+            {
+                "detail": "Please complete the following before submitting.",
+                "missing_requirements": missing,
+            }
+        )
     try:
         application.full_clean()
     except DjangoValidationError as error:
         raise ValidationError(
             error.message_dict if hasattr(error, "message_dict") else error.messages
         ) from error
-    required = {"GOVERNMENT_ID", "QUALIFICATION"}
-    uploaded = set(application.documents.values_list("kind", flat=True))
-    if not required.issubset(uploaded):
-        raise ValidationError("Government identity and qualification documents are required.")
-    if not application.profile_photo:
-        raise ValidationError("A profile photograph is required.")
-    if application.experience_years and "EXPERIENCE" not in uploaded:
-        raise ValidationError("An experience certificate is required for stated experience.")
-    if application.registration_number and "REGISTRATION" not in uploaded:
-        raise ValidationError("A registration or licence certificate is required.")
     previous = application.status
-    application.status = PractitionerApplication.Status.SUBMITTED
+    application.status = (
+        PractitionerApplication.Status.RESUBMITTED
+        if previous == PractitionerApplication.Status.CORRECTION_REQUIRED
+        else PractitionerApplication.Status.SUBMITTED
+    )
     application.submitted_at = timezone.now()
     application.correction_reason = ""
     application.save(update_fields=("status", "submitted_at", "correction_reason", "updated_at"))
@@ -107,17 +148,25 @@ def review_application(application, *, actor, action, reason=""):
     require_manager_scope(actor, application)
     transitions = {
         "review": (
-            (PractitionerApplication.Status.SUBMITTED,),
+            (PractitionerApplication.Status.SUBMITTED, PractitionerApplication.Status.RESUBMITTED),
             PractitionerApplication.Status.UNDER_REVIEW,
             PractitionerAuditEvent.Action.REVIEW_STARTED,
         ),
         "correction": (
-            (PractitionerApplication.Status.SUBMITTED, PractitionerApplication.Status.UNDER_REVIEW),
+            (
+                PractitionerApplication.Status.SUBMITTED,
+                PractitionerApplication.Status.RESUBMITTED,
+                PractitionerApplication.Status.UNDER_REVIEW,
+            ),
             PractitionerApplication.Status.CORRECTION_REQUIRED,
             PractitionerAuditEvent.Action.CORRECTION_REQUESTED,
         ),
         "reject": (
-            (PractitionerApplication.Status.SUBMITTED, PractitionerApplication.Status.UNDER_REVIEW),
+            (
+                PractitionerApplication.Status.SUBMITTED,
+                PractitionerApplication.Status.RESUBMITTED,
+                PractitionerApplication.Status.UNDER_REVIEW,
+            ),
             PractitionerApplication.Status.REJECTED,
             PractitionerAuditEvent.Action.REJECTED,
         ),
@@ -153,6 +202,7 @@ def approve_application(application, *, actor):
         return locked
     if locked.status not in (
         PractitionerApplication.Status.SUBMITTED,
+        PractitionerApplication.Status.RESUBMITTED,
         PractitionerApplication.Status.UNDER_REVIEW,
     ):
         raise ValidationError("This application cannot be approved.")

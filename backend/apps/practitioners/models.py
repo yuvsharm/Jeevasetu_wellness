@@ -23,6 +23,7 @@ class PractitionerApplication(models.Model):
         SUBMITTED = "SUBMITTED", "Submitted"
         UNDER_REVIEW = "UNDER_REVIEW", "Under review"
         CORRECTION_REQUIRED = "CORRECTION_REQUIRED", "Correction required"
+        RESUBMITTED = "RESUBMITTED", "Resubmitted"
         APPROVED = "APPROVED", "Approved"
         REJECTED = "REJECTED", "Rejected"
         WITHDRAWN = "WITHDRAWN", "Withdrawn"
@@ -234,6 +235,13 @@ class PractitionerDocument(models.Model):
     )
     verified_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("application", "kind"), name="pract_doc_application_kind_uniq"
+            )
+        ]
 
     def __str__(self):
         return f"{self.application_id}:{self.kind}"

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -69,23 +70,24 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
         file = validated_data["file"]
         application = self.context["application"]
         kind = validated_data["kind"]
-        if kind not in (
-            PractitionerDocument.Kind.EXPERIENCE,
-            PractitionerDocument.Kind.TRAINING,
-            PractitionerDocument.Kind.ADDITIONAL,
-        ):
-            for previous in application.documents.filter(kind=kind):
-                previous.file.delete(save=False)
+        with transaction.atomic():
+            previous = application.documents.select_for_update().filter(kind=kind).first()
+            previous_storage = previous.file.storage if previous else None
+            previous_name = previous.file.name if previous else None
+            if previous:
                 previous.delete()
-        return PractitionerDocument.objects.create(
-            application=application,
-            kind=kind,
-            file=file,
-            original_name=Path(file.name).name[:255],
-            content_type=file.content_type,
-            size_bytes=file.size,
-            checksum_sha256=upload_checksum(file),
-        )
+            document = PractitionerDocument.objects.create(
+                application=application,
+                kind=kind,
+                file=file,
+                original_name=Path(file.name).name[:255],
+                content_type=file.content_type,
+                size_bytes=file.size,
+                checksum_sha256=upload_checksum(file),
+            )
+            if previous_storage and previous_name:
+                transaction.on_commit(lambda: previous_storage.delete(previous_name))
+            return document
 
 
 class ProfilePhotoUploadSerializer(serializers.Serializer):

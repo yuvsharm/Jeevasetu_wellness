@@ -14,6 +14,7 @@ const ACCESS_COOKIE_SECONDS = 30 * 60;
 const REFRESH_COOKIE_SECONDS = 8 * 60 * 60;
 
 type TokenPair = { access: string; refresh: string; user?: UserSummary };
+const refreshes = new Map<string, Promise<{ tokens: TokenPair; session: Session }>>();
 
 export class SessionError extends Error {
   constructor(
@@ -120,14 +121,17 @@ async function loadSessionWithAccess(access: string): Promise<Session> {
   return { user, access: roleAccess };
 }
 
-export async function refreshSession(refresh: string) {
-  const tokens = await checkedJson<TokenPair>(
-    await djangoFetch(djangoEndpoints.refresh, {
-      method: "POST",
-      body: JSON.stringify({ refresh }),
-    }),
-  );
-  return { tokens, session: await loadSessionWithAccess(tokens.access) };
+export function refreshSession(refresh: string) {
+  const existing = refreshes.get(refresh);
+  if (existing) return existing;
+  const pending = (async () => {
+    const tokens = await checkedJson<TokenPair>(
+      await djangoFetch(djangoEndpoints.refresh, { method: "POST", body: JSON.stringify({ refresh }) }),
+    );
+    return { tokens, session: await loadSessionWithAccess(tokens.access) };
+  })().finally(() => refreshes.delete(refresh));
+  refreshes.set(refresh, pending);
+  return pending;
 }
 
 export async function currentSession(request: NextRequest) {
