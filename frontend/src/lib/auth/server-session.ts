@@ -14,7 +14,9 @@ const ACCESS_COOKIE_SECONDS = 30 * 60;
 const REFRESH_COOKIE_SECONDS = 8 * 60 * 60;
 
 type TokenPair = { access: string; refresh: string; user?: UserSummary };
-const refreshes = new Map<string, Promise<{ tokens: TokenPair; session: Session }>>();
+type RefreshResult = { tokens: TokenPair; session: Session };
+const REFRESH_DEDUPE_SECONDS = 10;
+const refreshes = new Map<string, { promise: Promise<RefreshResult>; expiresAt: number }>();
 
 export class SessionError extends Error {
   constructor(
@@ -123,21 +125,30 @@ async function loadSessionWithAccess(access: string): Promise<Session> {
 
 export function refreshSession(refresh: string) {
   const existing = refreshes.get(refresh);
-  if (existing) return existing;
+  if (existing && existing.expiresAt > Date.now()) return existing.promise;
+  if (existing) refreshes.delete(refresh);
   const pending = (async () => {
     const tokens = await checkedJson<TokenPair>(
       await djangoFetch(djangoEndpoints.refresh, { method: "POST", body: JSON.stringify({ refresh }) }),
     );
     return { tokens, session: await loadSessionWithAccess(tokens.access) };
-  })().finally(() => refreshes.delete(refresh));
-  refreshes.set(refresh, pending);
+  })().catch((error) => {
+    refreshes.delete(refresh);
+    throw error;
+  });
+  const entry = { promise: pending, expiresAt: Date.now() + REFRESH_DEDUPE_SECONDS * 1000 };
+  refreshes.set(refresh, entry);
+  setTimeout(() => {
+    if (refreshes.get(refresh) === entry) refreshes.delete(refresh);
+  }, REFRESH_DEDUPE_SECONDS * 1000);
   return pending;
 }
 
 export async function currentSession(request: NextRequest) {
   const access = request.cookies.get(ACCESS_COOKIE)?.value;
   const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
-  if (!access || !refresh) throw new SessionError(401, "Your session has expired.");
+  if (!refresh) throw new SessionError(401, "Your session has expired.");
+  if (!access) return refreshSession(refresh);
   try {
     return { session: await loadSessionWithAccess(access), tokens: null };
   } catch (error) {
@@ -158,9 +169,14 @@ export async function updateProfile(request: NextRequest, payload: unknown) {
 }
 
 export async function revokeSession(request: NextRequest) {
-  const access = request.cookies.get(ACCESS_COOKIE)?.value;
-  const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
-  if (access && refresh) {
+  let access = request.cookies.get(ACCESS_COOKIE)?.value;
+  let refresh = request.cookies.get(REFRESH_COOKIE)?.value;
+  if (refresh) {
+    if (!access) {
+      const rotated = await refreshSession(refresh);
+      access = rotated.tokens.access;
+      refresh = rotated.tokens.refresh;
+    }
     await djangoFetch(
       djangoEndpoints.logout,
       { method: "POST", body: JSON.stringify({ refresh }) },

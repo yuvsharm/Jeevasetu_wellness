@@ -28,6 +28,26 @@ describe("server session", () => {
     expect(result.session.access.roles[0].role).toBe("CUSTOMER");
   });
 
+  it("rotates a valid refresh when the browser removed the access cookie", async () => {
+    const responses = [
+      new Response(JSON.stringify({ access: "renewed-access", refresh: "renewed-refresh" }), { status: 200 }),
+      new Response(JSON.stringify(user), { status: 200 }),
+      new Response(JSON.stringify(access), { status: 200 }),
+    ];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => responses.shift()!);
+    const { currentSession } = await import("./server-session");
+    const request = new NextRequest("http://localhost/api/session/me", { headers: { cookie: "jeevasetu_refresh=retained-refresh" } });
+    const result = await currentSession(request);
+    expect(result.tokens).toMatchObject({ access: "renewed-access", refresh: "renewed-refresh" });
+  });
+
+  it("rejects when both session cookies are missing", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const { currentSession } = await import("./server-session");
+    await expect(currentSession(new NextRequest("http://localhost/api/session/me"))).rejects.toEqual(expect.objectContaining({ status: 401 }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects an expired or revoked refresh session safely", async () => {
     const responses = [
       new Response(JSON.stringify({ detail: "expired" }), { status: 401 }),
@@ -63,6 +83,7 @@ describe("server session", () => {
 
     expect(first.tokens.refresh).toBe("shared-refresh");
     expect(second.tokens.refresh).toBe("shared-refresh");
+    expect((await refreshSession("same-rotating-token")).tokens.refresh).toBe("shared-refresh");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 

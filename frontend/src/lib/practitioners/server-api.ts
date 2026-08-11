@@ -8,11 +8,16 @@ const ORGANIZATION_SLUG = process.env.NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG ?? "
 
 export async function practitionerApi(request: NextRequest, path: string, init?: RequestInit, authenticated = true) {
   let access = request.cookies.get("jeevasetu_access")?.value;
-  if (authenticated && !access) return Response.json({detail:"Your session has expired."},{status:401});
   try {
     const send = (token?: string) => fetch(`${API_BASE_URL.replace(/\/$/, "")}${path}`, { ...init, cache:"no-store", headers:{ ...(request.headers.get("content-type") ? {"Content-Type":request.headers.get("content-type")!}:{}), "X-Organization-Slug":ORGANIZATION_SLUG, ...(token?{Authorization:`Bearer ${token}`}:{}) } });
-    let response = await send(access);
     let rotated = null;
+    if (authenticated && !access) {
+      const refresh = request.cookies.get("jeevasetu_refresh")?.value;
+      if (!refresh) return Response.json({detail:"Your session has expired."},{status:401});
+      rotated = await refreshSession(refresh);
+      access = rotated.tokens.access;
+    }
+    let response = await send(access);
     if (authenticated && response.status === 401) {
       const refresh = request.cookies.get("jeevasetu_refresh")?.value;
       if (!refresh) return Response.json({detail:"Your session has expired."},{status:401});
