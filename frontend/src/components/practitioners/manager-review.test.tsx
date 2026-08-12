@@ -27,7 +27,9 @@ describe("practitioner review actions", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST"
       ? new Response(JSON.stringify(["At least one verified competency is required."]), { status: 400 })
       : new Response(JSON.stringify([application]), { status: 200 }));
-    renderReview(); await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    renderReview();
+    expect(await screen.findByRole("note")).toHaveTextContent("Approval requires at least one verified competency and two verified documents");
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/practitioners/applications/app-1/review", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "approve", reason: "" }) })));
     expect(await screen.findByRole("alert")).toHaveTextContent("At least one verified competency is required.");
   });
