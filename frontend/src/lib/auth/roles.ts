@@ -24,3 +24,8 @@ export function activeRoles(values: Array<{ role: Role; is_active: boolean }>): 
 export function primaryRole(values: Array<{ role: Role; is_active: boolean }>): Role | null {
   return activeRoles(values)[0] ?? null;
 }
+
+export function dashboardDestination(values: Array<{ role: Role; is_active: boolean }>): string {
+  const role = primaryRole(values);
+  return role ? roleDestinations[role] : "/practitioner-application";
+}

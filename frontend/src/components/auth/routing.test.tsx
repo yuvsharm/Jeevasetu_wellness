@@ -49,6 +49,12 @@ describe("protected routing", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/unauthorized"));
   });
 
+  it("redirects a roleless applicant from dashboard to their application", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
+    render(wrapper(<DashboardRedirect />));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/practitioner-application"));
+  });
+
   it("allows an authenticated applicant without an operational role into only the application shell", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
     render(wrapper(<ApplicantPage><p>My practitioner application</p></ApplicantPage>));

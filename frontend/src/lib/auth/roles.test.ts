@@ -1,4 +1,4 @@
-import { activeRoles, primaryRole, roleDestinations } from "./roles";
+import { activeRoles, dashboardDestination, primaryRole, roleDestinations } from "./roles";
 
 describe("role navigation", () => {
   it("uses a deterministic order only for backend-confirmed active roles", () => {
@@ -10,6 +10,10 @@ describe("role navigation", () => {
     expect(activeRoles(values)).toEqual(["MANAGER", "CUSTOMER"]);
     expect(primaryRole(values)).toBe("MANAGER");
     expect(roleDestinations.MANAGER).toBe("/manager");
+  });
+
+  it("routes identities without an operational role to practitioner onboarding", () => {
+    expect(dashboardDestination([])).toBe("/practitioner-application");
   });
 
   it("handles missing active access safely", () => {
