@@ -128,11 +128,12 @@ services:
     build:
       context: ./frontend
       target: development
-    command: pnpm dev --hostname 0.0.0.0
+    command: ./node_modules/.bin/next dev --webpack --hostname 0.0.0.0
     env_file:
       - path: .env
         required: false
     environment:
+      CI: "true"
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
       DJANGO_API_BASE_URL: http://backend:8000/api/v1
       NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG: ${NEXT_PUBLIC_DEFAULT_ORGANIZATION_SLUG:-jeevasetu-wellness}

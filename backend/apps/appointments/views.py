@@ -23,6 +23,8 @@ from apps.appointments.models import (
     AppointmentAuditEvent,
     AppointmentChangeRequest,
     AppointmentRequest,
+    AppointmentRating,
+    PractitionerPayment,
     TherapyOption,
 )
 from apps.appointments.scheduling import (
@@ -32,6 +34,7 @@ from apps.appointments.scheduling import (
     reschedule_appointment,
     respond_to_assignment,
     transition_status,
+    update_journey,
     unassign_physiotherapist,
     validate_schedule,
 )
@@ -42,8 +45,11 @@ from apps.appointments.serializers import (
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
+    AppointmentRatingSerializer,
+    PractitionerPaymentSerializer,
     AppointmentRescheduleSerializer,
     AppointmentStatusSerializer,
+    JourneyUpdateSerializer,
     AppointmentWriteSerializer,
     AssignmentResponseSerializer,
     AssignmentSerializer,
@@ -583,6 +589,24 @@ class AppointmentStatusView(HasTenant, GenericAPIView):
         return Response(response_serializer(appointment, context={"request": request}).data)
 
 
+class AppointmentJourneyView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
+    serializer_class = JourneyUpdateSerializer
+
+    def post(self, request, pk):
+        appointment = Appointment.objects.filter(
+            pk=pk, organization=request.organization, physiotherapist__user=request.user
+        ).select_related("physiotherapist__user", "patient", "therapy", "clinic", "originating_request").first()
+        if appointment is None:
+            raise NotFound("Visit is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appointment = update_journey(appointment, actor=request.user, **serializer.validated_data)
+        except DjangoValidationError as error:
+            raise ValidationError(str(error)) from error
+        return Response(PhysiotherapistAppointmentSerializer(appointment, context={"request": request}).data)
+
 class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
     serializer_class = AvailabilityQuerySerializer
 
@@ -846,3 +870,44 @@ class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):
             appointment.physiotherapist.profile_photo.open("rb"),
             content_type="application/octet-stream",
         )
+
+class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = AppointmentRatingSerializer
+
+    def post(self, request, pk):
+        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, patient__user=request.user, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        if appointment is None:
+            raise NotFound("Rating is unavailable.")
+        if AppointmentRating.objects.filter(appointment=appointment).exists():
+            raise ValidationError("This appointment has already been rated.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        value = serializer.save(appointment=appointment, organization=request.organization, customer=request.user, physiotherapist=appointment.physiotherapist)
+        AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event="RATING_SUBMITTED")
+        return Response(self.get_serializer(value).data, status=status.HTTP_201_CREATED)
+
+
+class PractitionerPaymentListView(HasTenant, generics.ListAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
+    serializer_class = PractitionerPaymentSerializer
+
+    def get_queryset(self):
+        return PractitionerPayment.objects.filter(organization=self.request.organization, physiotherapist__user=self.request.user).select_related("appointment__therapy")
+
+
+class OperationsPaymentView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = PractitionerPaymentSerializer
+
+    def post(self, request, pk):
+        level, clinic_ids = actor_role_scope(request.user, request.organization)
+        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        if appointment is None or (level == Role.MANAGER and appointment.clinic_id not in (clinic_ids or ())):
+            raise NotFound("Payment is unavailable.")
+        value, _ = PractitionerPayment.objects.get_or_create(appointment=appointment, defaults={"organization": request.organization, "physiotherapist": appointment.physiotherapist, "updated_by": request.user})
+        serializer = self.get_serializer(value, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        value = serializer.save(updated_by=request.user, paid_at=timezone.now() if serializer.validated_data.get("status") == PractitionerPayment.Status.PAID else value.paid_at)
+        AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event="PAYMENT_STATUS_CHANGED", reason=value.status)
+        return Response(self.get_serializer(value).data)

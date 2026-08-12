@@ -24,7 +24,11 @@ export type OperationalAppointment = {
   assignment_rejection_reason?: string;
   manager_remarks?: string;
   patient_mobile?: string;
+  patient_age?: number | null;
+  patient_gender?: string;
   problem_description?: string;
+  pain_area?: string;
+  google_map_link?: string;
   physiotherapist_qualification?: string;
   physiotherapist_experience_years?: number | null;
   address_line_1?: string;
@@ -37,6 +41,14 @@ export type OperationalAppointment = {
   reschedule_count?: number;
   cancellation_category?: "CUSTOMER_REQUEST" | "PHYSIOTHERAPIST_UNAVAILABLE" | "CLINIC_OPERATIONAL_ISSUE" | "SCHEDULING_CONFLICT" | "DUPLICATE_APPOINTMENT" | "OTHER" | "";
   visit_verification: VisitVerificationStatus;
+  journey_status?: "NOT_STARTED" | "EN_ROUTE" | "ARRIVED";
+  en_route_at?: string | null;
+  arrived_at?: string | null;
+  service_started_at?: string | null;
+  completed_at?: string | null;
+  rating_stars?: number | null;
+  rating_comment?: string;
+  payment_status?: "PENDING" | "PROCESSING" | "PAID" | "HELD" | null;
 };
 
 export type VisitVerificationStatus = {
@@ -75,4 +87,10 @@ export type AppointmentAuditEvent = {
   override_used: boolean;
   rejection_code: string;
   created_at: string;
+};
+
+export type PractitionerPayment = {
+  id: string; appointment: string; therapy_name: string; service_date: string;
+  payable_amount: string | null; status: "PENDING" | "PROCESSING" | "PAID" | "HELD";
+  paid_at: string | null; reference: string; note: string; updated_at: string;
 };

@@ -175,6 +175,11 @@ class ClinicOperatingHours(models.Model):
 
 
 class Appointment(models.Model):
+    class JourneyStatus(models.TextChoices):
+        NOT_STARTED = "NOT_STARTED", "Not started"
+        EN_ROUTE = "EN_ROUTE", "En route"
+        ARRIVED = "ARRIVED", "Arrived"
+
     class AssignmentStatus(models.TextChoices):
         UNASSIGNED = "UNASSIGNED", "Unassigned"
         PENDING = "PENDING", "Pending response"
@@ -266,6 +271,16 @@ class Appointment(models.Model):
     assigned_at = models.DateTimeField(null=True, blank=True)
     assignment_responded_at = models.DateTimeField(null=True, blank=True)
     assignment_rejection_reason = models.CharField(max_length=255, blank=True)
+    journey_status = models.CharField(
+        max_length=16, choices=JourneyStatus.choices, default=JourneyStatus.NOT_STARTED
+    )
+    en_route_at = models.DateTimeField(null=True, blank=True)
+    arrived_at = models.DateTimeField(null=True, blank=True)
+    service_started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    shared_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    shared_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_shared_at = models.DateTimeField(null=True, blank=True)
     reschedule_count = models.PositiveSmallIntegerField(default=0)
     cancellation_category = models.CharField(
         max_length=32, choices=CancellationCategory.choices, blank=True
@@ -343,6 +358,10 @@ class AppointmentAuditEvent(models.Model):
         CANCELLED = "CANCELLED", "Cancelled"
         RESCHEDULE_REJECTED = "RESCHEDULE_REJECTED", "Reschedule rejected"
         CANCELLATION_REJECTED = "CANCELLATION_REJECTED", "Cancellation rejected"
+        JOURNEY_STATUS_CHANGED = "JOURNEY_STATUS_CHANGED", "Journey status changed"
+        LOCATION_SHARED = "LOCATION_SHARED", "Location shared"
+        RATING_SUBMITTED = "RATING_SUBMITTED", "Rating submitted"
+        PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED", "Payment status changed"
 
     class Outcome(models.TextChoices):
         SUCCEEDED = "SUCCEEDED", "Succeeded"
@@ -504,3 +523,35 @@ class VisitVerificationAuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.verification_id}:{self.event}"
+
+
+class AppointmentRating(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.OneToOneField(Appointment, on_delete=models.PROTECT, related_name="rating")
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    physiotherapist = models.ForeignKey("staff.StaffProfile", on_delete=models.PROTECT)
+    stars = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    comment = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PractitionerPayment(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        PROCESSING = "PROCESSING", "Processing"
+        PAID = "PAID", "Paid"
+        HELD = "HELD", "Held / disputed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.OneToOneField(Appointment, on_delete=models.PROTECT, related_name="practitioner_payment")
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    physiotherapist = models.ForeignKey("staff.StaffProfile", on_delete=models.PROTECT)
+    payable_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    reference = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

@@ -9,6 +9,8 @@ from apps.appointments.models import (
     AppointmentAuditEvent,
     AppointmentChangeRequest,
     AppointmentRequest,
+    AppointmentRating,
+    PractitionerPayment,
     TherapyOption,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
@@ -156,6 +158,7 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         source="assigned_by.get_full_name", read_only=True, default=None
     )
     visit_verification = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -175,6 +178,12 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "reschedule_count",
             "cancellation_category",
             "visit_verification",
+            "journey_status",
+            "en_route_at",
+            "arrived_at",
+            "service_started_at",
+            "completed_at",
+            "payment_status",
         )
 
     @extend_schema_field(VisitVerificationStatusSerializer)
@@ -184,6 +193,11 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         actor = request.user if request and request.user.is_authenticated else None
         return visit_verification_status(value, actor=actor)
+
+
+    def get_payment_status(self, value):
+        payment = getattr(value, "practitioner_payment", None)
+        return payment.status if payment else None
 
 
 class AppointmentDetailSerializer(AppointmentListSerializer):
@@ -220,10 +234,17 @@ class AppointmentDetailSerializer(AppointmentListSerializer):
 
 
 class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
+    patient_name = serializers.SerializerMethodField()
     patient_mobile = serializers.CharField(source="patient.mobile_number", read_only=True)
+    patient_age = serializers.IntegerField(source="patient.age", read_only=True, allow_null=True)
+    patient_gender = serializers.CharField(source="patient.gender", read_only=True)
     problem_description = serializers.CharField(
         source="originating_request.problem_description", read_only=True, default=""
     )
+    pain_area = serializers.CharField(source="originating_request.pain_area", read_only=True, default="")
+    google_map_link = serializers.CharField(source="originating_request.google_map_link", read_only=True, default="")
+    rating_stars = serializers.IntegerField(source="rating.stars", read_only=True, default=None)
+    rating_comment = serializers.CharField(source="rating.comment", read_only=True, default="")
 
     class Meta(AppointmentListSerializer.Meta):
         fields = AppointmentListSerializer.Meta.fields + (
@@ -234,10 +255,37 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "region",
             "pin_code",
             "patient_mobile",
+            "patient_age",
+            "patient_gender",
             "problem_description",
+            "pain_area",
+            "google_map_link",
+            "rating_stars",
+            "rating_comment",
             "manager_remarks",
             "assignment_rejection_reason",
+            "journey_status",
+            "en_route_at",
+            "arrived_at",
+            "service_started_at",
+            "completed_at",
         )
+
+    def get_patient_name(self, value):
+        if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+            return "Service request"
+        return value.patient.full_name
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+            for field in (
+                "patient_identifier", "patient_mobile", "patient_age", "patient_gender",
+                "problem_description", "pain_area", "google_map_link",
+                "address_line_1", "address_line_2", "landmark", "pin_code", "manager_remarks",
+            ):
+                data[field] = ""
+        return data
 
 
 class CustomerAppointmentSerializer(serializers.ModelSerializer):
@@ -460,6 +508,19 @@ class AppointmentStatusSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class JourneyUpdateSerializer(serializers.Serializer):
+    journey_status = serializers.ChoiceField(
+        choices=(Appointment.JourneyStatus.EN_ROUTE, Appointment.JourneyStatus.ARRIVED)
+    )
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False)
+
+    def validate(self, attrs):
+        if ("latitude" in attrs) != ("longitude" in attrs):
+            raise serializers.ValidationError("Latitude and longitude must be shared together.")
+        return attrs
+
+
 class AvailabilityQuerySerializer(serializers.Serializer):
     clinic = serializers.UUIDField()
     scheduled_start = serializers.DateTimeField()
@@ -522,3 +583,19 @@ class AppointmentAuditSerializer(serializers.ModelSerializer):
             "rejection_code",
             "created_at",
         )
+
+class AppointmentRatingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppointmentRating
+        fields = ("id", "appointment", "stars", "comment", "created_at")
+        read_only_fields = ("id", "appointment", "created_at")
+
+
+class PractitionerPaymentSerializer(serializers.ModelSerializer):
+    therapy_name = serializers.CharField(source="appointment.therapy.name", read_only=True)
+    service_date = serializers.DateTimeField(source="appointment.scheduled_start", read_only=True)
+
+    class Meta:
+        model = PractitionerPayment
+        fields = ("id", "appointment", "therapy_name", "service_date", "payable_amount", "status", "paid_at", "reference", "note", "updated_at")
+        read_only_fields = ("id", "appointment", "therapy_name", "service_date", "paid_at", "updated_at")

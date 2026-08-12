@@ -3,6 +3,7 @@ from django.urls import path
 from apps.appointments.views import (
     AppointmentAssignmentResponseView,
     AppointmentAssignmentView,
+    AppointmentJourneyView,
     AppointmentAuditListView,
     AppointmentCalendarView,
     AppointmentCancellationView,
@@ -18,6 +19,7 @@ from apps.appointments.views import (
     CustomerAppointmentChangeRequestView,
     CustomerAppointmentDetailView,
     CustomerAppointmentListView,
+    CustomerAppointmentRatingView,
     CustomerOperationalAppointmentListView,
     CustomerVisitVerificationView,
     MyAssignedAppointmentListView,
@@ -26,6 +28,8 @@ from apps.appointments.views import (
     OwnerAppointmentDetailView,
     OwnerAppointmentListView,
     PhysiotherapistVisitVerificationView,
+    PractitionerPaymentListView,
+    OperationsPaymentView,
     PhysiotherapistWorkloadView,
     TherapyListView,
 )
@@ -51,6 +55,7 @@ urlpatterns = [
         name="schedule-assignment-response",
     ),
     path("schedule/<uuid:pk>/status/", AppointmentStatusView.as_view(), name="schedule-status"),
+    path("schedule/<uuid:pk>/journey/", AppointmentJourneyView.as_view(), name="schedule-journey"),
     path(
         "schedule/<uuid:pk>/reschedule/",
         AppointmentRescheduleView.as_view(),
@@ -122,4 +127,7 @@ urlpatterns = [
     ),
     path("owner/", OwnerAppointmentListView.as_view(), name="appointment-owner-list"),
     path("owner/<uuid:pk>/", OwnerAppointmentDetailView.as_view(), name="appointment-owner-detail"),
+    path("schedule/my-appointments/<uuid:pk>/rating/", CustomerAppointmentRatingView.as_view(), name="schedule-customer-rating"),
+    path("schedule/assigned-to-me/payments/", PractitionerPaymentListView.as_view(), name="schedule-practitioner-payments"),
+    path("schedule/<uuid:pk>/payment/", OperationsPaymentView.as_view(), name="schedule-operations-payment"),
 ]

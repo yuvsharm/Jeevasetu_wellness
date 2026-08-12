@@ -213,6 +213,22 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
         raise ValidationError("This assignment is unavailable.")
     if appointment.assignment_status != Appointment.AssignmentStatus.PENDING:
         raise ValidationError("This assignment has already been answered.")
+    if appointment.status in Appointment.FINAL_STATUSES:
+        raise ValidationError("This assignment is no longer available.")
+    if accept:
+        ensure_no_overlap(
+            physiotherapist=appointment.physiotherapist,
+            start=appointment.scheduled_start,
+            end=appointment.scheduled_end,
+            exclude_id=appointment.pk,
+        )
+        ensure_physiotherapist_available(
+            physiotherapist=appointment.physiotherapist,
+            clinic=appointment.clinic,
+            start=appointment.scheduled_start,
+            end=appointment.scheduled_end,
+            exclude_id=appointment.pk,
+        )
     if not accept and len(reason.strip()) < 3:
         raise ValidationError("A short rejection reason is required.")
     if not accept:
@@ -252,8 +268,36 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
 
 
 @transaction.atomic
+def update_journey(appointment, *, actor, journey_status, latitude=None, longitude=None):
+    appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if appointment.physiotherapist_id is None or appointment.physiotherapist.user_id != actor.id:
+        raise ValidationError("This visit is unavailable.")
+    if appointment.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+        raise ValidationError("Accept the service request before updating the journey.")
+    if appointment.status not in (Appointment.Status.SCHEDULED, Appointment.Status.CONFIRMED):
+        raise ValidationError("Journey updates are unavailable for this visit.")
+    allowed = {Appointment.JourneyStatus.NOT_STARTED: (Appointment.JourneyStatus.EN_ROUTE,), Appointment.JourneyStatus.EN_ROUTE: (Appointment.JourneyStatus.ARRIVED,), Appointment.JourneyStatus.ARRIVED: ()}
+    if journey_status not in allowed[appointment.journey_status]:
+        raise ValidationError("This journey transition is not permitted.")
+    now = timezone.now()
+    appointment.journey_status = journey_status
+    fields = ["journey_status", "updated_at"]
+    if journey_status == Appointment.JourneyStatus.EN_ROUTE:
+        appointment.en_route_at = now; fields.append("en_route_at")
+    else:
+        appointment.arrived_at = now; fields.append("arrived_at")
+    if latitude is not None and longitude is not None:
+        appointment.shared_latitude = latitude; appointment.shared_longitude = longitude; appointment.location_shared_at = now
+        fields.extend(("shared_latitude", "shared_longitude", "location_shared_at"))
+    appointment.save(update_fields=fields)
+    AppointmentAuditEvent.objects.create(appointment=appointment, organization=appointment.organization, actor=actor, event=AppointmentAuditEvent.Event.JOURNEY_STATUS_CHANGED, reason=journey_status)
+    return appointment
+
+@transaction.atomic
 def transition_status(appointment, *, new_status, actor, reason=""):
     appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if appointment.status == new_status and new_status == Appointment.Status.COMPLETED:
+        return appointment
     allowed = Appointment.TRANSITIONS.get(appointment.status, ())
     if new_status not in allowed:
         raise ValidationError("This appointment status transition is not permitted.")
@@ -280,9 +324,20 @@ def transition_status(appointment, *, new_status, actor, reason=""):
             raise ValidationError("Customer arrival verification is required before visit start.")
     previous = appointment.status
     appointment.status = new_status
+    now = timezone.now()
+    timestamp_field = None
+    if new_status == Appointment.Status.IN_PROGRESS:
+        appointment.service_started_at = now
+        timestamp_field = "service_started_at"
+    elif new_status == Appointment.Status.COMPLETED:
+        appointment.completed_at = now
+        timestamp_field = "completed_at"
     appointment.updated_by = actor
     appointment.full_clean()
-    appointment.save(update_fields=("status", "updated_by", "updated_at"))
+    update_fields = ["status", "updated_by", "updated_at"]
+    if timestamp_field:
+        update_fields.append(timestamp_field)
+    appointment.save(update_fields=update_fields)
     AppointmentAuditEvent.objects.create(
         appointment=appointment,
         organization=appointment.organization,
