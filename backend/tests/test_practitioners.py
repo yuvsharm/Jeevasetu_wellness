@@ -578,6 +578,25 @@ def test_correction_and_rejection_workflow_is_audited(api_client, domain):
     assert PractitionerAuditEvent.objects.filter(application=value).count() == 2
 
 
+def test_approval_payload_reports_missing_competency(api_client, domain):
+    organization, _, _, _, manager, _ = domain
+    value = application(domain, "UNDER_REVIEW")
+    value.competencies.all().delete()
+    value.documents.update(verification_status="VERIFIED", verified_by=manager)
+    api_client.force_authenticate(manager)
+
+    response = api_client.post(
+        reverse("practitioner-review", args=[value.id]),
+        {"action": "approve", "reason": ""},
+        format="json",
+        **headers(organization),
+    )
+
+    assert response.status_code == 400
+    assert response.data == {"detail": "At least one verified competency is required."}
+    value.refresh_from_db()
+    assert value.status == "UNDER_REVIEW"
+
 def test_applicant_cannot_self_approve_or_self_promote(api_client, domain):
     organization, _, _, applicant, _, _ = domain
     value = application(domain, "SUBMITTED")

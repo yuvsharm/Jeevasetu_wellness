@@ -172,12 +172,12 @@ def review_application(application, *, actor, action, reason=""):
         ),
     }
     if action not in transitions:
-        raise ValidationError("Unsupported review action.")
+        raise ValidationError({"detail": "Unsupported review action."})
     allowed, target, event = transitions[action]
     if application.status not in allowed:
-        raise ValidationError("This review transition is not permitted.")
+        raise ValidationError({"detail": "This review transition is not permitted."})
     if action in ("correction", "reject") and not reason.strip():
-        raise ValidationError("A reason is required.")
+        raise ValidationError({"detail": "A reason is required."})
     application.status = target
     application.reviewed_by = actor
     application.reviewed_at = timezone.now()
@@ -205,21 +205,21 @@ def approve_application(application, *, actor):
         PractitionerApplication.Status.RESUBMITTED,
         PractitionerApplication.Status.UNDER_REVIEW,
     ):
-        raise ValidationError("This application cannot be approved.")
+        raise ValidationError({"detail": "This application cannot be approved."})
     if not locked.competencies.filter(verification_status="VERIFIED").exists():
-        raise ValidationError("At least one verified competency is required.")
+        raise ValidationError({"detail": "At least one verified competency is required."})
     if locked.documents.filter(verification_status="VERIFIED").count() < 2:
-        raise ValidationError("Required documents must be verified.")
+        raise ValidationError({"detail": "Required documents must be verified."})
 
     staff_profile = None
     if locked.category == PractitionerApplication.Category.PHYSIOTHERAPIST:
         if locked.clinic is None:
-            raise ValidationError("A clinic is required for Physiotherapist activation.")
+            raise ValidationError({"detail": "A clinic is required for Physiotherapist activation."})
         membership, _ = OrganizationMembership.objects.get_or_create(
             user=locked.applicant, organization=locked.organization
         )
         if not membership.is_active:
-            raise ValidationError("The applicant organization membership is inactive.")
+            raise ValidationError({"detail": "The applicant organization membership is inactive."})
         ClinicMembership.objects.get_or_create(
             organization_membership=membership, clinic=locked.clinic
         )
@@ -247,7 +247,7 @@ def approve_application(application, *, actor):
             },
         )
         if staff_profile.staff_type != Role.PHYSIOTHERAPIST:
-            raise ValidationError("An incompatible staff profile already exists.")
+            raise ValidationError({"detail": "An incompatible staff profile already exists."})
         if not RoleAssignment.objects.filter(
             user=locked.applicant,
             organization=locked.organization,

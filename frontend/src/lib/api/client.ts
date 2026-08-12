@@ -23,7 +23,20 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   if (!response.ok) {
     let error: SafeApiError = { detail: "Something went wrong. Please try again." };
     try {
-      error = (await response.json()) as SafeApiError;
+      const payload: unknown = await response.json();
+      if (Array.isArray(payload)) {
+        const messages = payload.filter((value): value is string => typeof value === "string");
+        if (messages.length) error = { detail: messages.join(" ") };
+      } else if (payload && typeof payload === "object") {
+        const values = payload as Record<string, unknown>;
+        const detail = Array.isArray(values.detail)
+          ? values.detail.filter((value): value is string => typeof value === "string").join(" ")
+          : typeof values.detail === "string" ? values.detail : error.detail;
+        const fieldErrors = Object.fromEntries(Object.entries(values)
+          .filter(([field]) => field !== "detail")
+          .map(([field, value]) => [field, Array.isArray(value) ? value.join(" ") : String(value)]));
+        error = { detail, ...(Object.keys(fieldErrors).length ? { fieldErrors } : {}) };
+      }
     } catch {
       // The safe fallback above intentionally hides unexpected response details.
     }
