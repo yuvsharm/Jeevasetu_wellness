@@ -175,7 +175,7 @@ function SecurePreview({
         onClick={() => void open()}
         className="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-emerald-800"
       >
-        ðŸ‘
+        View
       </button>
       {error && (
         <span role="alert" className="text-sm text-red-700">
@@ -340,7 +340,7 @@ export function EnrollmentForm() {
   if (query.isPending || create.isPending)
     return (
       <p role="status" className="rounded-2xl border bg-white p-6">
-        Preparing your secure draftâ€¦
+        Preparing your secure draft…
       </p>
     );
   if (query.isError || create.isError)
@@ -413,7 +413,7 @@ export function EnrollmentForm() {
                 className={`min-h-16 w-full rounded-xl border p-3 text-left text-xs font-bold ${step === index ? "border-emerald-700 bg-emerald-700 text-white" : index < step ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-white text-slate-500"}`}
               >
                 <span aria-hidden="true">
-                  {index < step ? "âœ“ " : `${index + 1}. `}
+                  {index < step ? "✓ " : `${index + 1}. `}
                 </span>
                 {label}
               </button>
@@ -596,7 +596,7 @@ export function EnrollmentForm() {
                   value={String(data.availability_notes ?? "")}
                   onChange={(e) => change("availability_notes", e.target.value)}
                   rows={5}
-                  placeholder="For example: Mondayâ€“Friday, 9 AMâ€“6 PM; weekends by appointment."
+                  placeholder="For example: Monday–Friday, 9 AM–6 PM; weekends by appointment."
                   className="rounded-xl border p-4"
                 />
               </label>
@@ -641,7 +641,7 @@ function SaveStatus({ state, retry }: { state: string; retry: () => void }) {
         role="status"
         className="rounded-full bg-white/15 px-4 py-2 text-sm text-white"
       >
-        Savingâ€¦
+        Saving…
       </span>
     );
   if (state === "saved")
@@ -650,7 +650,7 @@ function SaveStatus({ state, retry }: { state: string; retry: () => void }) {
         role="status"
         className="rounded-full bg-white/15 px-4 py-2 text-sm font-semibold text-white"
       >
-        âœ“ Saved just now
+        ✓ Saved just now
       </span>
     );
   if (state === "error")
@@ -660,7 +660,7 @@ function SaveStatus({ state, retry }: { state: string; retry: () => void }) {
         onClick={retry}
         className="min-h-11 rounded-full bg-red-50 px-4 text-sm font-semibold text-red-800"
       >
-        Save failed â€” Retry
+        Save failed — Retry
       </button>
     );
   return (
@@ -714,7 +714,7 @@ function Competencies({
       <ul className="mt-3 text-sm text-slate-600">
         {application.competencies.map((item) => (
           <li key={item.id}>
-            {item.therapy_name} Â· {friendly(item.verification_status)}
+            {item.therapy_name} · {friendly(item.verification_status)}
           </li>
         ))}
       </ul>
@@ -770,7 +770,7 @@ function ProfilePhotoCard({
       return;
     }
     setBusy(true);
-    setMessage("Uploadingâ€¦");
+    setMessage("Uploading…");
     try {
       const form = new FormData();
       form.set("profile_photo", file);
@@ -780,7 +780,7 @@ function ProfilePhotoCard({
       );
       if (response.ok) {
         setPreview(URL.createObjectURL(file));
-        setMessage("âœ“ Uploaded successfully");
+        setMessage("✓ Uploaded successfully");
         void client.invalidateQueries({
           queryKey: ["my-practitioner-applications"],
         });
@@ -841,11 +841,11 @@ function ProfilePhotoCard({
             </span>
           </h3>
           <p className="text-sm text-slate-600">
-            JPG, JPEG, PNG, or WebP Â· Maximum 5 MB
+            JPG, JPEG, PNG, or WebP · Maximum 5 MB
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <label className="inline-flex min-h-11 cursor-pointer items-center rounded-xl bg-emerald-700 px-4 font-bold text-white">
-              {busy ? "Uploadingâ€¦" : preview ? "Replace" : "Upload photo"}
+              {busy ? "Uploading…" : preview ? "Replace" : "Upload photo"}
               <input
                 disabled={busy}
                 type="file"
@@ -914,7 +914,7 @@ function DocumentCard({
       return;
     }
     setBusy(true);
-    setMessage("Uploadingâ€¦");
+    setMessage("Uploading…");
     const form = new FormData();
     form.set("kind", config.kind);
     form.set("file", file);
@@ -924,8 +924,8 @@ function DocumentCard({
     );
     setMessage(
       response.ok
-        ? "âœ“ Uploaded successfully"
-        : "Upload failed â€” check the PDF format and size, then retry.",
+        ? "✓ Uploaded successfully"
+        : "Upload failed — check the PDF format and size, then retry.",
     );
     if (response.ok)
       void client.invalidateQueries({
@@ -958,11 +958,11 @@ function DocumentCard({
         )}
       </h3>
       <p className="mt-1 text-sm text-slate-600">
-        {config.required ? "Required" : "Optional"} Â· PDF only Â· Maximum 8 MB
+        {config.required ? "Required" : "Optional"} · PDF only · Maximum 8 MB
       </p>
       <label className="mt-4 inline-flex min-h-11 cursor-pointer items-center rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">
         {busy
-          ? "Uploadingâ€¦"
+          ? "Uploading…"
           : uploaded.length && !config.multiple
             ? "Replace PDF"
             : "Upload PDF"}
@@ -987,12 +987,12 @@ function DocumentCard({
           >
             <div className="flex min-w-0 items-start gap-2">
               <span aria-hidden="true" className="font-bold text-emerald-700">
-                âœ“
+                ✓
               </span>
               <div className="min-w-0">
                 <p className="break-all font-semibold">{doc.original_name}</p>
                 <p className="text-xs text-slate-600">
-                  {config.label} Â· {fileSize(doc.size_bytes)}
+                  {config.label} · {fileSize(doc.size_bytes)}
                 </p>
               </div>
             </div>
@@ -1175,9 +1175,9 @@ function Review({
           <ul className="mt-3 grid gap-3 md:grid-cols-2">
             {application.documents.map((doc) => (
               <li key={doc.id} className="rounded-xl bg-white p-3 text-sm">
-                <p className="break-all font-semibold">âœ“ {doc.original_name}</p>
+                <p className="break-all font-semibold">✓ {doc.original_name}</p>
                 <p className="text-xs text-slate-600">
-                  {friendly(doc.kind)} Â· {fileSize(doc.size_bytes)}
+                  {friendly(doc.kind)} · {fileSize(doc.size_bytes)}
                 </p>
                 <SecurePreview
                   url={`/api/practitioners/me/${application.id}/documents/${doc.id}`}
@@ -1227,7 +1227,7 @@ function Review({
             onClick={() => submit.mutate()}
             className="min-h-12 rounded-xl bg-emerald-700 px-5 font-bold text-white disabled:opacity-50"
           >
-            {submit.isPending ? "Submittingâ€¦" : "Submit application"}
+            {submit.isPending ? "Submitting…" : "Submit application"}
           </button>
           <button
             type="button"
@@ -1343,9 +1343,9 @@ function SubmittedStatus({
         <ul className="mt-3 grid gap-3 md:grid-cols-2">
           {application.documents.map((doc) => (
             <li key={doc.id} className="rounded-xl border p-4">
-              <p className="break-all font-semibold">âœ“ {doc.original_name}</p>
+              <p className="break-all font-semibold">✓ {doc.original_name}</p>
               <p className="text-sm text-slate-600">
-                {friendly(doc.kind)} Â· {fileSize(doc.size_bytes)}
+                {friendly(doc.kind)} · {fileSize(doc.size_bytes)}
               </p>
               <SecurePreview
                 url={`/api/practitioners/me/${application.id}/documents/${doc.id}`}

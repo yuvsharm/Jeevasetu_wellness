@@ -9,10 +9,19 @@ function renderReview() { return render(<QueryClientProvider client={new QueryCl
 
 describe("practitioner review actions", () => {
   it("starts review once and reports the persisted status", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify({ ...application, status: "UNDER_REVIEW" }), { status: 200 }) : new Response(JSON.stringify([application]), { status: 200 }));
+    let current: typeof application & { reviewer_name?: string; reviewed_at?: string } = application;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      if (init?.method === "POST") {
+        current = { ...application, status: "UNDER_REVIEW", reviewer_name: "Owner Reviewer", reviewed_at: "2026-08-12T10:00:00Z" };
+        return new Response(JSON.stringify(current), { status: 200 });
+      }
+      return new Response(JSON.stringify([current]), { status: 200 });
+    });
     renderReview(); await userEvent.click(await screen.findByRole("button", { name: "Start Review" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/practitioners/applications/app-1/review", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "review", reason: "" }) })));
     expect(await screen.findByRole("status")).toHaveTextContent("UNDER REVIEW");
+    expect(await screen.findByText("UNDER REVIEW")).toBeInTheDocument();
+    expect(screen.getByText("Owner Reviewer")).toBeInTheDocument();
   });
   it.each([["Request Correction", "correction"], ["Reject", "reject"]])("requires a reason for %s", async (label, action) => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify({ ...application, status: action === "reject" ? "REJECTED" : "CORRECTION_REQUIRED" }), { status: 200 }) : new Response(JSON.stringify([application]), { status: 200 }));

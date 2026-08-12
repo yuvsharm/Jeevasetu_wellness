@@ -563,6 +563,9 @@ def test_correction_and_rejection_workflow_is_audited(api_client, domain):
         **headers(organization),
     )
     assert corrected.status_code == 200 and corrected.data["status"] == "CORRECTION_REQUIRED"
+    assert corrected.data["reviewed_by"] == manager.id
+    assert corrected.data["reviewer_name"] == manager.get_full_name()
+    assert corrected.data["reviewed_at"]
     value.status = "SUBMITTED"
     value.save(update_fields=("status",))
     rejected = api_client.post(

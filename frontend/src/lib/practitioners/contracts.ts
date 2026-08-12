@@ -9,6 +9,7 @@ export type PractitionerApplication = {
   has_home_service_experience: boolean; bio: string; languages: string[]; clinic: string | null;
   availability_notes: string; last_completed_step: number; has_profile_photo: boolean;
   correction_reason: string; rejection_reason: string; submitted_at: string | null; updated_at: string;
+  reviewed_at?: string | null; reviewed_by?: string | null; reviewer_name?: string;
   documents: Array<{id:string;kind:string;original_name:string;content_type:string;size_bytes:number;verification_status:string;created_at:string}>;
   competencies: Array<{id:string;therapy:string;therapy_name:string;experience_months:number;verification_status:string}>;
 };

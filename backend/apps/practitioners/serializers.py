@@ -199,6 +199,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
 
 
 class ManagerApplicationSerializer(ApplicationSerializer):
+    reviewer_name = serializers.CharField(source="reviewed_by.get_full_name", read_only=True, default="")
+
     class Meta(ApplicationSerializer.Meta):
         exclude = ("organization",)
         read_only_fields = ApplicationSerializer.Meta.read_only_fields + ("applicant",)
