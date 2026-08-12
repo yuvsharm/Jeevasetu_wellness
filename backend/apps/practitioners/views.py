@@ -379,6 +379,20 @@ class PrivateDocumentView(generics.GenericAPIView):
         )
 
 
+    def delete(self, request, pk):
+        document = PractitionerDocument.objects.filter(
+            pk=pk,
+            application__applicant=request.user,
+            application__organization=request.organization,
+            application__status__in=("DRAFT", "CORRECTION_REQUIRED"),
+        ).first()
+        if document is None:
+            raise NotFound("Document is unavailable.")
+        document.file.delete(save=False)
+        document.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class PrivateApplicationPhotoView(generics.GenericAPIView):
     permission_classes = (IsEnabledAuthenticated, IsActiveOrganizationMember)
     serializer_class = ProfilePhotoUploadSerializer

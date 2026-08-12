@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { ClientApiError, requestJson } from "@/lib/api/client";
 import type { TherapyOption } from "@/lib/appointments/contracts";
 import type { PractitionerApplication } from "@/lib/practitioners/contracts";
-import { AccessibleDocumentCard } from "@/components/practitioners/document-card";
+import { SecureDocumentCard } from "@/components/practitioners/secure-document-card";
 
 const steps = [
   "Personal",
@@ -736,7 +736,7 @@ function DocumentStep({
       </p>
       <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2">
         {documents.map((config) => (
-          <AccessibleDocumentCard
+          <SecureDocumentCard
             key={config.kind}
             application={application}
             config={config}

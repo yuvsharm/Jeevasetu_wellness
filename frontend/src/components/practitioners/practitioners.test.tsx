@@ -82,15 +82,36 @@ describe("practitioner enrollment",()=>{
     expect(screen.queryByText(/choose a valid JPG/i)).not.toBeInTheDocument();
   });
 
-  it("shows private document metadata and preview actions",async()=>{
+  it("uses the authenticated filename control without an eye icon",async()=>{
     const withDocument={...draft,last_completed_step:4,documents:[{id:"document-1",kind:"GOVERNMENT_ID",original_name:"identity-proof.pdf",content_type:"application/pdf",size_bytes:438272,verification_status:"PENDING",created_at:"2026-08-10T10:00:00Z"}]};
     vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify([withDocument]),{status:200}));
     wrap(<EnrollmentForm/>);
     expect((await screen.findAllByText("identity-proof.pdf")).length).toBeGreaterThan(0);
     expect(screen.getByText("428 KB")).toBeInTheDocument();
-    expect(screen.getByRole("button",{name:"View Government identity proof"})).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"identity-proof.pdf"})).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:/View Government identity proof/i})).not.toBeInTheDocument();
     expect(screen.getByText("Change PDF")).toBeInTheDocument();
     expect(screen.getByRole("button",{name:"Remove Government identity proof"})).toBeInTheDocument();
+  });
+
+  it("opens and deletes the exact document ID through authenticated routes",async()=>{
+    const withDocument={...draft,last_completed_step:4,documents:[{id:"government-id-1",kind:"GOVERNMENT_ID",original_name:"identity-proof.pdf",content_type:"application/pdf",size_bytes:438272,verification_status:"PENDING",created_at:"2026-08-10T10:00:00Z"}]};
+    const fetchMock=vi.spyOn(global,"fetch").mockImplementation(async(input,init)=>{
+      const url=String(input);
+      if(url==="/api/practitioners/documents/government-id-1"&&init?.method==="DELETE")return new Response(null,{status:204});
+      if(url==="/api/practitioners/documents/government-id-1")return new Response(new Blob(["%PDF-1.4 government-id"],{type:"application/pdf"}),{status:200,headers:{"Content-Type":"application/pdf"}});
+      return new Response(JSON.stringify([withDocument]),{status:200});
+    });
+    Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:government-id")});
+    Object.defineProperty(URL,"revokeObjectURL",{configurable:true,value:vi.fn()});
+    HTMLDialogElement.prototype.showModal=vi.fn();
+    vi.spyOn(window,"confirm").mockReturnValue(true);
+    wrap(<EnrollmentForm/>);
+    await userEvent.click(await screen.findByRole("button",{name:"identity-proof.pdf"}));
+    expect(fetchMock).toHaveBeenCalledWith("/api/practitioners/documents/government-id-1",{credentials:"same-origin"});
+    await userEvent.click(screen.getByRole("button",{name:"Remove Government identity proof"}));
+    await waitFor(()=>expect(fetchMock).toHaveBeenCalledWith("/api/practitioners/documents/government-id-1",{method:"DELETE"}));
+    expect(await screen.findByText("Document removed.")).toBeInTheDocument();
   });
 
   it("renders only safe verified directory information",async()=>{vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify([{id:"1",display_name:"Dr Asha Sharma",category:"PHYSIOTHERAPIST",highest_qualification:"MPT",qualification_specialization:"Orthopaedic",experience_years:9,languages:["Hindi"],bio:"Home service specialist",service_area:"Meerut",verified_services:["Physiotherapy"],photo_url:""}]),{status:200}));wrap(<PublicPractitionerDirectory/>);expect(await screen.findByText("Dr Asha Sharma")).toBeInTheDocument();expect(screen.getByText("JeevaSetu Verified")).toBeInTheDocument();expect(screen.queryByText(/email|mobile|government/i)).not.toBeInTheDocument();});

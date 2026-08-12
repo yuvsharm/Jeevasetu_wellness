@@ -25,7 +25,8 @@ export async function practitionerApi(request: NextRequest, path: string, init?:
       access = rotated.tokens.access;
       response = await send(access);
     }
-    const outgoing = new NextResponse(response.body,{status:response.status,headers:{"Content-Type":response.headers.get("content-type")??"application/json","Content-Disposition":response.headers.get("content-disposition")??""}});
+    const body = [204, 205, 304].includes(response.status) ? null : response.body;
+    const outgoing = new NextResponse(body,{status:response.status,headers:{"Content-Type":response.headers.get("content-type")??"application/json","Content-Disposition":response.headers.get("content-disposition")??""}});
     if (rotated) setSessionCookies(outgoing, rotated.tokens);
     return outgoing;
   } catch (error) {

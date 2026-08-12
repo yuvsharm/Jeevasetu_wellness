@@ -429,7 +429,7 @@ def test_applicant_can_preview_own_pdf_inline(api_client, domain):
 
 
 def test_private_document_preview_enforces_owner_tenant_and_reviewer_scope(api_client, domain):
-    organization, _, _, applicant, manager, _ = domain
+    organization, _, _, applicant, manager, owner = domain
     value = application(domain)
     document = value.documents.first()
     other_applicant = identity(organization, "preview-other", role=None)
@@ -462,6 +462,13 @@ def test_private_document_preview_enforces_owner_tenant_and_reviewer_scope(api_c
         == 404
     )
     api_client.force_authenticate(manager)
+    assert (
+        api_client.get(
+            reverse("practitioner-document", args=[document.id]), **headers(organization)
+        ).status_code
+        == 200
+    )
+    api_client.force_authenticate(owner)
     assert (
         api_client.get(
             reverse("practitioner-document", args=[document.id]), **headers(organization)
@@ -510,6 +517,24 @@ def test_replaced_and_deleted_documents_have_no_stale_preview(api_client, domain
     assert stale_after_replace.status_code == 404
     assert deleted.status_code == 204
     assert stale_after_delete.status_code == 404
+
+
+def test_applicant_deletes_own_document_by_private_document_id(api_client, domain):
+    organization, _, _, applicant, _, _ = domain
+    value = application(domain)
+    document = value.documents.get(kind="GOVERNMENT_ID")
+    api_client.force_authenticate(applicant)
+
+    deleted = api_client.delete(
+        reverse("practitioner-document", args=[document.id]), **headers(organization)
+    )
+    stale = api_client.get(
+        reverse("practitioner-document", args=[document.id]), **headers(organization)
+    )
+
+    assert deleted.status_code == 204
+    assert stale.status_code == 404
+    assert not value.documents.filter(kind="GOVERNMENT_ID").exists()
 
 
 def test_private_profile_photo_returns_image_and_reviewer_is_authorized(api_client, domain):
