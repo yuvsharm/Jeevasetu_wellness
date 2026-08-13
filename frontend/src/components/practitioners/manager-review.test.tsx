@@ -34,10 +34,12 @@ describe("practitioner review actions", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("At least one verified competency is required.");
   });
   it.each([["Request Correction", "correction"], ["Reject", "reject"]])("requires a reason for %s", async (label, action) => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify({ ...application, status: action === "reject" ? "REJECTED" : "CORRECTION_REQUIRED" }), { status: 200 }) : new Response(JSON.stringify([application]), { status: 200 }));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify({ ...application, status: action === "reject" ? "REJECTED" : "CORRECTION_REQUIRED", reviewer_name: "Owner Reviewer", reviewed_at: "2026-08-13T10:00:00Z", ...(action === "reject" ? { rejection_reason: "Evidence needs clarification" } : { correction_reason: "Evidence needs clarification" }) }), { status: 200 }) : new Response(JSON.stringify([application]), { status: 200 }));
     renderReview(); await userEvent.click(await screen.findByRole("button", { name: label }));
     const reason = screen.getByLabelText("Reason"); const confirm = screen.getByRole("button", { name: "Confirm" }); expect(confirm).toBeDisabled();
     await userEvent.type(reason, "Evidence needs clarification"); await userEvent.click(confirm);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/practitioners/applications/app-1/review", expect.objectContaining({ body: JSON.stringify({ action, reason: "Evidence needs clarification" }) })));
+    expect(await screen.findByRole("status")).toHaveTextContent("Owner Reviewer");
+    expect(screen.getByRole("status")).toHaveTextContent("Reason: Evidence needs clarification");
   });
 });

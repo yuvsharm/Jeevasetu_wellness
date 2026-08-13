@@ -219,9 +219,7 @@ export function EnrollmentForm() {
     queryFn: () =>
       requestJson<PractitionerApplication[]>("/api/practitioners/me"),
   });
-  const application = query.data?.find(
-    (item) => !["REJECTED", "WITHDRAWN"].includes(item.status),
-  );
+  const application = query.data?.[0];
   const editable = application && editableStatuses.includes(application.status);
   const [data, setData] = useState<Record<string, unknown>>(initial);
   const [step, setStep] = useState(0);
@@ -248,11 +246,12 @@ export function EnrollmentForm() {
     if (
       !query.isPending &&
       !application &&
+      query.data?.length === 0 &&
       !create.isPending &&
       !create.isSuccess
     )
       create.mutate();
-  }, [application, create, query.isPending]);
+  }, [application, create, query.data?.length, query.isPending]);
   useEffect(() => {
     if (application && hydrated.current !== application.id) {
       setData({ ...initial, ...application });

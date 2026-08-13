@@ -22,6 +22,15 @@ describe("practitioner enrollment",()=>{
     expect(screen.getByRole("button",{name:"Review"})).toBeInTheDocument();
   });
 
+  it("renders a rejected application as a terminal status without creating a new draft",async()=>{
+    const rejected={...draft,status:"REJECTED",last_completed_step:3,rejection_reason:"Registration could not be verified."};
+    const fetchMock=vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify([rejected]),{status:200}));
+    wrap(<EnrollmentForm/>);
+    expect(await screen.findByText("Application rejected")).toBeInTheDocument();
+    expect(screen.getByText(/Registration could not be verified/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Application progress")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([,init])=>init?.method==="POST")).toBe(false);
+  });
   it("creates an early server draft and persists step changes",async()=>{
     const calls: Array<[string,RequestInit|undefined]> = [];
     vi.spyOn(global,"fetch").mockImplementation(async(input,init)=>{

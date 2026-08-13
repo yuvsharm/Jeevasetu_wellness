@@ -43,6 +43,13 @@ describe("protected routing", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?reason=expired"));
   });
 
+  it("refreshes stale applicant access before deciding an approved practitioner route", async () => {
+    const responses = [applicantSession(), session("PHYSIOTHERAPIST")];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(responses.shift() ?? session("PHYSIOTHERAPIST")), { status: 200 }));
+    render(wrapper(<ProtectedPage role="PHYSIOTHERAPIST" title="Practitioner"><p>Operational dashboard</p></ProtectedPage>));
+    await waitFor(() => expect(document.body).toHaveTextContent("Operational dashboard"));
+    expect(replace).not.toHaveBeenCalledWith("/unauthorized");
+  });
   it("denies a wrong-role route", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session("CUSTOMER")), { status: 200 }));
     render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Secret owner shell</p></ProtectedPage>));
