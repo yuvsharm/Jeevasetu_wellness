@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
 import { DashboardRedirect } from "./dashboard-redirect";
@@ -48,6 +48,12 @@ describe("protected routing", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(responses.shift() ?? session("PHYSIOTHERAPIST")), { status: 200 }));
     render(wrapper(<ProtectedPage role="PHYSIOTHERAPIST" title="Practitioner"><p>Operational dashboard</p></ProtectedPage>));
     await waitFor(() => expect(document.body).toHaveTextContent("Operational dashboard"));
+    expect(replace).not.toHaveBeenCalledWith("/unauthorized");
+  });
+  it("opens the Owner route after confirming OWNER access in development Strict Mode", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(session("OWNER")), { status: 200 }));
+    render(<StrictMode>{wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Owner operations</p></ProtectedPage>)}</StrictMode>);
+    await waitFor(() => expect(document.body).toHaveTextContent("Owner operations"));
     expect(replace).not.toHaveBeenCalledWith("/unauthorized");
   });
   it("denies a wrong-role route", async () => {

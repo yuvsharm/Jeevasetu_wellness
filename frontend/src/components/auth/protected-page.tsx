@@ -20,22 +20,21 @@ export function ProtectedPage({ role, title, children }: { role: Role; title: st
   const status = session.error instanceof ClientApiError ? session.error.status : 500;
   const currentSession = confirmedSession ?? session.data;
   const allowed = currentSession ? activeRoles(currentSession.access.roles).includes(role) : false;
+  const needsConfirmation = Boolean(session.data && !allowed);
   useEffect(() => {
-    if (sessionPending || accessCheckStarted.current) return;
+    if (sessionPending || !needsConfirmation || accessCheckStarted.current) return;
     accessCheckStarted.current = true;
-    let active = true;
     void refetchSession().then((result) => {
-      if (active && result.data) setConfirmedSession(result.data);
-    }).finally(() => { if (active) setConfirmed(true); });
-    return () => { active = false; };
-  }, [refetchSession, sessionPending]);
+      if (result.data) setConfirmedSession(result.data);
+    }).finally(() => setConfirmed(true));
+  }, [needsConfirmation, refetchSession, sessionPending]);
   useEffect(() => {
-    if (!confirmed) return;
+    if (needsConfirmation && !confirmed) return;
     if (session.error && status === 401) router.replace("/login?reason=expired");
     else if (session.error && (status === 403 || status === 404)) router.replace("/unauthorized");
     else if (currentSession && !allowed) router.replace("/unauthorized");
-  }, [allowed, confirmed, currentSession, router, session.error, status]);
-  if (session.isPending || !confirmed || session.isFetching) return <LoadingState />;
+  }, [allowed, confirmed, currentSession, needsConfirmation, router, session.error, status]);
+  if (session.isPending || (needsConfirmation && (!confirmed || session.isFetching))) return <LoadingState />;
   if (session.error) return <main className="mx-auto max-w-xl p-8"><StatusPanel tone="error">We could not load your workspace. <button className="font-bold underline" onClick={() => session.refetch()}>Retry</button></StatusPanel></main>;
   if (!currentSession || !allowed) return <LoadingState label="Confirming access…" />;
   return <AppShell session={currentSession} role={role} title={title}>{children}</AppShell>;

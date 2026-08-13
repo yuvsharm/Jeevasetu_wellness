@@ -614,7 +614,8 @@ def test_applicant_cannot_self_approve_or_self_promote(api_client, domain):
 
 
 def test_approval_is_idempotent_and_activates_existing_architecture(domain):
-    organization, clinic, _, applicant, manager, _ = domain
+    organization, clinic, _, applicant, manager, owner = domain
+    owner_role = RoleAssignment.objects.get(user=owner, role=Role.OWNER)
     value = application(domain, "UNDER_REVIEW")
     value.competencies.update(verification_status="VERIFIED", verified_by=manager)
     value.documents.update(verification_status="VERIFIED", verified_by=manager)
@@ -631,6 +632,26 @@ def test_approval_is_idempotent_and_activates_existing_architecture(domain):
         ).count()
         == 1
     )
+    owner_role.refresh_from_db()
+    assert owner_role.is_active
+    assert owner_role.organization_membership.is_active
+
+
+def test_rejection_never_modifies_existing_owner_access(api_client, domain):
+    organization, _, _, _, manager, owner = domain
+    owner_role = RoleAssignment.objects.get(user=owner, role=Role.OWNER)
+    value = application(domain, "UNDER_REVIEW")
+    api_client.force_authenticate(manager)
+    response = api_client.post(
+        reverse("practitioner-review", args=[value.id]),
+        {"action": "reject", "reason": "Qualification could not be verified."},
+        format="json",
+        **headers(organization),
+    )
+    assert response.status_code == 200
+    owner_role.refresh_from_db()
+    assert owner_role.is_active
+    assert owner_role.organization_membership.is_active
 
 
 def test_open_to_work_requires_approved_operational_profile(domain):
