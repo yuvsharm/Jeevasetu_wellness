@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
@@ -54,6 +55,8 @@ from apps.appointments.serializers import (
     AssignmentResponseSerializer,
     AssignmentSerializer,
     AvailabilityQuerySerializer,
+    BookingOtpRequestSerializer,
+    BookingOtpVerifySerializer,
     CancelAppointmentSerializer,
     CustomerAppointmentSerializer,
     OwnerAppointmentUpdateSerializer,
@@ -62,6 +65,10 @@ from apps.appointments.serializers import (
     TherapyOptionSerializer,
     UnassignmentSerializer,
     VisitOtpSubmissionSerializer,
+)
+from apps.appointments.booking_verification import (
+    issue_booking_otp_details,
+    verify_booking_otp,
 )
 from apps.appointments.visit_verification import (
     issue_visit_otp,
@@ -90,6 +97,46 @@ class TherapyListView(HasTenant, generics.ListAPIView):
 class AppointmentCreateView(HasTenant, generics.CreateAPIView):
     permission_classes = (permissions.AllowAny,)
     serializer_class = AppointmentRequestSerializer
+
+
+class BookingOtpIssueView(HasTenant, generics.GenericAPIView):
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = BookingOtpRequestSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        mobile_number = serializer.validated_data["mobile_number"]
+        verification, delivery = issue_booking_otp_details(
+            organization=request.organization,
+            mobile_number=mobile_number,
+            client_key=request.META.get("REMOTE_ADDR", "anonymous-client"),
+        )
+        payload = {
+            "verification_id": str(verification.id),
+            "mobile_number": mobile_number,
+            "expires_at": verification.expires_at.isoformat(),
+            "message": "Use the OTP sent to your mobile number to continue.",
+        }
+        if getattr(settings, "DEBUG", False) or "DevBookingOtpDelivery" in getattr(settings, "BOOKING_OTP_DELIVERY_BACKEND", ""):
+            payload["otp"] = delivery.otp
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class BookingOtpVerifyView(HasTenant, generics.GenericAPIView):
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = BookingOtpVerifySerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = verify_booking_otp(
+            organization=request.organization,
+            verification_id=serializer.validated_data["verification_id"],
+            mobile_number=serializer.validated_data["mobile_number"],
+            otp=serializer.validated_data["otp"],
+        )
+        return Response({"token": token}, status=status.HTTP_200_OK)
 
 
 class CustomerAppointmentListView(HasTenant, generics.ListAPIView):

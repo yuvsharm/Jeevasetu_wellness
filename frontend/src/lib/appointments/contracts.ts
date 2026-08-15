@@ -1,6 +1,6 @@
 export type TherapyOption = { id: string; name: string; slug: string };
 export type AppointmentRequest = {
-  id: string; therapy: string; therapy_name: string; preferred_practitioner: string | null; patient_name: string; age: number; gender: string;
+  id: string; therapy: string; requested_therapies?: string[]; therapy_name: string; preferred_practitioner: string | null; patient_name: string; age: number; gender: string;
   mobile_number: string; alternate_mobile: string; email: string; session_preference: string;
   preferred_date: string; preferred_time: string; problem_description: string; pain_area: string;
   problem_duration: string; doctor_reference: string; address: string; city: string; pin_code: string;

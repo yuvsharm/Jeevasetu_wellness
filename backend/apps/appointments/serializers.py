@@ -1,3 +1,4 @@
+from django.core.validators import RegexValidator
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
@@ -24,14 +25,36 @@ class TherapyOptionSerializer(serializers.ModelSerializer):
         fields = ("id", "name", "slug")
 
 
+class BookingOtpRequestSerializer(serializers.Serializer):
+    mobile_number = serializers.CharField(
+        max_length=10,
+        min_length=10,
+        validators=[RegexValidator(r"^[6-9]\d{9}$", "Enter a valid 10-digit Indian mobile number.")],
+    )
+
+
+class BookingOtpVerifySerializer(serializers.Serializer):
+    verification_id = serializers.UUIDField()
+    mobile_number = serializers.CharField(
+        max_length=10,
+        min_length=10,
+        validators=[RegexValidator(r"^[6-9]\d{9}$", "Enter a valid 10-digit Indian mobile number.")],
+    )
+    otp = serializers.CharField(min_length=6, max_length=6)
+
+
 class AppointmentRequestSerializer(serializers.ModelSerializer):
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
+    requested_therapies = serializers.PrimaryKeyRelatedField(
+        queryset=TherapyOption.objects.all(), many=True, required=False, allow_empty=True
+    )
 
     class Meta:
         model = AppointmentRequest
         fields = (
             "id",
             "therapy",
+            "requested_therapies",
             "therapy_name",
             "preferred_practitioner",
             "patient_name",
@@ -71,16 +94,48 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Preferred date cannot be in the past.")
         return value
 
+    def validate_preferred_time(self, value):
+        allowed = {
+            "10:00",
+            "11:00",
+            "12:00",
+            "13:00",
+            "14:00",
+            "15:00",
+            "16:00",
+            "17:00",
+            "18:00",
+        }
+        slot = value.strftime("%H:%M")
+        if slot not in allowed:
+            raise serializers.ValidationError(
+                "Select a valid 1-hour slot between 10:00 AM and 7:00 PM."
+            )
+        return value
+
     def validate_therapy(self, value):
         organization = self.context["request"].organization
         if not value.is_active or value.organization_id != organization.id:
             raise serializers.ValidationError("Select an active therapy.")
         return value
 
+    def validate_requested_therapies(self, value):
+        organization = self.context["request"].organization
+        for therapy in value:
+            if not therapy.is_active or therapy.organization_id != organization.id:
+                raise serializers.ValidationError("Select only active therapies in this organization.")
+        if len(value) > 8:
+            raise serializers.ValidationError("Select up to eight therapy preferences.")
+        return list(dict.fromkeys(value))
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         preferred = attrs.get("preferred_practitioner")
         therapy = attrs.get("therapy")
+        requested = list(attrs.get("requested_therapies", []))
+        if therapy and any(item.id == therapy.id for item in requested):
+            requested = [item for item in requested if item.id != therapy.id]
+            attrs["requested_therapies"] = requested
         if preferred and (
             preferred.organization_id != self.context["request"].organization.id
             or not preferred.is_approved
@@ -97,6 +152,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context["request"]
         user = getattr(request, "user", None)
+        requested_therapies = validated_data.pop("requested_therapies", [])
         value = AppointmentRequest(
             organization=request.organization,
             creator=user if user and user.is_authenticated else None,
@@ -107,6 +163,8 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             with transaction.atomic():
                 value.full_clean(exclude=("duplicate_fingerprint",))
                 value.save()
+                if requested_therapies:
+                    value.requested_therapies.set(requested_therapies)
         except IntegrityError as error:
             raise serializers.ValidationError(
                 {"detail": "An identical pending appointment request already exists."}

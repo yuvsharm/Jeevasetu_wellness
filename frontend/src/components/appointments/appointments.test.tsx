@@ -11,16 +11,13 @@ function renderWithQuery(ui: React.ReactNode) { return render(<QueryClientProvid
 describe("appointment workflow", () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 
-  it("renders the accessible four-step booking form and blocks invalid patient details", async () => {
+  it("renders the quick appointment form and blocks invalid mobile verification", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
-    renderWithQuery(<BookingForm/>);
-    expect(screen.getByRole("list", { name: "Booking progress" })).toHaveTextContent("4. Confirm");
-    fireEvent.change(screen.getByLabelText("Patient name"), { target: { value: "A" } });
+    renderWithQuery(<BookingForm quickMode />);
+    expect(screen.getByRole("heading", { name: /quick appointment/i })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "123" } });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByText(/expected string to have/i)).toBeInTheDocument();
-    expect(screen.getByText(/valid 10-digit/i)).toBeInTheDocument();
-    expect(screen.getByText("Patient information")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /send otp/i }));
+    expect(await screen.findByText(/valid 10-digit/i)).toBeInTheDocument();
   });
 
   it("renders the owner search and status filters", async () => {

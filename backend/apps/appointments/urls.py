@@ -14,6 +14,8 @@ from apps.appointments.views import (
     AppointmentStatusView,
     AppointmentUnassignmentView,
     AvailablePhysiotherapistView,
+    BookingOtpIssueView,
+    BookingOtpVerifyView,
     ConvertAppointmentRequestView,
     CustomerAppointmentCancelView,
     CustomerAppointmentChangeRequestView,
@@ -117,6 +119,8 @@ urlpatterns = [
         name="schedule-physiotherapist-visit-verification",
     ),
     path("therapies/", TherapyListView.as_view(), name="appointment-therapy-list"),
+    path("booking-otp/issue/", BookingOtpIssueView.as_view(), name="booking-otp-issue"),
+    path("booking-otp/verify/", BookingOtpVerifyView.as_view(), name="booking-otp-verify"),
     path("requests/", AppointmentCreateView.as_view(), name="appointment-create"),
     path("mine/", CustomerAppointmentListView.as_view(), name="appointment-mine"),
     path(

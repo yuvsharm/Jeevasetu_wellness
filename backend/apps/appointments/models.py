@@ -64,6 +64,9 @@ class AppointmentRequest(models.Model):
     therapy = models.ForeignKey(
         TherapyOption, on_delete=models.PROTECT, related_name="appointment_requests"
     )
+    requested_therapies = models.ManyToManyField(
+        TherapyOption, related_name="multi_therapy_requests", blank=True
+    )
     preferred_practitioner = models.ForeignKey(
         "practitioners.PractitionerProfile",
         on_delete=models.PROTECT,
@@ -148,6 +151,27 @@ class AppointmentRequest(models.Model):
             )
         )
         return hashlib.sha256(value.encode()).hexdigest()
+
+
+class BookingPhoneVerification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "tenancy.Organization", on_delete=models.PROTECT, related_name="booking_phone_verifications"
+    )
+    mobile_number = models.CharField(
+        max_length=10,
+        validators=[RegexValidator(r"^[6-9]\d{9}$", "Enter a valid 10-digit Indian mobile number.")],
+    )
+    otp_hash = models.CharField(max_length=255)
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    failed_attempt_count = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=5)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("organization", "mobile_number", "created_at"), name="appt_booking_otp_lookup_idx")]
 
 
 class ClinicOperatingHours(models.Model):

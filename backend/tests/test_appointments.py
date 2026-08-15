@@ -45,7 +45,7 @@ def payload(therapy):
         "email": "asha@example.com",
         "session_preference": "SINGLE",
         "preferred_date": str(timezone.localdate() + timedelta(days=2)),
-        "preferred_time": "10:30",
+        "preferred_time": "10:00",
         "problem_description": "Persistent lower back discomfort.",
         "pain_area": "Lower back",
         "problem_duration": "Three weeks",
@@ -193,3 +193,35 @@ def test_server_rejects_past_date_and_cross_tenant_therapy(api_client):
     assert response.status_code == 400
     assert "preferred_date" in response.data and "therapy" in response.data
     assert other_org != organization
+
+
+def test_public_create_accepts_requested_therapies_and_validates_slot(api_client):
+    organization, _, therapy = setup_identity(Role.CUSTOMER)
+    secondary = TherapyOption.objects.create(
+        organization=organization, name="Kati Basti", slug="kati-basti"
+    )
+    tertiary = TherapyOption.objects.create(
+        organization=organization, name="Nasya", slug="nasya"
+    )
+
+    valid = payload(therapy)
+    valid["requested_therapies"] = [str(secondary.id), str(tertiary.id)]
+    valid["preferred_time"] = "10:00"
+    response = api_client.post(
+        reverse("appointment-create"), valid, format="json", **tenant(organization.slug)
+    )
+    assert response.status_code == 201
+    request = AppointmentRequest.objects.get(pk=response.data["id"])
+    assert set(str(item.id) for item in request.requested_therapies.all()) == {
+        str(secondary.id),
+        str(tertiary.id),
+    }
+
+    invalid = payload(therapy)
+    invalid["requested_therapies"] = [str(secondary.id)]
+    invalid["preferred_time"] = "19:00"
+    invalid_response = api_client.post(
+        reverse("appointment-create"), invalid, format="json", **tenant(organization.slug)
+    )
+    assert invalid_response.status_code == 400
+    assert "preferred_time" in invalid_response.data
