@@ -58,9 +58,12 @@ const getDefaults = (initialTherapy = "") => ({
 
 export function BookingForm({ initialTherapy = "", quickMode = false }: { initialTherapy?: string; quickMode?: boolean }) {
   const [step, setStep] = useState(0);
+  const [quickStep, setQuickStep] = useState(0); // 0: patient info, 1: OTP, 2: services, 3: review
   const [submitted, setSubmitted] = useState<AppointmentRequest | null>(null);
-  const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [otpVerificationId, setOtpVerificationId] = useState("");
+  const [otpVerificationToken, setOtpVerificationToken] = useState("");
+  const [verifiedMobile, setVerifiedMobile] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpError, setOtpError] = useState("");
   const [selectedTherapies, setSelectedTherapies] = useState<string[]>(initialTherapy ? [initialTherapy] : []);
@@ -70,12 +73,49 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   const practitionerQuery = useQuery({ queryKey: ["public-practitioners"], queryFn: () => requestJson<PublicPractitioner[]>("/api/practitioners/public") });
 
   const submit = useMutation({
-    mutationFn: (values: AppointmentFormValues) => requestJson<AppointmentRequest>("/api/appointment-requests", { method: "POST", body: JSON.stringify(values) }),
+    mutationFn: (values: AppointmentFormValues & { booking_verification_token?: string }) => requestJson<AppointmentRequest>(quickMode ? "/api/quick-appointment-requests" : "/api/appointment-requests", { method: "POST", body: JSON.stringify(values) }),
     onSuccess: setSubmitted,
     onError: (error) => {
       if (error instanceof ClientApiError && error.fieldErrors) {
         Object.entries(error.fieldErrors).forEach(([field, message]) => form.setError(field as keyof AppointmentFormValues, { message }));
       }
+    },
+  });
+
+  const issueOtp = useMutation({
+    mutationFn: (mobile_number: string) => requestJson<{ verification_id: string }>("/api/booking-otp/issue", {
+      method: "POST",
+      body: JSON.stringify({ mobile_number }),
+    }),
+    onSuccess: (result) => {
+      setOtpVerificationId(result.verification_id);
+      setOtpVerificationToken("");
+      setVerifiedMobile("");
+      setOtpVerified(false);
+      setOtpCode("");
+      setOtpError("");
+    },
+    onError: (error) => setOtpError(error instanceof Error ? error.message : "OTP could not be sent."),
+  });
+
+  const verifyOtp = useMutation({
+    mutationFn: (values: { mobile_number: string; verification_id: string; otp: string }) =>
+      requestJson<{ token: string }>("/api/booking-otp/verify", {
+        method: "POST",
+        body: JSON.stringify(values),
+      }),
+    onSuccess: (result) => {
+      const mobile = form.getValues("mobile_number");
+      setOtpVerificationToken(result.token);
+      setVerifiedMobile(mobile);
+      setOtpVerified(true);
+      setOtpError("");
+    },
+    onError: (error) => {
+      setOtpVerificationToken("");
+      setVerifiedMobile("");
+      setOtpVerified(false);
+      setOtpError(error instanceof Error ? error.message : "The OTP is invalid.");
     },
   });
 
@@ -127,10 +167,23 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
 
   if (quickMode) {
     const therapyOptions = therapyQuery.data ?? [];
-    const primaryTherapyId = initialTherapy || selectedTherapies[0] || therapyOptions[0]?.id || "";
 
     const handleSubmitQuick = () => {
-      const mobile_number = form.getValues("mobile_number");
+      const formValues = form.getValues();
+      const mobile_number = formValues.mobile_number;
+
+      if (!formValues.patient_name?.trim()) {
+        setOtpError("Patient name is required.");
+        return;
+      }
+      if (!formValues.age || formValues.age < 1 || formValues.age > 120) {
+        setOtpError("Enter a valid age between 1 and 120.");
+        return;
+      }
+      if (!formValues.gender || formValues.gender === "PREFER_NOT_TO_SAY") {
+        setOtpError("Please select your gender.");
+        return;
+      }
       if (!/^[6-9]\d{9}$/.test(mobile_number)) {
         setOtpError("Enter a valid 10-digit Indian mobile number.");
         return;
@@ -139,154 +192,324 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
         setOtpError("Please verify your mobile number before submitting the request.");
         return;
       }
+      if (!otpVerificationToken || verifiedMobile !== mobile_number) {
+        setOtpError("Please verify your current mobile number again.");
+        return;
+      }
       if (!selectedTherapies.length) {
         setOtpError("Select at least one therapy to continue.");
         return;
       }
-      if (!form.getValues("preferred_date") || !form.getValues("preferred_time")) {
+      if (!formValues.preferred_date || !formValues.preferred_time) {
         setOtpError("Choose a preferred date and time before submitting.");
         return;
       }
 
-      const payload = {
-        ...getDefaults(primaryTherapyId),
-        ...form.getValues(),
-        patient_name: "Quick Appointment Guest",
-        age: 30,
-        gender: "PREFER_NOT_TO_SAY",
+      // Build payload with ACTUAL customer input, not placeholders
+      const payload: AppointmentFormValues & { requested_therapies?: string[]; booking_verification_token: string } = {
+        patient_name: formValues.patient_name.trim(),
+        age: formValues.age,
+        gender: formValues.gender,
         mobile_number,
-        therapy: primaryTherapyId,
-        session_preference: "SINGLE",
-        preferred_practitioner: "",
-        problem_description: form.getValues("problem_description") || "Quick appointment request from public booking flow.",
-        pain_area: form.getValues("pain_area") || "General wellness consultation",
-        problem_duration: form.getValues("problem_duration") || "Not specified",
-        address: form.getValues("address") || "Meerut",
-        city: form.getValues("city") || "Meerut",
-        pin_code: form.getValues("pin_code") || "250001",
-        landmark: form.getValues("landmark") || "Near local landmark",
-        google_map_link: form.getValues("google_map_link") || "",
+        alternate_mobile: "",
+        email: formValues.email || "",
+        therapy: selectedTherapies[0] || initialTherapy,
         requested_therapies: selectedTherapies,
-      } as AppointmentFormValues & { requested_therapies?: string[] };
+        session_preference: "SINGLE",
+        preferred_date: formValues.preferred_date,
+        preferred_time: formValues.preferred_time,
+        preferred_practitioner: "",
+        problem_description: formValues.problem_description || "Quick appointment request from public booking flow.",
+        pain_area: formValues.pain_area || "General wellness consultation",
+        problem_duration: formValues.problem_duration || "Not specified",
+        doctor_reference: "",
+        address: formValues.address || "Meerut",
+        city: formValues.city || "Meerut",
+        pin_code: formValues.pin_code || "250001",
+        landmark: formValues.landmark || "Near local landmark",
+        google_map_link: formValues.google_map_link || "",
+        booking_verification_token: otpVerificationToken,
+      };
 
-      submit.mutate(payload as AppointmentFormValues);
+      submit.mutate(payload);
     };
 
     return (
-      <form className="card p-5 sm:p-8" noValidate onSubmit={(event) => { event.preventDefault(); handleSubmitQuick(); }}>
+      <form className="card p-5 sm:p-8" noValidate onSubmit={(event) => { event.preventDefault(); if (quickStep === 3) handleSubmitQuick(); }}>
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
             <h2 className="font-serif text-3xl text-[#103c27]">Quick Appointment</h2>
-            <p className="mt-3 text-[#5b6c63]">Verify your mobile and choose the service.</p>
+            <p className="mt-3 text-[#5b6c63]">Book your wellness session in just a few steps.</p>
           </div>
-          <span className="rounded-full bg-[#edf7ef] px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-[#0b6b3a]">1-minute request</span>
+          <span className="rounded-full bg-[#edf7ef] px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-[#0b6b3a]">4-step booking</span>
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <label className="grid gap-2 font-semibold text-[#163c2a]">
-            Mobile number
-            <input
-              type="tel"
-              value={form.watch("mobile_number")}
-              onChange={(event) => {
-                const cleaned = event.target.value.replace(/\D/g, "").slice(0, 10);
-                form.setValue("mobile_number", cleaned, { shouldValidate: true });
-                setOtpSent(false);
-                setOtpVerified(false);
-                setOtpCode("");
-                setOtpError("");
-              }}
-              className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal"
-              placeholder="9876543210"
-            />
-          </label>
-          <button type="button" onClick={() => {
-            const mobile_number = form.getValues("mobile_number");
-            if (!/^[6-9]\d{9}$/.test(mobile_number)) {
-              setOtpError("Enter a valid 10-digit Indian mobile number.");
-              return;
-            }
-            setOtpError("");
-            setOtpSent(true);
-          }} className="button-secondary self-end">{otpSent ? "Resend OTP" : "Send OTP"}</button>
-        </div>
+        <ol className="mb-8 grid grid-cols-4 gap-2" aria-label="Booking progress">
+          {["Your Info", "Mobile OTP", "Services", "Review"].map((label, index) => (
+            <li key={label} className={`rounded-full px-2 py-2 text-center text-xs font-bold ${index === quickStep ? "bg-[#0b6b3a] text-white" : index < quickStep ? "bg-emerald-200 text-[#0b6b3a]" : "bg-[#edf7ef] text-[#0b6b3a]"}`}>
+              {index + 1}. {label}
+            </li>
+          ))}
+        </ol>
 
-        {otpError && <p className="mt-3 text-sm text-red-700" role="alert">{otpError}</p>}
-
-        {otpSent && (
-          <div className="mt-5 grid gap-5 sm:grid-cols-[minmax(0,1fr)_auto]">
+        {/* Step 0: Patient Information */}
+        {quickStep === 0 && (
+          <fieldset className="grid gap-5 sm:grid-cols-2">
+            <legend className="mb-6 font-serif text-3xl text-[#103c27]">Your information</legend>
+            {field("patient_name")}
+            {field("age", "number")}
             <label className="grid gap-2 font-semibold text-[#163c2a]">
-              Enter OTP
+              Gender
+              <select {...form.register("gender")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal">
+                <option value="">Select gender</option>
+                <option value="FEMALE">Female</option>
+                <option value="MALE">Male</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </label>
+            <label className="grid gap-2 font-semibold text-[#163c2a]">
+              Mobile number
               <input
-                type="text"
-                inputMode="numeric"
-                pattern="\\d{6}"
-                maxLength={6}
-                value={otpCode}
-                onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-mono text-lg tracking-[0.3em]"
-                placeholder="123456"
+                type="tel"
+                value={form.watch("mobile_number")}
+                onChange={(event) => {
+                  const mobile = event.target.value.replace(/\D/g, "").slice(0, 10);
+                  form.setValue("mobile_number", mobile, { shouldValidate: true });
+                  if (mobile !== verifiedMobile) {
+                    setOtpVerificationId("");
+                    setOtpVerificationToken("");
+                    setVerifiedMobile("");
+                    setOtpVerified(false);
+                    setOtpCode("");
+                  }
+                }}
+                className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal"
               />
             </label>
-            <button type="button" onClick={() => {
-              if (otpCode.length !== 6) {
-                setOtpError("Enter the 6-digit OTP sent to your mobile number.");
-                return;
-              }
-              setOtpVerified(true);
-              setOtpError("");
-            }} className="button-primary self-end">Verify OTP</button>
-          </div>
+          </fieldset>
         )}
 
-        {otpVerified && (
-          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-            Mobile verified. Your visit request can now be submitted.
-          </div>
+        {/* Step 1: Mobile OTP Verification */}
+        {quickStep === 1 && (
+          <fieldset className="grid gap-5">
+            <legend className="mb-6 font-serif text-3xl text-[#103c27]">Verify mobile</legend>
+            <p className="text-[#5b6c63]">We&apos;ll send a verification code to <strong>{form.watch("mobile_number") || "your phone"}</strong></p>
+            <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="grid gap-2 font-semibold text-[#163c2a]">
+                6-digit OTP
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="\\d{6}"
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-mono text-lg tracking-[0.3em]"
+                  placeholder="123456"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (otpCode.length !== 6) {
+                    setOtpError("Enter the 6-digit OTP.");
+                    return;
+                  }
+                  if (!otpVerificationId) {
+                    setOtpError("Send an OTP before verification.");
+                    return;
+                  }
+                  verifyOtp.mutate({
+                    mobile_number: form.getValues("mobile_number"),
+                    verification_id: otpVerificationId,
+                    otp: otpCode,
+                  });
+                }}
+                disabled={verifyOtp.isPending}
+                className="button-primary self-end disabled:opacity-50"
+              >
+                {verifyOtp.isPending ? "Verifying…" : "Verify OTP"}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const mobile = form.getValues("mobile_number");
+                if (!/^[6-9]\d{9}$/.test(mobile)) {
+                  setOtpError("Enter a valid 10-digit Indian mobile number.");
+                  return;
+                }
+                issueOtp.mutate(mobile);
+              }}
+              disabled={issueOtp.isPending}
+              className="text-sm text-[#0b6b3a] underline"
+            >
+              {issueOtp.isPending ? "Sending…" : otpVerificationId ? "Resend OTP" : "Send OTP"}
+            </button>
+          </fieldset>
         )}
 
-        <div className="mt-8 grid gap-5 sm:grid-cols-2">
-          <label className="grid gap-2 font-semibold text-[#163c2a]">
-            Preferred date
-            <input type="date" {...form.register("preferred_date")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
-          </label>
-          <label className="grid gap-2 font-semibold text-[#163c2a]">
-            Preferred time
-            <input type="time" {...form.register("preferred_time")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
-          </label>
-        </div>
+        {/* Step 2: Service Details */}
+        {quickStep === 2 && (
+          <fieldset className="grid gap-5 sm:grid-cols-2">
+            <legend className="mb-6 font-serif text-3xl text-[#103c27]">Service details</legend>
+            <label className="grid gap-2 font-semibold text-[#163c2a]">
+              Preferred date
+              <input type="date" {...form.register("preferred_date")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
+            </label>
+            <label className="grid gap-2 font-semibold text-[#163c2a]">
+              Preferred time
+              <input type="time" {...form.register("preferred_time")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
+            </label>
+            <div className="sm:col-span-2">
+              <p className="mb-4 font-semibold text-[#163c2a]">Preferred therapies</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {therapyOptions.map((item) => {
+                  const isSelected = selectedTherapies.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTherapies((current) =>
+                          current.includes(item.id)
+                            ? current.filter((value) => value !== item.id)
+                            : [...current, item.id]
+                        );
+                      }}
+                      className={`rounded-2xl border px-4 py-3 text-left transition ${
+                        isSelected ? "border-[#0b6b3a] bg-[#edf7ef] text-[#103c27]" : "border-[#d7e3dc] bg-white text-[#163c2a]"
+                      }`}
+                    >
+                      <span className="flex items-center justify-between gap-3">
+                        <span className="font-semibold">{item.name}</span>
+                        <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-xs ${isSelected ? "border-[#0b6b3a] bg-[#0b6b3a] text-white" : "border-[#8ca99d] text-[#0b6b3a]"}`} aria-hidden="true">
+                          {isSelected ? "✓" : "+"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </fieldset>
+        )}
 
-        <div className="mt-8">
-          <p className="mb-4 font-semibold text-[#163c2a]">Preferred therapies</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {therapyOptions.map((item) => {
-              const isSelected = selectedTherapies.includes(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedTherapies((current) => current.includes(item.id) ? current.filter((value) => value !== item.id) : [...current, item.id]);
-                  }}
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${isSelected ? "border-[#0b6b3a] bg-[#edf7ef] text-[#103c27]" : "border-[#d7e3dc] bg-white text-[#163c2a]"}`}
-                >
-                  <span className="flex items-center justify-between gap-3">
-                    <span className="font-semibold">{item.name}</span>
-                    <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-xs ${isSelected ? "border-[#0b6b3a] bg-[#0b6b3a] text-white" : "border-[#8ca99d] text-[#0b6b3a]"}`} aria-hidden="true">{isSelected ? "✓" : "+"}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        {/* Step 3: Review */}
+        {quickStep === 3 && (
+          <section aria-labelledby="review-heading">
+            <h2 id="review-heading" className="font-serif text-3xl text-[#103c27]">Review your request</h2>
+            <dl className="mt-6 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Name</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{form.watch("patient_name")}</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Age</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{form.watch("age")} years</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Gender</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{form.watch("gender")}</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Mobile</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{verifiedMobile} ✓</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Date</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{form.watch("preferred_date") ? new Date(form.watch("preferred_date")).toLocaleDateString() : "Not selected"}</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Time</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">{form.watch("preferred_time")}</dd>
+              </div>
+              <div className="rounded-xl bg-[#edf7ef] p-4 sm:col-span-2">
+                <dt className="text-xs font-bold uppercase text-[#0b6b3a]">Therapies</dt>
+                <dd className="mt-1 break-words text-[#163c2a]">
+                  {selectedTherapies.map((id) => therapyOptions.find((t) => t.id === id)?.name).join(", ") || "Not selected"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        )}
 
-        <div className="mt-8 flex justify-end">
-          <button type="submit" disabled={submit.isPending || !otpVerified} className="button-primary disabled:cursor-not-allowed disabled:opacity-50">
-            {submit.isPending ? "Submitting…" : "Submit request"}
-          </button>
-        </div>
-
+        {otpError && <p className="mt-3 text-sm text-red-700" role="alert">{otpError}</p>}
         {submit.isError && <p className="mt-5 text-red-700" role="alert">{submit.error instanceof Error ? submit.error.message : "Request could not be submitted."}</p>}
+
+        {/* Navigation Buttons */}
+        <div className="mt-8 flex justify-between gap-3">
+          {quickStep > 0 ? (
+            <button type="button" onClick={() => setQuickStep((value) => value - 1)} className="button-secondary">
+              Back
+            </button>
+          ) : (
+            <span />
+          )}
+          {quickStep < 3 ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (quickStep === 0) {
+                  const values = form.getValues();
+                  if (!values.patient_name?.trim()) {
+                    setOtpError("Patient name is required.");
+                    return;
+                  }
+                  if (!values.age || values.age < 1 || values.age > 120) {
+                    setOtpError("Enter a valid age.");
+                    return;
+                  }
+                  if (!values.gender || values.gender === "PREFER_NOT_TO_SAY") {
+                    setOtpError("Please select your gender.");
+                    return;
+                  }
+                  const mobile = values.mobile_number;
+                  if (!/^[6-9]\d{9}$/.test(mobile)) {
+                    setOtpError("Enter a valid 10-digit mobile number.");
+                    return;
+                  }
+                  setOtpError("");
+                  setQuickStep(1);
+                  return;
+                }
+                if (quickStep === 1) {
+                  if (!otpVerified) {
+                    setOtpError("Please verify your mobile number.");
+                    return;
+                  }
+                  setOtpError("");
+                  setQuickStep(2);
+                  return;
+                }
+                if (quickStep === 2) {
+                  const values = form.getValues();
+                  if (!values.preferred_date || !values.preferred_time) {
+                    setOtpError("Select date and time.");
+                    return;
+                  }
+                  if (!selectedTherapies.length) {
+                    setOtpError("Select at least one therapy.");
+                    return;
+                  }
+                  setOtpError("");
+                  setQuickStep(3);
+                }
+              }}
+              className="button-primary"
+            >
+              Continue
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={submit.isPending}
+              className="button-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submit.isPending ? "Submitting…" : "Confirm & Submit"}
+            </button>
+          )}
+        </div>
       </form>
     );
   }

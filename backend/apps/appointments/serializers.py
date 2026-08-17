@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -5,6 +6,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.models import Role, RoleAssignment
+from apps.appointments.booking_verification import resolve_booking_verification
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
@@ -45,6 +47,7 @@ class BookingOtpVerifySerializer(serializers.Serializer):
 
 class AppointmentRequestSerializer(serializers.ModelSerializer):
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
+    booking_verification_token = serializers.CharField(write_only=True, required=False)
     requested_therapies = serializers.PrimaryKeyRelatedField(
         queryset=TherapyOption.objects.all(), many=True, required=False, allow_empty=True
     )
@@ -55,6 +58,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "id",
             "therapy",
             "requested_therapies",
+            "booking_verification_token",
             "therapy_name",
             "preferred_practitioner",
             "patient_name",
@@ -130,6 +134,22 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        token = attrs.get("booking_verification_token")
+        if self.context.get("require_booking_verification"):
+            if not token:
+                raise serializers.ValidationError(
+                    {"booking_verification_token": "Please verify your mobile number before booking."}
+                )
+            try:
+                resolve_booking_verification(
+                    organization=self.context["request"].organization,
+                    mobile_number=attrs.get("mobile_number"),
+                    token=token,
+                )
+            except DjangoValidationError as error:
+                raise serializers.ValidationError(
+                    {"booking_verification_token": error.messages}
+                ) from error
         preferred = attrs.get("preferred_practitioner")
         therapy = attrs.get("therapy")
         requested = list(attrs.get("requested_therapies", []))
@@ -152,6 +172,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context["request"]
         user = getattr(request, "user", None)
+        verification_token = validated_data.pop("booking_verification_token", None)
         requested_therapies = validated_data.pop("requested_therapies", [])
         value = AppointmentRequest(
             organization=request.organization,
@@ -161,10 +182,25 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
         value.duplicate_fingerprint = value.build_fingerprint()
         try:
             with transaction.atomic():
+                verification = None
+                if verification_token:
+                    verification = resolve_booking_verification(
+                        organization=request.organization,
+                        mobile_number=validated_data["mobile_number"],
+                        token=verification_token,
+                        lock=True,
+                    )
                 value.full_clean(exclude=("duplicate_fingerprint",))
                 value.save()
                 if requested_therapies:
                     value.requested_therapies.set(requested_therapies)
+                if verification:
+                    verification.consumed_at = timezone.now()
+                    verification.save(update_fields=("consumed_at",))
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(
+                {"booking_verification_token": error.messages}
+            ) from error
         except IntegrityError as error:
             raise serializers.ValidationError(
                 {"detail": "An identical pending appointment request already exists."}

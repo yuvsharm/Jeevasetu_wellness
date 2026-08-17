@@ -79,23 +79,27 @@ def issue_booking_otp(*, organization, mobile_number, client_key):
     return verification
 
 
-@transaction.atomic
 def verify_booking_otp(*, organization, verification_id, mobile_number, otp):
-    verification = BookingPhoneVerification.objects.select_for_update().filter(
-        id=verification_id, organization=organization, mobile_number=mobile_number
-    ).first()
-    if not verification or verification.consumed_at or verification.verified_at:
-        raise ValidationError("This verification request is invalid.")
-    if timezone.now() >= verification.expires_at:
-        raise ValidationError("The OTP has expired.")
-    if verification.failed_attempt_count >= verification.max_attempts:
-        raise ValidationError("Too many incorrect attempts. Request a new OTP.")
-    if not check_password(otp, verification.otp_hash):
-        verification.failed_attempt_count += 1
-        verification.save(update_fields=("failed_attempt_count",))
+    invalid_otp = False
+    with transaction.atomic():
+        verification = BookingPhoneVerification.objects.select_for_update().filter(
+            id=verification_id, organization=organization, mobile_number=mobile_number
+        ).first()
+        if not verification or verification.consumed_at or verification.verified_at:
+            raise ValidationError("This verification request is invalid.")
+        if timezone.now() >= verification.expires_at:
+            raise ValidationError("The OTP has expired.")
+        if verification.failed_attempt_count >= verification.max_attempts:
+            raise ValidationError("Too many incorrect attempts. Request a new OTP.")
+        if not check_password(otp, verification.otp_hash):
+            verification.failed_attempt_count += 1
+            verification.save(update_fields=("failed_attempt_count",))
+            invalid_otp = True
+        else:
+            verification.verified_at = timezone.now()
+            verification.save(update_fields=("verified_at",))
+    if invalid_otp:
         raise ValidationError("The OTP is invalid.")
-    verification.verified_at = timezone.now()
-    verification.save(update_fields=("verified_at",))
     return dumps({"verification_id": str(verification.id), "mobile_number": mobile_number, "organization_id": str(organization.id)}, salt=TOKEN_SALT, compress=True)
 
 
@@ -107,7 +111,14 @@ def resolve_booking_verification(*, organization, mobile_number, token, lock=Fal
     if payload.get("mobile_number") != mobile_number or payload.get("organization_id") != str(organization.id):
         raise ValidationError("Mobile verification does not match this booking.")
     queryset = BookingPhoneVerification.objects.select_for_update() if lock else BookingPhoneVerification.objects
-    verification = queryset.filter(id=payload.get("verification_id"), organization=organization, mobile_number=mobile_number, verified_at__isnull=False, consumed_at__isnull=True).first()
+    verification = queryset.filter(
+        id=payload.get("verification_id"),
+        organization=organization,
+        mobile_number=mobile_number,
+        verified_at__isnull=False,
+        consumed_at__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).first()
     if not verification:
         raise ValidationError("Please verify your mobile number again.")
     return verification

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BookingForm } from "@/components/appointments/booking-form";
@@ -15,9 +15,59 @@ describe("appointment workflow", () => {
     vi.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
     renderWithQuery(<BookingForm quickMode />);
     expect(screen.getByRole("heading", { name: /quick appointment/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Patient name"), { target: { value: "Asha Sharma" } });
+    fireEvent.change(screen.getByLabelText("Age"), { target: { value: "42" } });
+    fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "123" } });
-    fireEvent.click(screen.getByRole("button", { name: /send otp/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByText(/valid 10-digit/i)).toBeInTheDocument();
+  });
+
+  it("uses backend OTP verification and invalidates it when mobile changes", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/booking-otp/issue") {
+        return new Response(JSON.stringify({ verification_id: "verification-1" }), { status: 201 });
+      }
+      if (url === "/api/booking-otp/verify") {
+        const body = JSON.parse(String(init?.body));
+        return body.otp === "654321"
+          ? new Response(JSON.stringify({ token: "signed-token" }), { status: 200 })
+          : new Response(JSON.stringify(["The OTP is invalid."]), { status: 400 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    renderWithQuery(<BookingForm quickMode />);
+    fireEvent.change(screen.getByLabelText("Patient name"), { target: { value: "Asha Sharma" } });
+    fireEvent.change(screen.getByLabelText("Age"), { target: { value: "42" } });
+    fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
+    fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543210" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Send OTP" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/booking-otp/issue",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    fireEvent.change(screen.getByLabelText("6-digit OTP"), { target: { value: "111111" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify OTP" }));
+    expect(await screen.findByText(/OTP is invalid/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("6-digit OTP"), { target: { value: "654321" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify OTP" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/booking-otp/verify",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("Service details")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543211" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText(/verify your mobile number/i)).toBeInTheDocument();
   });
 
   it("renders the owner search and status filters", async () => {

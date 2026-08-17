@@ -99,6 +99,14 @@ class AppointmentCreateView(HasTenant, generics.CreateAPIView):
     serializer_class = AppointmentRequestSerializer
 
 
+class QuickAppointmentCreateView(AppointmentCreateView):
+    def get_serializer_context(self):
+        return {
+            **super().get_serializer_context(),
+            "require_booking_verification": True,
+        }
+
+
 class BookingOtpIssueView(HasTenant, generics.GenericAPIView):
     permission_classes = (permissions.AllowAny,)
     serializer_class = BookingOtpRequestSerializer
@@ -107,11 +115,14 @@ class BookingOtpIssueView(HasTenant, generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         mobile_number = serializer.validated_data["mobile_number"]
-        verification, delivery = issue_booking_otp_details(
-            organization=request.organization,
-            mobile_number=mobile_number,
-            client_key=request.META.get("REMOTE_ADDR", "anonymous-client"),
-        )
+        try:
+            verification, delivery = issue_booking_otp_details(
+                organization=request.organization,
+                mobile_number=mobile_number,
+                client_key=request.META.get("REMOTE_ADDR", "anonymous-client"),
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
         payload = {
             "verification_id": str(verification.id),
             "mobile_number": mobile_number,
@@ -130,12 +141,15 @@ class BookingOtpVerifyView(HasTenant, generics.GenericAPIView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        token = verify_booking_otp(
-            organization=request.organization,
-            verification_id=serializer.validated_data["verification_id"],
-            mobile_number=serializer.validated_data["mobile_number"],
-            otp=serializer.validated_data["otp"],
-        )
+        try:
+            token = verify_booking_otp(
+                organization=request.organization,
+                verification_id=serializer.validated_data["verification_id"],
+                mobile_number=serializer.validated_data["mobile_number"],
+                otp=serializer.validated_data["otp"],
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
         return Response({"token": token}, status=status.HTTP_200_OK)
 
 

@@ -31,6 +31,7 @@ from apps.appointments.views import (
     OwnerAppointmentListView,
     PhysiotherapistVisitVerificationView,
     PractitionerPaymentListView,
+    QuickAppointmentCreateView,
     OperationsPaymentView,
     PhysiotherapistWorkloadView,
     TherapyListView,
@@ -122,6 +123,7 @@ urlpatterns = [
     path("booking-otp/issue/", BookingOtpIssueView.as_view(), name="booking-otp-issue"),
     path("booking-otp/verify/", BookingOtpVerifyView.as_view(), name="booking-otp-verify"),
     path("requests/", AppointmentCreateView.as_view(), name="appointment-create"),
+    path("quick-requests/", QuickAppointmentCreateView.as_view(), name="quick-appointment-create"),
     path("mine/", CustomerAppointmentListView.as_view(), name="appointment-mine"),
     path(
         "mine/<uuid:pk>/", CustomerAppointmentDetailView.as_view(), name="appointment-mine-detail"
