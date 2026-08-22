@@ -14,7 +14,7 @@ const requestFriendly: Record<string, string> = { PENDING: "Request Received", A
 export function CustomerDashboard() {
   const session = useSession(); const qc = useQueryClient();
   const requests = useQuery({ queryKey: ["customer-requests"], queryFn: () => requestJson<AppointmentRequest[]>("/api/appointment-requests") });
-  const appointments = useQuery({ queryKey: ["customer-operational"], queryFn: () => requestJson<OperationalAppointment[]>("/api/schedule/my-appointments") });
+  const appointments = useQuery({ queryKey: ["customer-operational"], queryFn: () => requestJson<OperationalAppointment[]>("/api/schedule/my-appointments"), refetchInterval: 10_000 });
   const family = useQuery({ queryKey: ["customer-family"], queryFn: () => requestJson<Family[]>("/api/customer/family") });
   const [member, setMember] = useState({ full_name: "", age: "", gender: "FEMALE", relationship: "", relevant_details: "" });
   const addFamily = useMutation({ mutationFn: () => requestJson("/api/customer/family", { method: "POST", body: JSON.stringify({ ...member, age: Number(member.age) }) }), onSuccess: () => { setMember({ full_name: "", age: "", gender: "FEMALE", relationship: "", relevant_details: "" }); qc.invalidateQueries({ queryKey: ["customer-family"] }); } });

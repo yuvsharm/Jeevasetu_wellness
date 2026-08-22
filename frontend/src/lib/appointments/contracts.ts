@@ -27,6 +27,7 @@ export type OperationalAppointment = {
   patient_age?: number | null;
   patient_gender?: string;
   problem_description?: string;
+  requested_therapy_names?: string[];
   pain_area?: string;
   google_map_link?: string;
   physiotherapist_qualification?: string;
@@ -65,6 +66,13 @@ export type PhysiotherapistWorkload = {
   clinic: string;
   active_assignments: number;
   upcoming_assignments: number;
+  today_assignments: number;
+  qualification: string;
+  availability: "AVAILABLE" | "BUSY" | "UNAVAILABLE";
+  is_online: boolean;
+  service_areas: string[];
+  specialties: string[];
+  has_photo: boolean;
 };
 
 export type OperationalAppointmentPage = {

@@ -312,6 +312,12 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             value = self.request.query_params.get(key)
             if value:
                 queryset = queryset.filter(**{key: value})
+        assignment_status = self.request.query_params.get("assignment_status")
+        journey_status = self.request.query_params.get("journey_status")
+        if assignment_status:
+            queryset = queryset.filter(assignment_status=assignment_status)
+        if journey_status:
+            queryset = queryset.filter(journey_status=journey_status)
         search = self.request.query_params.get("search", "").strip()
         if search:
             queryset = queryset.filter(
@@ -333,6 +339,20 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             )
         elif view == "cancelled":
             queryset = queryset.filter(status=Appointment.Status.CANCELLED)
+        elif view == "pending":
+            queryset = queryset.filter(status__in=(Appointment.Status.DRAFT, Appointment.Status.PENDING_ASSIGNMENT, Appointment.Status.SCHEDULED))
+        elif view == "awaiting_therapist":
+            queryset = queryset.filter(assignment_status__in=(Appointment.AssignmentStatus.UNASSIGNED, Appointment.AssignmentStatus.PENDING))
+        elif view == "accepted":
+            queryset = queryset.filter(assignment_status=Appointment.AssignmentStatus.ACCEPTED)
+        elif view == "en_route":
+            queryset = queryset.filter(journey_status=Appointment.JourneyStatus.EN_ROUTE)
+        elif view == "arrived":
+            queryset = queryset.filter(journey_status=Appointment.JourneyStatus.ARRIVED).exclude(status=Appointment.Status.IN_PROGRESS)
+        elif view == "started":
+            queryset = queryset.filter(status=Appointment.Status.IN_PROGRESS)
+        elif view == "completed":
+            queryset = queryset.filter(status=Appointment.Status.COMPLETED)
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
         if date_from:
@@ -356,7 +376,7 @@ class AppointmentCalendarView(OperationalAppointmentListCreateView):
 class AppointmentOperationsQueueView(AppointmentCalendarView):
     def get_queryset(self):
         queryset = super().get_queryset()
-        if not self.request.query_params.get("status"):
+        if not self.request.query_params.get("status") and self.request.query_params.get("view") not in ("completed", "cancelled"):
             queryset = queryset.filter(
                 status__in=(
                     Appointment.Status.DRAFT,
@@ -552,6 +572,10 @@ class PhysiotherapistWorkloadView(OperationalScopeMixin, GenericAPIView):
                     ),
                 ),
             ),
+            today_assignments=Count(
+                "appointments",
+                filter=Q(appointments__scheduled_start__date=timezone.localdate()),
+            ),
         )
         return Response(
             [
@@ -561,6 +585,13 @@ class PhysiotherapistWorkloadView(OperationalScopeMixin, GenericAPIView):
                     "clinic": profile.clinic.name,
                     "active_assignments": profile.active_assignments,
                     "upcoming_assignments": profile.upcoming_assignments,
+                    "today_assignments": profile.today_assignments,
+                    "qualification": profile.qualification,
+                    "availability": profile.availability,
+                    "is_online": profile.is_online,
+                    "service_areas": list(profile.service_areas.filter(is_active=True).values_list("name", flat=True)),
+                    "specialties": list(profile.specializations.filter(is_active=True).values_list("name", flat=True)),
+                    "has_photo": bool(profile.profile_photo),
                 }
                 for profile in profiles
             ]
@@ -801,9 +832,8 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
     serializer_class = CustomerAppointmentSerializer
 
     def get_queryset(self):
-        return Appointment.objects.filter(
-            organization=self.request.organization,
-            originating_request__creator=self.request.user,
+        return Appointment.objects.filter(organization=self.request.organization).filter(
+            Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)
         ).select_related("clinic", "patient", "therapy", "physiotherapist__user")
 
 
@@ -812,23 +842,21 @@ class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView
     serializer_class = AppointmentChangeRequestSerializer
 
     def get_queryset(self):
-        return AppointmentChangeRequest.objects.filter(
-            organization=self.request.organization,
-            appointment__originating_request__creator=self.request.user,
+        return AppointmentChangeRequest.objects.filter(organization=self.request.organization).filter(
+            Q(appointment__originating_request__creator=self.request.user) | Q(appointment__patient__user=self.request.user)
         ).select_related("appointment")
 
     def perform_create(self, serializer):
         appointment = Appointment.objects.filter(
             pk=self.kwargs["pk"],
             organization=self.request.organization,
-            originating_request__creator=self.request.user,
             status__in=(
                 Appointment.Status.DRAFT,
                 Appointment.Status.PENDING_ASSIGNMENT,
                 Appointment.Status.SCHEDULED,
                 Appointment.Status.CONFIRMED,
             ),
-        ).first()
+        ).filter(Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)).first()
         if appointment is None:
             raise NotFound("Appointment change requests are unavailable.")
         try:
@@ -858,8 +886,8 @@ class CustomerVisitVerificationView(HasTenant, GenericAPIView):
             Appointment.objects.filter(
                 pk=pk,
                 organization=request.organization,
-                originating_request__creator=request.user,
             )
+            .filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user))
             .select_related(
                 "organization",
                 "clinic",
@@ -980,7 +1008,7 @@ class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
     serializer_class = AppointmentRatingSerializer
 
     def post(self, request, pk):
-        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, originating_request__creator=request.user, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user)).first()
         if appointment is None:
             raise NotFound("Rating is unavailable.")
         if AppointmentRating.objects.filter(appointment=appointment).exists():

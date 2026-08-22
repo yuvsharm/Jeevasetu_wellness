@@ -348,6 +348,7 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
     google_map_link = serializers.CharField(source="originating_request.google_map_link", read_only=True, default="")
     rating_stars = serializers.IntegerField(source="rating.stars", read_only=True, default=None)
     rating_comment = serializers.CharField(source="rating.comment", read_only=True, default="")
+    requested_therapy_names = serializers.SerializerMethodField()
 
     class Meta(AppointmentListSerializer.Meta):
         fields = AppointmentListSerializer.Meta.fields + (
@@ -361,6 +362,7 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "patient_age",
             "patient_gender",
             "problem_description",
+            "requested_therapy_names",
             "pain_area",
             "google_map_link",
             "rating_stars",
@@ -378,6 +380,12 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
         if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
             return "Service request"
         return value.patient.full_name
+
+    def get_requested_therapy_names(self, value):
+        source = value.originating_request
+        if source is None:
+            return [value.therapy.name]
+        return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -550,7 +558,11 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context["request"]
         therapy = validated_data["therapy"]
-        validated_data.setdefault("duration_minutes", therapy.default_duration_minutes or 60)
+        source = validated_data.get("originating_request")
+        validated_data.setdefault(
+            "duration_minutes",
+            source.requested_duration_minutes if source else (therapy.default_duration_minutes or 60),
+        )
         appointment = Appointment(
             organization=request.organization,
             created_by=request.user,

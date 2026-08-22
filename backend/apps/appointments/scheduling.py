@@ -240,6 +240,8 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
     appointment.assignment_status = (
         Appointment.AssignmentStatus.ACCEPTED if accept else Appointment.AssignmentStatus.REJECTED
     )
+    if accept and appointment.status == Appointment.Status.SCHEDULED:
+        appointment.status = Appointment.Status.CONFIRMED
     appointment.assignment_responded_at = timezone.now()
     appointment.assignment_rejection_reason = "" if accept else reason.strip()[:255]
     appointment.updated_by = actor
@@ -248,6 +250,7 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
             "assignment_status",
             "assignment_responded_at",
             "assignment_rejection_reason",
+            "status",
             "updated_by",
             "updated_at",
         )
