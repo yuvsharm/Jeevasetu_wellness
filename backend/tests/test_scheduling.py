@@ -433,7 +433,7 @@ def test_physiotherapist_only_sees_assigned_and_allowed_transitions(api_client):
 
 def test_customer_sees_safe_explicitly_linked_fields_only(api_client):
     values = setup_domain("schedule-customer")
-    organization, clinic, owner, _, _, physio, customer, patient, address, therapy = values
+    organization, clinic, owner, _, physio_user, physio, customer, patient, address, therapy = values
     api_client.force_authenticate(owner)
     api_client.post(
         reverse("schedule-list"),
@@ -441,6 +441,15 @@ def test_customer_sees_safe_explicitly_linked_fields_only(api_client):
         format="json",
         **headers(organization),
     )
+    appointment = Appointment.objects.get(organization=organization)
+    api_client.force_authenticate(physio_user)
+    accepted = api_client.post(
+        reverse("schedule-assignment-response", args=[appointment.id]),
+        {"accept": True},
+        format="json",
+        **headers(organization),
+    )
+    assert accepted.status_code == 200
     api_client.force_authenticate(customer)
     response = api_client.get(reverse("schedule-customer-me"), **headers(organization))
     assert response.status_code == 200 and len(response.data) == 1

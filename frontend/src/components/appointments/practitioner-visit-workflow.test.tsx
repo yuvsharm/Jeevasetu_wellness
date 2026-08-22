@@ -9,8 +9,8 @@ function mount() { return render(<QueryClientProvider client={new QueryClient({ 
 it("shows a minimal offer and requires a structured decline reason", async () => {
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify(offer), { status: 200 }) : new Response(JSON.stringify([offer]), { status: 200 }));
   mount(); expect(await screen.findByText("New Service Request")).toBeInTheDocument(); expect(screen.queryByText(/mobile/i)).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Decline" }));
+  await userEvent.click(screen.getByRole("button", { name: "Reject" }));
   await userEvent.selectOptions(screen.getByRole("combobox", { name: "Reason" }), "too far");
-  await userEvent.click(screen.getByRole("button", { name: "Confirm decline" }));
+  await userEvent.click(screen.getByRole("button", { name: "Confirm rejection" }));
   expect(fetchMock).toHaveBeenCalledWith("/api/schedule/visit-1/assignment-response", expect.objectContaining({ body: JSON.stringify({ id: "visit-1", accept: false, reason: "too far" }) }));
 });
