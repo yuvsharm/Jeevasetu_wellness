@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.core.cache import cache
 from django.core.signing import dumps
 from django.urls import reverse
 from django.utils import timezone
@@ -9,6 +10,7 @@ from apps.accounts.models import Role, RoleAssignment, User
 from apps.appointments.booking_verification import TOKEN_SALT
 from apps.appointments.models import AppointmentRequest, BookingPhoneVerification, TherapyOption
 from apps.tenancy.models import Organization, OrganizationMembership
+from apps.patients.models import CustomerFamilyMember
 
 pytestmark = pytest.mark.django_db
 
@@ -157,13 +159,50 @@ def test_quick_booking_rejects_unverified_and_expired_verification(api_client):
         compress=True,
     )
     assert api_client.post(url, data, format="json", **headers).status_code == 400
-
     verification, token = issue_and_verify(api_client, organization, "9876543212")
     verification.expires_at = timezone.now() - timedelta(seconds=1)
     verification.save(update_fields=("expires_at",))
     data.update(mobile_number="9876543212", booking_verification_token=token)
     assert api_client.post(url, data, format="json", **headers).status_code == 400
 
+
+def test_customer_otp_login_creates_normal_customer_session_and_cannot_be_reused(api_client):
+    organization, _, _ = setup_identity(Role.OWNER)
+    issued = api_client.post(reverse("booking-otp-issue"), {"mobile_number": "9876543210"}, format="json", **tenant(organization.slug))
+    body = {"verification_id": issued.data["verification_id"], "mobile_number": "9876543210", "otp": issued.data["otp"], "first_name": "Asha"}
+    logged_in = api_client.post(reverse("auth-customer-otp-login"), body, format="json", **tenant(organization.slug))
+    assert logged_in.status_code == 200
+    customer = User.objects.get(mobile_number="+919876543210")
+    assert RoleAssignment.objects.filter(user=customer, organization=organization, role=Role.CUSTOMER, is_active=True).exists()
+    assert BookingPhoneVerification.objects.get(pk=issued.data["verification_id"]).consumed_at is not None
+    assert api_client.post(reverse("auth-customer-otp-login"), body, format="json", **tenant(organization.slug)).status_code == 400
+
+
+def test_multi_therapy_duration_and_closing_time_are_enforced(api_client):
+    organization, _, therapy = setup_identity(Role.CUSTOMER)
+    second = TherapyOption.objects.create(organization=organization, name="Nasya", slug="nasya")
+    verification, token = issue_and_verify(api_client, organization)
+    data = payload(therapy) | {"requested_therapies": [str(second.id)], "preferred_time": "16:30", "booking_verification_token": token}
+    created = api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug))
+    assert created.status_code == 201
+    assert created.data["requested_duration_minutes"] == 90
+    cache.clear()
+    _, later_token = issue_and_verify(api_client, organization)
+    data |= {"preferred_time": "17:00", "booking_verification_token": later_token}
+    assert api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug)).status_code == 400
+
+
+def test_customer_cannot_book_for_another_customers_family_member(api_client):
+    organization, owner, therapy = setup_identity(Role.CUSTOMER)
+    other = User.objects.create_user(username="other-customer", password="Safe-test-password-1")
+    other_membership = OrganizationMembership.objects.create(user=other, organization=organization)
+    RoleAssignment.objects.create(user=other, organization=organization, organization_membership=other_membership, role=Role.CUSTOMER)
+    family = CustomerFamilyMember.objects.create(organization=organization, customer=other, full_name="Other Family", age=30, gender="OTHER", relationship="Sibling")
+    api_client.force_authenticate(owner)
+    data = payload(therapy) | {"family_member": str(family.id)}
+    response = api_client.post(reverse("appointment-create"), data, format="json", **tenant(organization.slug))
+    assert response.status_code == 400
+    assert "family_member" in response.data
 
 def test_failed_quick_booking_does_not_consume_verification(api_client):
     organization, _, therapy = setup_identity(Role.CUSTOMER)

@@ -6,7 +6,14 @@ from rest_framework import serializers
 
 from apps.accounts.models import Role
 from apps.accounts.role_policy import actor_role_scope
-from apps.patients.models import CaregiverRelationship, PatientAddress, PatientProfile
+from apps.patients.models import CaregiverRelationship, CustomerFamilyMember, PatientAddress, PatientProfile
+
+
+class CustomerFamilyMemberSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerFamilyMember
+        fields = ("id", "full_name", "age", "gender", "relationship", "relevant_details", "created_at")
+        read_only_fields = ("id", "created_at")
 
 
 def normalize_mobile(value):

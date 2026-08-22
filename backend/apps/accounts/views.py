@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
@@ -13,11 +14,12 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.audit import record_auth_event
-from apps.accounts.models import AuthenticationAuditEvent, User
+from apps.accounts.models import AuthenticationAuditEvent, Role, RoleAssignment, User
 from apps.accounts.permissions import IsEnabledAuthenticated
 from apps.accounts.serializers import (
     DetailResponseSerializer,
     LoginSerializer,
+    CustomerOtpLoginSerializer,
     LogoutSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -36,6 +38,7 @@ from apps.accounts.services import (
 )
 from apps.accounts.validators import normalize_email_address, normalize_mobile_number
 from apps.tenancy.models import OrganizationMembership
+from apps.appointments.booking_verification import resolve_booking_verification, verify_booking_otp
 
 
 def eligible_user(identifier):
@@ -114,6 +117,76 @@ class LoginView(APIView):
                 "user": UserSummarySerializer(user).data,
             }
         )
+
+
+class CustomerOtpLoginView(APIView):
+    """Verify through the booking OTP provider and issue the normal JWT session."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_scope = "auth_login"
+
+    @transaction.atomic
+    def post(self, request):
+        if getattr(request, "organization", None) is None:
+            return Response({"detail": "Organization context is unavailable."}, status=404)
+        serializer = CustomerOtpLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            token = verify_booking_otp(
+                organization=request.organization,
+                verification_id=data["verification_id"],
+                mobile_number=data["mobile_number"],
+                otp=data["otp"],
+            )
+            verification = resolve_booking_verification(
+                organization=request.organization,
+                mobile_number=data["mobile_number"],
+                token=token,
+                lock=True,
+            )
+        except Exception as error:
+            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+        mobile = f"+91{data['mobile_number']}"
+        user = User.objects.select_for_update().filter(mobile_number=mobile).first()
+        if user is None:
+            user = User.objects.create_user(
+                username=None,
+                mobile_number=mobile,
+                first_name=data.get("first_name", "").strip(),
+                last_name=data.get("last_name", "").strip(),
+            )
+            user.set_unusable_password()
+            user.save(update_fields=("password",))
+        if not user.is_active or not user.is_enabled:
+            raise ValidationError("This customer account is unavailable.")
+        if user.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists():
+            raise ValidationError("Staff accounts must use the staff sign-in flow.")
+        membership, _ = OrganizationMembership.objects.get_or_create(
+            user=user, organization=request.organization
+        )
+        if not membership.is_active:
+            raise ValidationError("This customer account is unavailable.")
+        RoleAssignment.objects.get_or_create(
+            user=user,
+            role=Role.CUSTOMER,
+            organization=request.organization,
+            clinic=None,
+            is_active=True,
+            defaults={"organization_membership": membership},
+        )
+        verification.consumed_at = timezone.now()
+        verification.save(update_fields=("consumed_at",))
+        refresh = RefreshToken.for_user(user)
+        record_auth_event(
+            request, AuthenticationAuditEvent.Event.LOGIN,
+            AuthenticationAuditEvent.Outcome.SUCCESS, user=user,
+        )
+        return Response({
+            "access": str(refresh.access_token), "refresh": str(refresh),
+            "user": UserSummarySerializer(user).data,
+        })
 
 
 class RefreshView(APIView):

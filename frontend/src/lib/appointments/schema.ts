@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const appointmentSchema = z.object({
   patient_name: z.string().trim().min(2).max(160),
+  family_member: z.string().uuid().or(z.literal("")).optional(),
   age: z.coerce.number().int().min(1).max(120),
   gender: z.enum(["FEMALE", "MALE", "OTHER", "PREFER_NOT_TO_SAY"]),
   mobile_number: z.string().regex(/^[6-9]\d{9}$/, "Enter a valid 10-digit Indian mobile number."),

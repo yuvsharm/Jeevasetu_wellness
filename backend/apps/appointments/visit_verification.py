@@ -48,7 +48,7 @@ def _audit(verification, *, event, actor=None, outcome="", reason_code=""):
 
 
 def _customer_is_active(appointment):
-    customer = appointment.patient.user
+    customer = appointment.originating_request.creator if appointment.originating_request_id else appointment.patient.user
     return bool(
         customer
         and active_roles(customer, appointment.organization).filter(role=Role.CUSTOMER).exists()
@@ -123,7 +123,8 @@ def issue_visit_otp(appointment, *, customer, delivery=None):
         )
         .get(pk=appointment.pk)
     )
-    if appointment.patient.user_id != customer.id:
+    owner_id = appointment.originating_request.creator_id if appointment.originating_request_id else appointment.patient.user_id
+    if owner_id != customer.id:
         raise ValidationError("Visit verification is unavailable.")
     eligible, code = visit_verification_eligibility(appointment)
     if not eligible:
@@ -326,7 +327,7 @@ def can_start_visit(appointment):
         verification
         and verification.state == VisitVerification.State.VERIFIED
         and verification.physiotherapist_id == appointment.physiotherapist_id
-        and verification.customer_id == appointment.patient.user_id
+        and verification.customer_id == (appointment.originating_request.creator_id if appointment.originating_request_id else appointment.patient.user_id)
         and _customer_is_active(appointment)
         and _physiotherapist_is_active(appointment)
     )

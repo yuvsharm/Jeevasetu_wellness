@@ -17,8 +17,8 @@ def validate_schedule(*, clinic, start, duration_minutes):
         raise ValidationError("Appointments require at least two hours notice.")
     if start > now + timedelta(days=90):
         raise ValidationError("Appointments cannot be scheduled more than 90 days ahead.")
-    if duration_minutes < 30 or duration_minutes > 180:
-        raise ValidationError("Appointment duration must be between 30 and 180 minutes.")
+    if duration_minutes < 30 or duration_minutes > 360:
+        raise ValidationError("Appointment duration must be between 30 and 360 minutes.")
     hours = ClinicOperatingHours.objects.filter(clinic=clinic, is_active=True).first()
     if hours is None:
         raise ValidationError("Clinic operating hours have not been configured.")

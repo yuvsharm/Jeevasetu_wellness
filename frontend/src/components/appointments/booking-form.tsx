@@ -11,6 +11,7 @@ import type { PublicPractitioner } from "@/lib/practitioners/contracts";
 
 const labels: Record<keyof AppointmentFormValues, string> = {
   patient_name: "Patient name",
+  family_member: "Booking for",
   age: "Age",
   gender: "Gender",
   mobile_number: "Mobile number",
@@ -35,6 +36,7 @@ const labels: Record<keyof AppointmentFormValues, string> = {
 
 const getDefaults = (initialTherapy = "") => ({
   patient_name: "",
+  family_member: "",
   age: 18,
   gender: "PREFER_NOT_TO_SAY" as const,
   mobile_number: "",
@@ -67,10 +69,14 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   const [otpCode, setOtpCode] = useState("");
   const [otpError, setOtpError] = useState("");
   const [selectedTherapies, setSelectedTherapies] = useState<string[]>(initialTherapy ? [initialTherapy] : []);
+  const durationMinutes = selectedTherapies.length * 45;
+  const latestStartMinutes = 18 * 60 - Math.max(durationMinutes, 45);
+  const latestStart = `${String(Math.floor(latestStartMinutes / 60)).padStart(2, "0")}:${String(latestStartMinutes % 60).padStart(2, "0")}`;
 
   const form = useForm<AppointmentFormValues>({ defaultValues: getDefaults(initialTherapy) });
   const therapyQuery = useQuery({ queryKey: ["appointment-therapies"], queryFn: () => requestJson<TherapyOption[]>("/api/appointment-therapies") });
   const practitionerQuery = useQuery({ queryKey: ["public-practitioners"], queryFn: () => requestJson<PublicPractitioner[]>("/api/practitioners/public") });
+  const familyQuery = useQuery({ queryKey: ["customer-family"], queryFn: () => requestJson<Array<{ id: string; full_name: string; age: number; gender: AppointmentFormValues["gender"] }>>("/api/customer/family"), retry: false });
 
   const submit = useMutation({
     mutationFn: (values: AppointmentFormValues & { booking_verification_token?: string }) => requestJson<AppointmentRequest>(quickMode ? "/api/quick-appointment-requests" : "/api/appointment-requests", { method: "POST", body: JSON.stringify(values) }),
@@ -256,6 +262,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
         {quickStep === 0 && (
           <fieldset className="grid gap-5 sm:grid-cols-2">
             <legend className="mb-6 font-serif text-3xl text-[#103c27]">Your information</legend>
+            {familyQuery.data?.length ? <label className="grid gap-2 font-semibold text-[#163c2a] sm:col-span-2">Booking for<select {...form.register("family_member")} onChange={(event) => { const value = event.target.value; form.setValue("family_member", value); const selected = familyQuery.data?.find((item) => item.id === value); if (selected) { form.setValue("patient_name", selected.full_name); form.setValue("age", selected.age); form.setValue("gender", selected.gender); } }} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal"><option value="">Myself</option>{familyQuery.data.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label> : null}
             {field("patient_name")}
             {field("age", "number")}
             <label className="grid gap-2 font-semibold text-[#163c2a]">
@@ -359,7 +366,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
             </label>
             <label className="grid gap-2 font-semibold text-[#163c2a]">
               Preferred time
-              <input type="time" {...form.register("preferred_time")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
+              <input type="time" min="09:00" max={latestStart} step="900" {...form.register("preferred_time")} className="min-h-12 rounded-xl border border-[#0b6b3a]/20 bg-white px-4 font-normal" />
             </label>
             <div className="sm:col-span-2">
               <p className="mb-4 font-semibold text-[#163c2a]">Preferred therapies</p>
@@ -429,6 +436,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
                 <dd className="mt-1 break-words text-[#163c2a]">
                   {selectedTherapies.map((id) => therapyOptions.find((t) => t.id === id)?.name).join(", ") || "Not selected"}
                 </dd>
+                <p className="mt-2 text-sm font-semibold text-[#0b6b3a]">Calculated duration: {durationMinutes} minutes · latest start {latestStart}</p>
               </div>
             </dl>
           </section>

@@ -9,14 +9,28 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from apps.accounts.models import Role
-from apps.accounts.permissions import IsEnabledAuthenticated, IsOwnerOrManager
+from apps.accounts.permissions import IsCustomer, IsEnabledAuthenticated, IsOwnerOrManager
 from apps.accounts.role_policy import actor_role_scope
-from apps.patients.models import PatientProfile, PatientStatusAudit
+from apps.patients.models import CustomerFamilyMember, PatientProfile, PatientStatusAudit
 from apps.patients.serializers import (
     PatientListSerializer,
     PatientProfileSerializer,
     PatientStatusSerializer,
+    CustomerFamilyMemberSerializer,
 )
+
+
+class CustomerFamilyMemberListCreateView(generics.ListCreateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = CustomerFamilyMemberSerializer
+
+    def get_queryset(self):
+        return CustomerFamilyMember.objects.filter(
+            organization=self.request.organization, customer=self.request.user, is_active=True
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization, customer=self.request.user)
 
 
 class PatientTenantMixin:

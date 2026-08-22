@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, transaction
@@ -17,7 +19,7 @@ from apps.appointments.models import (
     TherapyOption,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
-from apps.patients.models import PatientProfile
+from apps.patients.models import CustomerFamilyMember, PatientProfile
 from apps.staff.models import StaffProfile
 
 
@@ -45,11 +47,21 @@ class BookingOtpVerifySerializer(serializers.Serializer):
     otp = serializers.CharField(min_length=6, max_length=6)
 
 
+class CustomerRebookSerializer(serializers.Serializer):
+    preferred_date = serializers.DateField()
+    preferred_time = serializers.TimeField()
+
+
 class AppointmentRequestSerializer(serializers.ModelSerializer):
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
+    requested_therapy_names = serializers.SerializerMethodField()
+    requested_duration_minutes = serializers.IntegerField(read_only=True)
     booking_verification_token = serializers.CharField(write_only=True, required=False)
     requested_therapies = serializers.PrimaryKeyRelatedField(
         queryset=TherapyOption.objects.all(), many=True, required=False, allow_empty=True
+    )
+    family_member = serializers.PrimaryKeyRelatedField(
+        queryset=CustomerFamilyMember.objects.all(), required=False, allow_null=True
     )
 
     class Meta:
@@ -58,6 +70,9 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "id",
             "therapy",
             "requested_therapies",
+            "requested_therapy_names",
+            "requested_duration_minutes",
+            "family_member",
             "booking_verification_token",
             "therapy_name",
             "preferred_practitioner",
@@ -98,24 +113,8 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Preferred date cannot be in the past.")
         return value
 
-    def validate_preferred_time(self, value):
-        allowed = {
-            "10:00",
-            "11:00",
-            "12:00",
-            "13:00",
-            "14:00",
-            "15:00",
-            "16:00",
-            "17:00",
-            "18:00",
-        }
-        slot = value.strftime("%H:%M")
-        if slot not in allowed:
-            raise serializers.ValidationError(
-                "Select a valid 1-hour slot between 10:00 AM and 7:00 PM."
-            )
-        return value
+    def get_requested_therapy_names(self, value):
+        return [value.therapy.name, *value.requested_therapies.values_list("name", flat=True)]
 
     def validate_therapy(self, value):
         organization = self.context["request"].organization
@@ -156,6 +155,16 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
         if therapy and any(item.id == therapy.id for item in requested):
             requested = [item for item in requested if item.id != therapy.id]
             attrs["requested_therapies"] = requested
+        duration = (1 + len(requested)) * 45
+        start = datetime.combine(attrs["preferred_date"], attrs["preferred_time"])
+        if start.time().strftime("%H:%M") < "09:00" or start + timedelta(minutes=duration) > datetime.combine(attrs["preferred_date"], datetime.strptime("18:00", "%H:%M").time()):
+            raise serializers.ValidationError({"preferred_time": "Select a start time from 9:00 AM that allows all selected therapies to finish by 6:00 PM."})
+        family = attrs.get("family_member")
+        actor = getattr(self.context["request"], "user", None)
+        if family and (not actor or not actor.is_authenticated or family.customer_id != actor.id or family.organization_id != self.context["request"].organization.id or not family.is_active):
+            raise serializers.ValidationError({"family_member": "The selected family member is unavailable."})
+        if family:
+            attrs.update(patient_name=family.full_name, age=family.age, gender=family.gender)
         if preferred and (
             preferred.organization_id != self.context["request"].organization.id
             or not preferred.is_approved
@@ -384,9 +393,9 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
 
 class CustomerAppointmentSerializer(serializers.ModelSerializer):
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
-    physiotherapist_name = serializers.CharField(
-        source="physiotherapist.user.get_full_name", read_only=True, default=None
-    )
+    physiotherapist_name = serializers.SerializerMethodField()
+    patient_name = serializers.CharField(source="patient.full_name", read_only=True)
+    payment_status = serializers.SerializerMethodField()
     physiotherapist_photo_url = serializers.SerializerMethodField()
     physiotherapist_qualification = serializers.CharField(
         source="physiotherapist.qualification", read_only=True, default=""
@@ -400,8 +409,10 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         model = Appointment
         fields = (
             "id",
+            "patient_name",
             "scheduled_start",
             "scheduled_end",
+            "duration_minutes",
             "therapy_name",
             "status",
             "address_line_1",
@@ -417,8 +428,21 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "assignment_status",
             "manager_remarks",
             "cancellation_category",
+            "journey_status",
+            "service_started_at",
+            "completed_at",
+            "payment_status",
             "visit_verification",
         )
+
+    def get_physiotherapist_name(self, value):
+        if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED or not value.physiotherapist:
+            return None
+        return value.physiotherapist.user.get_full_name()
+
+    def get_payment_status(self, value):
+        payment = getattr(value, "practitioner_payment", None)
+        return payment.status if payment else None
 
     def get_physiotherapist_photo_url(self, value) -> str | None:
         if not value.physiotherapist or not value.physiotherapist.profile_photo:

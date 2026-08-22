@@ -1,3 +1,5 @@
+from datetime import datetime, time, timedelta
+
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
@@ -46,6 +48,7 @@ from apps.appointments.serializers import (
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
+    CustomerRebookSerializer,
     AppointmentRatingSerializer,
     PractitionerPaymentSerializer,
     AppointmentRescheduleSerializer,
@@ -182,6 +185,46 @@ class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.Upda
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(AppointmentRequestSerializer(instance).data)
+
+
+class CustomerAppointmentRebookView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = CustomerRebookSerializer
+
+    @transaction.atomic
+    def post(self, request, pk):
+        appointment = Appointment.objects.select_related("originating_request").filter(
+            pk=pk, organization=request.organization,
+            originating_request__creator=request.user,
+            status=Appointment.Status.COMPLETED,
+        ).first()
+        if not appointment or not appointment.originating_request_id:
+            raise NotFound("This completed appointment is unavailable for rebooking.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        source = appointment.originating_request
+        requested = list(source.requested_therapies.all())
+        duration = (1 + len(requested)) * 45
+        start = datetime.combine(serializer.validated_data["preferred_date"], serializer.validated_data["preferred_time"])
+        close = datetime.combine(serializer.validated_data["preferred_date"], time(18, 0))
+        if start.time() < time(9, 0) or start + timedelta(minutes=duration) > close:
+            raise ValidationError({"preferred_time": "The selected therapies must finish by 6:00 PM."})
+        value = AppointmentRequest.objects.create(
+            organization=request.organization, creator=request.user,
+            family_member=source.family_member, therapy=source.therapy,
+            preferred_practitioner=None, patient_name=source.patient_name, age=source.age,
+            gender=source.gender, mobile_number=source.mobile_number,
+            alternate_mobile=source.alternate_mobile, email=source.email,
+            session_preference=source.session_preference,
+            preferred_date=serializer.validated_data["preferred_date"],
+            preferred_time=serializer.validated_data["preferred_time"],
+            problem_description=source.problem_description, pain_area=source.pain_area,
+            problem_duration=source.problem_duration, doctor_reference=source.doctor_reference,
+            address=source.address, city=source.city, pin_code=source.pin_code,
+            landmark=source.landmark, google_map_link=source.google_map_link,
+        )
+        value.requested_therapies.set(requested)
+        return Response(AppointmentRequestSerializer(value, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
@@ -760,7 +803,7 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
     def get_queryset(self):
         return Appointment.objects.filter(
             organization=self.request.organization,
-            patient__user=self.request.user,
+            originating_request__creator=self.request.user,
         ).select_related("clinic", "patient", "therapy", "physiotherapist__user")
 
 
@@ -771,14 +814,14 @@ class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView
     def get_queryset(self):
         return AppointmentChangeRequest.objects.filter(
             organization=self.request.organization,
-            appointment__patient__user=self.request.user,
+            appointment__originating_request__creator=self.request.user,
         ).select_related("appointment")
 
     def perform_create(self, serializer):
         appointment = Appointment.objects.filter(
             pk=self.kwargs["pk"],
             organization=self.request.organization,
-            patient__user=self.request.user,
+            originating_request__creator=self.request.user,
             status__in=(
                 Appointment.Status.DRAFT,
                 Appointment.Status.PENDING_ASSIGNMENT,
@@ -815,7 +858,7 @@ class CustomerVisitVerificationView(HasTenant, GenericAPIView):
             Appointment.objects.filter(
                 pk=pk,
                 organization=request.organization,
-                patient__user=request.user,
+                originating_request__creator=request.user,
             )
             .select_related(
                 "organization",
@@ -917,7 +960,7 @@ class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):
         elif level == Role.PHYSIOTHERAPIST:
             queryset = queryset.filter(physiotherapist__user=request.user)
         elif level == Role.CUSTOMER:
-            queryset = queryset.filter(patient__user=request.user)
+            queryset = queryset.filter(originating_request__creator=request.user)
         elif level != Role.OWNER:
             raise PermissionDenied("Appointment access is unavailable.")
         appointment = queryset.select_related("physiotherapist").filter(pk=pk).first()
@@ -937,7 +980,7 @@ class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
     serializer_class = AppointmentRatingSerializer
 
     def post(self, request, pk):
-        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, patient__user=request.user, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, originating_request__creator=request.user, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
         if appointment is None:
             raise NotFound("Rating is unavailable.")
         if AppointmentRating.objects.filter(appointment=appointment).exists():

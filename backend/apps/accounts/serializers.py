@@ -100,6 +100,14 @@ class LoginSerializer(serializers.Serializer):
         return User.objects.filter(query).first()
 
 
+class CustomerOtpLoginSerializer(serializers.Serializer):
+    verification_id = serializers.UUIDField()
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    otp = serializers.RegexField(r"^\d{6}$", write_only=True)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+
+
 class RefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField(trim_whitespace=False)
 

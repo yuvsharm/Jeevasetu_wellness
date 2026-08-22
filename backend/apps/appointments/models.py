@@ -61,6 +61,10 @@ class AppointmentRequest(models.Model):
         on_delete=models.PROTECT,
         related_name="appointment_requests",
     )
+    family_member = models.ForeignKey(
+        "patients.CustomerFamilyMember", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="appointment_requests",
+    )
     therapy = models.ForeignKey(
         TherapyOption, on_delete=models.PROTECT, related_name="appointment_requests"
     )
@@ -151,6 +155,10 @@ class AppointmentRequest(models.Model):
             )
         )
         return hashlib.sha256(value.encode()).hexdigest()
+
+    @property
+    def requested_duration_minutes(self):
+        return (1 + self.requested_therapies.count()) * 45
 
 
 class BookingPhoneVerification(models.Model):
@@ -271,7 +279,7 @@ class Appointment(models.Model):
     scheduled_start = models.DateTimeField()
     scheduled_end = models.DateTimeField()
     duration_minutes = models.PositiveSmallIntegerField(
-        validators=[MinValueValidator(30), MaxValueValidator(180)]
+        validators=[MinValueValidator(30), MaxValueValidator(360)]
     )
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.DRAFT)
     address_line_1 = models.CharField(max_length=255)

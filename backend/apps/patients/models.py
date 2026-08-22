@@ -142,6 +142,31 @@ class PatientProfile(models.Model):  # noqa: DJ012
                 raise ValidationError("Parent or legal guardian details are required for minors.")
 
 
+class CustomerFamilyMember(models.Model):
+    """A care recipient owned by a customer account, not another login identity."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT, related_name="customer_family_members")
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="family_members")
+    full_name = models.CharField(max_length=160)
+    age = models.PositiveSmallIntegerField(validators=[MinValueValidator(0), MaxValueValidator(120)])
+    gender = models.CharField(max_length=24, choices=PatientProfile.Gender.choices)
+    relationship = models.CharField(max_length=80)
+    relevant_details = models.TextField(max_length=2000, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("full_name",)
+        indexes = [models.Index(fields=("organization", "customer", "is_active"), name="patient_family_owner_idx")]
+
+    def clean(self):
+        super().clean()
+        if self.customer_id and self.organization_id and not self.customer.organization_memberships.filter(organization=self.organization, is_active=True).exists():
+            raise ValidationError("Family member owner is unavailable in this organization.")
+
+
 class PatientAddress(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient = models.ForeignKey(PatientProfile, on_delete=models.PROTECT, related_name="addresses")
