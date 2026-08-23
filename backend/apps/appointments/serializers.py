@@ -9,14 +9,17 @@ from rest_framework import serializers
 
 from apps.accounts.models import Role, RoleAssignment
 from apps.appointments.booking_verification import resolve_booking_verification
+from apps.appointments.commercial import calculate_quote
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
     AppointmentChangeRequest,
     AppointmentRequest,
     AppointmentRating,
+    CommercialOffer,
     PractitionerPayment,
     TherapyOption,
+    TherapyPackage,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
 from apps.patients.models import CustomerFamilyMember, PatientProfile
@@ -27,6 +30,88 @@ class TherapyOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = TherapyOption
         fields = ("id", "name", "slug")
+
+
+class TherapyCommercialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TherapyOption
+        fields = ("id", "name", "slug", "short_description", "detailed_description", "benefits", "default_duration_minutes", "base_price", "is_active", "is_publicly_visible", "display_order")
+
+    def validate_default_duration_minutes(self, value):
+        if value not in (None, 45):
+            raise serializers.ValidationError("Production scheduling uses exactly 45 minutes per therapy.")
+        return 45
+
+
+class TherapyPackageSerializer(serializers.ModelSerializer):
+    therapy_name = serializers.CharField(source="therapy.name", read_only=True)
+    regular_total = serializers.SerializerMethodField()
+    saving = serializers.SerializerMethodField()
+    discount_percentage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TherapyPackage
+        fields = ("id", "name", "therapy", "therapy_name", "session_count", "selling_price", "regular_total", "saving", "discount_percentage", "description", "valid_from", "valid_until", "is_active", "is_publicly_visible", "display_order")
+
+    def get_regular_total(self, value):
+        return value.therapy.base_price * value.session_count
+
+    def get_saving(self, value):
+        return max(0, self.get_regular_total(value) - value.selling_price)
+
+    def get_discount_percentage(self, value):
+        regular = self.get_regular_total(value)
+        return round(self.get_saving(value) * 100 / regular, 2) if regular else 0
+
+    def validate(self, attrs):
+        value = self.instance or TherapyPackage(organization=self.context["request"].organization)
+        for key, item in attrs.items():
+            setattr(value, key, item)
+        try:
+            value.full_clean(exclude=("id",))
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
+        return attrs
+
+
+class CommercialOfferSerializer(serializers.ModelSerializer):
+    eligible_therapy_names = serializers.SerializerMethodField()
+    free_therapy_name = serializers.CharField(source="free_therapy.name", read_only=True, default="")
+
+    class Meta:
+        model = CommercialOffer
+        fields = ("id", "title", "promotional_text", "offer_type", "eligible_therapies", "eligible_therapy_names", "qualifying_package", "minimum_therapy_count", "maximum_therapy_count", "discount_value", "fixed_price", "free_therapy", "free_therapy_name", "free_quantity", "family_required", "valid_from", "valid_until", "is_active", "is_publicly_visible", "display_order")
+
+    def get_eligible_therapy_names(self, value):
+        return list(value.eligible_therapies.values_list("name", flat=True))
+
+    def validate(self, attrs):
+        value = self.instance or CommercialOffer(organization=self.context["request"].organization)
+        for key, item in attrs.items():
+            if key != "eligible_therapies":
+                setattr(value, key, item)
+        try:
+            value.full_clean(exclude=("id",))
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
+        therapies = attrs.get("eligible_therapies", getattr(self.instance, "eligible_therapies", TherapyOption.objects.none()).all() if self.instance else [])
+        organization_id = self.context["request"].organization.id
+        if any(item.organization_id != organization_id for item in therapies):
+            raise serializers.ValidationError({"eligible_therapies": "Select therapies from this organization only."})
+        free_therapy = attrs.get("free_therapy", getattr(self.instance, "free_therapy", None))
+        if free_therapy and free_therapy.organization_id != organization_id:
+            raise serializers.ValidationError({"free_therapy": "Select a therapy from this organization only."})
+        qualifying_package = attrs.get("qualifying_package", getattr(self.instance, "qualifying_package", None))
+        if qualifying_package and qualifying_package.organization_id != organization_id:
+            raise serializers.ValidationError({"qualifying_package": "Select a package from this organization only."})
+        return attrs
+
+
+class CommercialQuoteSerializer(serializers.Serializer):
+    therapy_ids = serializers.ListField(child=serializers.UUIDField(), min_length=1)
+    package_id = serializers.UUIDField(required=False, allow_null=True)
+    offer_id = serializers.UUIDField(required=False, allow_null=True)
+    family_member_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class BookingOtpRequestSerializer(serializers.Serializer):
@@ -63,6 +148,8 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
     family_member = serializers.PrimaryKeyRelatedField(
         queryset=CustomerFamilyMember.objects.all(), required=False, allow_null=True
     )
+    selected_package = serializers.PrimaryKeyRelatedField(queryset=TherapyPackage.objects.all(), required=False, allow_null=True)
+    selected_offer = serializers.PrimaryKeyRelatedField(queryset=CommercialOffer.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = AppointmentRequest
@@ -73,6 +160,12 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "requested_therapy_names",
             "requested_duration_minutes",
             "family_member",
+            "selected_package",
+            "selected_offer",
+            "commercial_snapshot",
+            "regular_amount",
+            "discount_amount",
+            "final_amount",
             "booking_verification_token",
             "therapy_name",
             "preferred_practitioner",
@@ -106,6 +199,10 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "owner_remarks",
             "created_at",
             "updated_at",
+            "commercial_snapshot",
+            "regular_amount",
+            "discount_amount",
+            "final_amount",
         )
 
     def validate_preferred_date(self, value):
@@ -165,6 +262,19 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"family_member": "The selected family member is unavailable."})
         if family:
             attrs.update(patient_name=family.full_name, age=family.age, gender=family.gender)
+        try:
+            self._commercial_quote = calculate_quote(
+                organization=self.context["request"].organization,
+                therapy_ids=[therapy.id, *[item.id for item in requested]],
+                package_id=getattr(attrs.get("selected_package"), "id", None),
+                offer_id=getattr(attrs.get("selected_offer"), "id", None),
+                family_member=family,
+            )
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
+        duration = self._commercial_quote.duration_minutes
+        if start + timedelta(minutes=duration) > datetime.combine(attrs["preferred_date"], datetime.strptime("18:00", "%H:%M").time()):
+            raise serializers.ValidationError({"preferred_time": "This selection, including free performed therapies, must finish by 6:00 PM."})
         if preferred and (
             preferred.organization_id != self.context["request"].organization.id
             or not preferred.is_approved
@@ -200,9 +310,22 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
                         lock=True,
                     )
                 value.full_clean(exclude=("duplicate_fingerprint",))
+                quote = calculate_quote(
+                    organization=request.organization,
+                    therapy_ids=[validated_data["therapy"].id, *[item.id for item in requested_therapies]],
+                    package_id=getattr(validated_data.get("selected_package"), "id", None),
+                    offer_id=getattr(validated_data.get("selected_offer"), "id", None),
+                    family_member=validated_data.get("family_member"),
+                )
+                value.commercial_snapshot = quote.snapshot()
+                value.regular_amount = quote.regular_amount
+                value.discount_amount = quote.discount_amount
+                value.final_amount = quote.final_amount
                 value.save()
-                if requested_therapies:
-                    value.requested_therapies.set(requested_therapies)
+                all_additional = list(requested_therapies)
+                free_ids = [benefit["therapy_id"] for benefit in quote.free_benefits]
+                all_additional.extend(TherapyOption.objects.filter(id__in=free_ids).exclude(id=value.therapy_id))
+                value.requested_therapies.set(list(dict.fromkeys(all_additional)))
                 if verification:
                     verification.consumed_at = timezone.now()
                     verification.save(update_fields=("consumed_at",))

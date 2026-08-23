@@ -6,7 +6,9 @@ from apps.appointments.models import (
     AppointmentChangeRequest,
     AppointmentRequest,
     ClinicOperatingHours,
+    CommercialOffer,
     TherapyOption,
+    TherapyPackage,
     VisitVerification,
     VisitVerificationAuditEvent,
 )
@@ -18,7 +20,9 @@ admin.site.register(
         AppointmentChangeRequest,
         AppointmentRequest,
         ClinicOperatingHours,
+        CommercialOffer,
         TherapyOption,
+        TherapyPackage,
         VisitVerification,
         VisitVerificationAuditEvent,
     )

@@ -28,8 +28,11 @@ from apps.appointments.models import (
     AppointmentRequest,
     AppointmentRating,
     AppointmentRatingModerationEvent,
+    CommercialOffer,
+    CommercialAuditEvent,
     PractitionerPayment,
     TherapyOption,
+    TherapyPackage,
     VisitVerification,
 )
 from apps.appointments.scheduling import (
@@ -65,12 +68,16 @@ from apps.appointments.serializers import (
     AvailabilityQuerySerializer,
     BookingOtpRequestSerializer,
     BookingOtpVerifySerializer,
+    CommercialOfferSerializer,
+    CommercialQuoteSerializer,
     CancelAppointmentSerializer,
     CustomerAppointmentSerializer,
     OwnerAppointmentUpdateSerializer,
     PhysiotherapistAppointmentSerializer,
     PhysiotherapistWorkloadSerializer,
     TherapyOptionSerializer,
+    TherapyCommercialSerializer,
+    TherapyPackageSerializer,
     UnassignmentSerializer,
     VisitOtpSubmissionSerializer,
 )
@@ -78,6 +85,8 @@ from apps.appointments.booking_verification import (
     issue_booking_otp_details,
     verify_booking_otp,
 )
+from apps.appointments.commercial import calculate_quote
+from apps.patients.models import CustomerFamilyMember
 from apps.appointments.visit_verification import (
     issue_visit_otp,
     verify_visit_otp,
@@ -99,7 +108,103 @@ class TherapyListView(HasTenant, generics.ListAPIView):
     serializer_class = TherapyOptionSerializer
 
     def get_queryset(self):
-        return TherapyOption.objects.filter(organization=self.request.organization, is_active=True)
+        return TherapyOption.objects.filter(organization=self.request.organization, is_active=True, is_publicly_visible=True)
+
+
+class PublicCommercialCatalogView(HasTenant, GenericAPIView):
+    permission_classes = (permissions.AllowAny,)
+
+    def get(self, request):
+        now = timezone.now()
+        packages = TherapyPackage.objects.filter(organization=request.organization, is_active=True, is_publicly_visible=True).filter(Q(valid_from__isnull=True) | Q(valid_from__lte=now)).filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now)).select_related("therapy")
+        offers = CommercialOffer.objects.filter(organization=request.organization, is_active=True, is_publicly_visible=True).filter(Q(valid_from__isnull=True) | Q(valid_from__lte=now)).filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now)).prefetch_related("eligible_therapies").select_related("free_therapy")
+        therapies = TherapyOption.objects.filter(organization=request.organization, is_active=True, is_publicly_visible=True)
+        return Response({"therapies": TherapyCommercialSerializer(therapies, many=True).data, "packages": TherapyPackageSerializer(packages, many=True).data, "offers": CommercialOfferSerializer(offers, many=True).data})
+
+
+class CommercialQuoteView(HasTenant, GenericAPIView):
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = CommercialQuoteSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        family = None
+        family_id = serializer.validated_data.get("family_member_id")
+        if family_id:
+            if not request.user.is_authenticated:
+                raise PermissionDenied("Sign in to use a family offer.")
+            family = CustomerFamilyMember.objects.filter(id=family_id, organization=request.organization, customer=request.user, is_active=True).first()
+            if not family:
+                raise PermissionDenied("The selected family member is unavailable.")
+        try:
+            quote = calculate_quote(organization=request.organization, therapy_ids=serializer.validated_data["therapy_ids"], package_id=serializer.validated_data.get("package_id"), offer_id=serializer.validated_data.get("offer_id"), family_member=family)
+        except DjangoValidationError as error:
+            raise ValidationError(error.message_dict) from error
+        return Response(quote.snapshot())
+
+
+class TherapyManagementListCreateView(HasTenant, generics.ListCreateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = TherapyCommercialSerializer
+
+    def get_queryset(self):
+        return TherapyOption.objects.filter(organization=self.request.organization)
+
+    def perform_create(self, serializer):
+        value = serializer.save(organization=self.request.organization, default_duration_minutes=45)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="CREATED", after=serializer.data)
+
+
+class TherapyManagementDetailView(HasTenant, generics.RetrieveUpdateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = TherapyCommercialSerializer
+
+    def get_queryset(self):
+        return TherapyOption.objects.filter(organization=self.request.organization)
+
+    def perform_update(self, serializer):
+        before = TherapyCommercialSerializer(self.get_object()).data
+        value = serializer.save()
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
+
+
+class PackageManagementListCreateView(HasTenant, generics.ListCreateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = TherapyPackageSerializer
+
+    def get_queryset(self):
+        return TherapyPackage.objects.filter(organization=self.request.organization).select_related("therapy")
+
+    def perform_create(self, serializer):
+        value = serializer.save(organization=self.request.organization)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="CREATED", after=serializer.data)
+
+
+class PackageManagementDetailView(PackageManagementListCreateView, generics.RetrieveUpdateAPIView):
+    def perform_update(self, serializer):
+        before = TherapyPackageSerializer(self.get_object()).data
+        value = serializer.save()
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
+
+
+class OfferManagementListCreateView(HasTenant, generics.ListCreateAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = CommercialOfferSerializer
+
+    def get_queryset(self):
+        return CommercialOffer.objects.filter(organization=self.request.organization).prefetch_related("eligible_therapies").select_related("free_therapy")
+
+    def perform_create(self, serializer):
+        value = serializer.save(organization=self.request.organization)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="CREATED", after=serializer.data)
+
+
+class OfferManagementDetailView(OfferManagementListCreateView, generics.RetrieveUpdateAPIView):
+    def perform_update(self, serializer):
+        before = CommercialOfferSerializer(self.get_object()).data
+        value = serializer.save()
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
 
 
 class AppointmentCreateView(HasTenant, generics.CreateAPIView):

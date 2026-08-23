@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { ClientApiError, requestJson } from "@/lib/api/client";
-import type { AppointmentRequest, TherapyOption } from "@/lib/appointments/contracts";
+import type { AppointmentRequest, CommercialCatalog, CommercialQuote } from "@/lib/appointments/contracts";
 import type { AppointmentFormValues } from "@/lib/appointments/schema";
 import type { PublicPractitioner } from "@/lib/practitioners/contracts";
 
@@ -69,14 +69,21 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   const [otpCode, setOtpCode] = useState("");
   const [otpError, setOtpError] = useState("");
   const [selectedTherapies, setSelectedTherapies] = useState<string[]>(initialTherapy ? [initialTherapy] : []);
-  const durationMinutes = selectedTherapies.length * 45;
-  const latestStartMinutes = 18 * 60 - Math.max(durationMinutes, 45);
-  const latestStart = `${String(Math.floor(latestStartMinutes / 60)).padStart(2, "0")}:${String(latestStartMinutes % 60).padStart(2, "0")}`;
+  const [selectedPackage, setSelectedPackage] = useState("");
+  const [selectedOffer, setSelectedOffer] = useState("");
 
   const form = useForm<AppointmentFormValues>({ defaultValues: getDefaults(initialTherapy) });
-  const therapyQuery = useQuery({ queryKey: ["appointment-therapies"], queryFn: () => requestJson<TherapyOption[]>("/api/appointment-therapies") });
+  const commercialQueryRaw = useQuery({ queryKey: ["commercial-public"], queryFn: () => requestJson<CommercialCatalog>("/api/commercial/public") });
+  const commercialQuery = {...commercialQueryRaw,data:Array.isArray(commercialQueryRaw.data)?{therapies:commercialQueryRaw.data,packages:[],offers:[]}:commercialQueryRaw.data};
+  const catalog = commercialQuery.data;
+  const therapyQuery = {data:catalog?.therapies,isError:commercialQuery.isError};
   const practitionerQuery = useQuery({ queryKey: ["public-practitioners"], queryFn: () => requestJson<PublicPractitioner[]>("/api/practitioners/public") });
   const familyQuery = useQuery({ queryKey: ["customer-family"], queryFn: () => requestJson<Array<{ id: string; full_name: string; age: number; gender: AppointmentFormValues["gender"] }>>("/api/customer/family"), retry: false });
+  const familyMember = form.watch("family_member");
+  const quoteQuery = useQuery({queryKey:["commercial-quote",selectedTherapies,selectedPackage,selectedOffer,familyMember],enabled:selectedTherapies.length>0,queryFn:()=>requestJson<CommercialQuote>("/api/commercial/quote",{method:"POST",body:JSON.stringify({therapy_ids:selectedTherapies,package_id:selectedPackage||null,offer_id:selectedOffer||null,family_member_id:familyMember||null})}),retry:false});
+  const durationMinutes = quoteQuery.data?.duration_minutes ?? selectedTherapies.length * 45;
+  const latestStartMinutes = 18 * 60 - Math.max(durationMinutes, 45);
+  const latestStart = `${String(Math.floor(latestStartMinutes / 60)).padStart(2, "0")}:${String(latestStartMinutes % 60).padStart(2, "0")}`;
 
   const submit = useMutation({
     mutationFn: (values: AppointmentFormValues & { booking_verification_token?: string }) => requestJson<AppointmentRequest>(quickMode ? "/api/quick-appointment-requests" : "/api/appointment-requests", { method: "POST", body: JSON.stringify(values) }),
@@ -172,7 +179,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   );
 
   if (quickMode) {
-    const therapyOptions = therapyQuery.data ?? [];
+    const therapyOptions = catalog?.therapies ?? [];
 
     const handleSubmitQuick = () => {
       const formValues = form.getValues();
@@ -212,7 +219,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
       }
 
       // Build payload with ACTUAL customer input, not placeholders
-      const payload: AppointmentFormValues & { requested_therapies?: string[]; booking_verification_token: string } = {
+      const payload: AppointmentFormValues & { requested_therapies?: string[]; selected_package?:string|null; selected_offer?:string|null; booking_verification_token: string } = {
         patient_name: formValues.patient_name.trim(),
         age: formValues.age,
         gender: formValues.gender,
@@ -221,6 +228,9 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
         email: formValues.email || "",
         therapy: selectedTherapies[0] || initialTherapy,
         requested_therapies: selectedTherapies,
+        family_member: formValues.family_member || "",
+        selected_package: selectedPackage || null,
+        selected_offer: selectedOffer || null,
         session_preference: "SINGLE",
         preferred_date: formValues.preferred_date,
         preferred_time: formValues.preferred_time,
@@ -399,6 +409,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
                 })}
               </div>
             </div>
+            {(commercialQuery.data?.packages.length||commercialQuery.data?.offers.length)?<div className="sm:col-span-2"><p className="mb-3 font-semibold text-[#163c2a]">Plans and current offers <span className="text-xs font-normal">(one per booking)</span></p><div className="grid gap-3 sm:grid-cols-2">{commercialQuery.data?.packages.map(item=><button key={item.id} type="button" onClick={()=>{setSelectedPackage(item.id);setSelectedOffer("");setSelectedTherapies([item.therapy])}} className={`rounded-2xl border p-4 text-left ${selectedPackage===item.id?"border-emerald-700 bg-emerald-50":"bg-white"}`}><strong>{item.name}</strong><span className="mt-1 block text-sm">{item.session_count} sessions · ₹{Number(item.selling_price).toLocaleString("en-IN")} · save ₹{Number(item.saving).toLocaleString("en-IN")}</span></button>)}{commercialQuery.data?.offers.map(item=><button key={item.id} type="button" onClick={()=>{setSelectedOffer(item.id);setSelectedPackage("");setSelectedTherapies(item.eligible_therapies)}} className={`rounded-2xl border p-4 text-left ${selectedOffer===item.id?"border-emerald-700 bg-emerald-50":"bg-white"}`}><strong>{item.title}</strong><span className="mt-1 block text-sm">{item.promotional_text||item.eligible_therapy_names.join(" + ")}</span></button>)}</div>{(selectedPackage||selectedOffer)&&<button type="button" className="mt-3 text-sm font-bold text-red-700 underline" onClick={()=>{setSelectedPackage("");setSelectedOffer("")}}>Remove promotion</button>}</div>:null}
           </fieldset>
         )}
 
@@ -437,6 +448,8 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
                   {selectedTherapies.map((id) => therapyOptions.find((t) => t.id === id)?.name).join(", ") || "Not selected"}
                 </dd>
                 <p className="mt-2 text-sm font-semibold text-[#0b6b3a]">Calculated duration: {durationMinutes} minutes · latest start {latestStart}</p>
+                {quoteQuery.data&&<div className="mt-3 rounded-xl border border-emerald-200 bg-white p-3 text-sm"><p>Regular ₹{Number(quoteQuery.data.regular_amount).toLocaleString("en-IN")} · Discount ₹{Number(quoteQuery.data.discount_amount).toLocaleString("en-IN")}</p><p className="font-bold text-emerald-800">Final ₹{Number(quoteQuery.data.final_amount).toLocaleString("en-IN")}</p>{quoteQuery.data.package_name&&<p>{quoteQuery.data.package_name} · {quoteQuery.data.session_count} sessions</p>}{quoteQuery.data.free_benefits.map(item=><p key={item.therapy_id}>Free benefit: {item.therapy_name} × {item.quantity} (time included)</p>)}</div>}
+                {quoteQuery.isError&&<p className="mt-2 text-sm text-red-700">The selected offer is not eligible. Adjust the therapies or family booking.</p>}
               </div>
             </dl>
           </section>

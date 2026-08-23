@@ -1,17 +1,19 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient,QueryClientProvider } from "@tanstack/react-query";
 
 import ContactPage from "@/app/contact/page";
 import TherapiesPage from "@/app/therapies/page";
 import { PublicHeader } from "./public-header";
 
 describe("public website", () => {
-  it("publishes exactly the approved ten therapies and fees", () => {
-    render(<TherapiesPage />);
-    const names = ["Abhyang", "Potli Massage", "Shirodhara", "Basti", "Jannu Basti", "Kati Basti", "Griva Basti", "Akshiyarpah (Both Eyes)", "Nasya", "Deeptishu Massage"];
-    for (const name of names) expect(screen.getByRole("heading", { name })).toBeInTheDocument();
-    expect(screen.getAllByRole("article")).toHaveLength(10);
-    for (const fee of ["₹500", "₹600", "₹1800", "₹2000", "₹1900", "₹1500", "₹1000", "₹800"]) expect(screen.getAllByText(fee).length).toBeGreaterThan(0);
+  it("publishes only backend-managed visible therapies and current fees", async () => {
+    const client=new QueryClient({defaultOptions:{queries:{staleTime:Infinity}}});
+    client.setQueryData(["commercial-public"],{therapies:[{id:"therapy-1",name:"Kati Basti",slug:"kati-basti",base_price:"1200.00",short_description:"Focused care",benefits:[],is_active:true,is_publicly_visible:true}],packages:[],offers:[]});
+    render(<QueryClientProvider client={client}><TherapiesPage /></QueryClientProvider>);
+    expect(await screen.findByRole("heading", { name:"Kati Basti" })).toBeInTheDocument();
+    expect(screen.getByText("₹1,200")).toBeInTheDocument();
+    expect(screen.queryByText("Abhyang")).not.toBeInTheDocument();
   });
 
   it("provides keyboard-accessible mobile navigation", async () => {

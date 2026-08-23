@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from django.utils import timezone
 
 
 class TherapyOption(models.Model):
@@ -15,6 +16,15 @@ class TherapyOption(models.Model):
     name = models.CharField(max_length=120)
     slug = models.SlugField(max_length=120)
     is_active = models.BooleanField(default=True)
+    short_description = models.CharField(max_length=240, blank=True)
+    detailed_description = models.TextField(max_length=2000, blank=True)
+    benefits = models.JSONField(default=list, blank=True)
+    base_price = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        validators=[MinValueValidator(0)],
+    )
+    is_publicly_visible = models.BooleanField(default=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
     default_duration_minutes = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
@@ -22,7 +32,7 @@ class TherapyOption(models.Model):
     )
 
     class Meta:
-        ordering = ("name",)
+        ordering = ("display_order", "name")
         constraints = [
             models.UniqueConstraint(
                 fields=("organization", "slug"), name="appt_therapy_org_slug_uniq"
@@ -31,6 +41,108 @@ class TherapyOption(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class TherapyPackage(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    name = models.CharField(max_length=160)
+    therapy = models.ForeignKey(TherapyOption, on_delete=models.PROTECT, related_name="packages")
+    session_count = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
+    selling_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
+    description = models.CharField(max_length=500, blank=True)
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_publicly_visible = models.BooleanField(default=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("display_order", "name")
+
+    def clean(self):
+        if self.therapy_id and self.organization_id != self.therapy.organization_id:
+            raise ValidationError({"therapy": "Therapy is unavailable in this organization."})
+        if self.valid_from and self.valid_until and self.valid_from >= self.valid_until:
+            raise ValidationError({"valid_until": "End date must follow start date."})
+
+    def is_current(self, at=None):
+        at = at or timezone.now()
+        return self.is_active and (not self.valid_from or self.valid_from <= at) and (not self.valid_until or self.valid_until > at)
+
+
+class CommercialOffer(models.Model):
+    class OfferType(models.TextChoices):
+        PERCENTAGE = "PERCENTAGE", "Percentage discount"
+        FIXED_DISCOUNT = "FIXED_DISCOUNT", "Fixed discount"
+        FIXED_BUNDLE = "FIXED_BUNDLE", "Fixed-price bundle"
+        FREE_THERAPY = "FREE_THERAPY", "Free therapy / add-on"
+        FAMILY = "FAMILY", "Family discount"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    title = models.CharField(max_length=160)
+    promotional_text = models.CharField(max_length=500, blank=True)
+    offer_type = models.CharField(max_length=24, choices=OfferType.choices)
+    eligible_therapies = models.ManyToManyField(TherapyOption, related_name="commercial_offers")
+    qualifying_package = models.ForeignKey(TherapyPackage, on_delete=models.PROTECT, null=True, blank=True, related_name="commercial_offers")
+    minimum_therapy_count = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1)])
+    maximum_therapy_count = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    fixed_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    free_therapy = models.ForeignKey(TherapyOption, on_delete=models.PROTECT, null=True, blank=True, related_name="free_addon_offers")
+    free_quantity = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1)])
+    family_required = models.BooleanField(default=False)
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_publicly_visible = models.BooleanField(default=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("display_order", "title")
+
+    def clean(self):
+        errors = {}
+        if self.free_therapy_id and self.organization_id != self.free_therapy.organization_id:
+            errors["free_therapy"] = "Free therapy must belong to this organization."
+        if self.qualifying_package_id and self.organization_id != self.qualifying_package.organization_id:
+            errors["qualifying_package"] = "Qualifying package must belong to this organization."
+        if self.maximum_therapy_count and self.maximum_therapy_count < self.minimum_therapy_count:
+            errors["maximum_therapy_count"] = "Maximum therapy count cannot be below the minimum."
+        if self.valid_from and self.valid_until and self.valid_from >= self.valid_until:
+            errors["valid_until"] = "End date must follow start date."
+        if self.offer_type == self.OfferType.PERCENTAGE and self.discount_value > 100:
+            errors["discount_value"] = "Percentage discount cannot exceed 100%."
+        if self.offer_type == self.OfferType.FIXED_BUNDLE and self.fixed_price is None:
+            errors["fixed_price"] = "A fixed bundle price is required."
+        if self.offer_type == self.OfferType.FREE_THERAPY and self.free_therapy_id is None:
+            errors["free_therapy"] = "Select the free therapy or add-on."
+        if errors:
+            raise ValidationError(errors)
+
+    def is_current(self, at=None):
+        at = at or timezone.now()
+        return self.is_active and (not self.valid_from or self.valid_from <= at) and (not self.valid_until or self.valid_until > at)
+
+
+class CommercialAuditEvent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    object_kind = models.CharField(max_length=24)
+    object_id = models.UUIDField()
+    action = models.CharField(max_length=16)
+    before = models.JSONField(default=dict, blank=True)
+    after = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at",)
 
 
 class AppointmentRequest(models.Model):
@@ -71,6 +183,18 @@ class AppointmentRequest(models.Model):
     requested_therapies = models.ManyToManyField(
         TherapyOption, related_name="multi_therapy_requests", blank=True
     )
+    selected_package = models.ForeignKey(
+        TherapyPackage, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="appointment_requests",
+    )
+    selected_offer = models.ForeignKey(
+        CommercialOffer, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="appointment_requests",
+    )
+    commercial_snapshot = models.JSONField(default=dict, blank=True)
+    regular_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    final_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     preferred_practitioner = models.ForeignKey(
         "practitioners.PractitionerProfile",
         on_delete=models.PROTECT,
@@ -158,6 +282,8 @@ class AppointmentRequest(models.Model):
 
     @property
     def requested_duration_minutes(self):
+        if self.commercial_snapshot.get("duration_minutes"):
+            return self.commercial_snapshot["duration_minutes"]
         return (1 + self.requested_therapies.count()) * 45
 
 
