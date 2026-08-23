@@ -31,6 +31,8 @@ from apps.appointments.views import (
     OperationalAppointmentListCreateView,
     OwnerAppointmentDetailView,
     OwnerAppointmentListView,
+    OwnerAnalyticsCsvView,
+    OwnerAnalyticsView,
     PhysiotherapistVisitVerificationView,
     PractitionerPaymentListView,
     QuickAppointmentCreateView,
@@ -51,6 +53,8 @@ from apps.appointments.views import (
 )
 
 urlpatterns = [
+    path("owner/analytics/", OwnerAnalyticsView.as_view(), name="owner-analytics"),
+    path("owner/analytics/export.csv", OwnerAnalyticsCsvView.as_view(), name="owner-analytics-csv"),
     path("commercial/public/", PublicCommercialCatalogView.as_view(), name="commercial-public"),
     path("commercial/quote/", CommercialQuoteView.as_view(), name="commercial-quote"),
     path("commercial/therapies/", TherapyManagementListCreateView.as_view(), name="commercial-therapy-list"),

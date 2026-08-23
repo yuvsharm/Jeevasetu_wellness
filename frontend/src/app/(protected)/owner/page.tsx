@@ -9,7 +9,8 @@ import { PractitionerReview } from "@/components/practitioners/manager-review";
 import { PaymentOperations } from "@/components/appointments/payment-operations";
 import { ReviewModerationPanel } from "@/components/appointments/review-panels";
 import { CommercialManagement } from "@/components/appointments/commercial-management";
+import { OwnerAnalyticsDashboard } from "@/components/analytics/owner-analytics-dashboard";
 
 export default function OwnerPage() {
-  return <ProtectedPage role="OWNER" title="Owner operations"><CommercialManagement /><ReviewModerationPanel /><PractitionerReview /><OwnerRequests /><OperationsVisitVerificationPanel /><ScheduleOperations /><PaymentOperations /><AvailabilityOperations /><StaffDirectory allowManagers /><PatientDirectory /></ProtectedPage>;
+  return <ProtectedPage role="OWNER" title="Owner operations"><OwnerAnalyticsDashboard /><div id="operations"><CommercialManagement /><ReviewModerationPanel /><div id="practitioner-review"><PractitionerReview /></div><OwnerRequests /><OperationsVisitVerificationPanel /><ScheduleOperations /><PaymentOperations /><AvailabilityOperations /><StaffDirectory allowManagers /><PatientDirectory /></div></ProtectedPage>;
 }

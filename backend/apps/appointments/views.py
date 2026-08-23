@@ -1,10 +1,11 @@
+import csv
 from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, Q
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -16,6 +17,7 @@ from apps.accounts.models import Role, RoleAssignment
 from apps.accounts.permissions import (
     IsCustomer,
     IsEnabledAuthenticated,
+    IsOwner,
     IsOwnerOrManager,
     IsPhysiotherapist,
     active_roles,
@@ -86,6 +88,7 @@ from apps.appointments.booking_verification import (
     verify_booking_otp,
 )
 from apps.appointments.commercial import calculate_quote
+from apps.appointments.analytics import build_owner_analytics, resolve_range
 from apps.patients.models import CustomerFamilyMember
 from apps.appointments.visit_verification import (
     issue_visit_otp,
@@ -101,6 +104,50 @@ class HasTenant:
         super().initial(request, *args, **kwargs)
         if getattr(request, "organization", None) is None:
             raise NotFound("Organization context is unavailable.")
+
+
+class OwnerAnalyticsView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwner)
+
+    def get(self, request):
+        try:
+            scope = resolve_range(request.query_params)
+        except ValueError as error:
+            raise ValidationError({"date_range": str(error)}) from error
+        return Response(build_owner_analytics(request.organization, scope))
+
+
+class OwnerAnalyticsCsvView(OwnerAnalyticsView):
+    def get(self, request):
+        try:
+            scope = resolve_range(request.query_params)
+        except ValueError as error:
+            raise ValidationError({"date_range": str(error)}) from error
+        data = build_owner_analytics(request.organization, scope)
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="owner-business-summary-{data["scope"]["start_date"]}-to-{data["scope"]["end_date"]}.csv"'
+        )
+        writer = csv.writer(response)
+        writer.writerow(("JeevaSetu Owner Business Summary", request.organization.display_name))
+        writer.writerow(("Date scope", data["scope"]["start_date"], data["scope"]["end_date"], data["scope"]["timezone"]))
+        writer.writerow(())
+        writer.writerow(("KPI", "Value"))
+        for key, value in data["kpis"].items():
+            writer.writerow((key.replace("_", " ").title(), value if value is not None else "Unavailable"))
+        writer.writerow(())
+        writer.writerow(("Therapy", "Bookings", "Completed", "Booked value", "Approved average rating"))
+        for row in data["therapies"]:
+            writer.writerow((row["name"], row["bookings"], row["completed"], row["booked_value"], row["average_rating"] or ""))
+        writer.writerow(())
+        writer.writerow(("Commercial benefit", "Type", "Bookings", "Booked value", "Discounts", "Completion rate"))
+        for row in data["commercial_performance"]:
+            writer.writerow((row["name"], row["kind"], row["bookings"], row["booked_value"], row["discounts"], row["completion_rate"]))
+        writer.writerow(())
+        writer.writerow(("Attention item", "Count"))
+        for key, value in data["attention"].items():
+            writer.writerow((key.replace("_", " ").title(), value))
+        return response
 
 
 class TherapyListView(HasTenant, generics.ListAPIView):
