@@ -558,6 +558,11 @@ class VisitVerificationAuditEvent(models.Model):
 
 
 class AppointmentRating(models.Model):
+    class ModerationStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending Review"
+        APPROVED = "APPROVED", "Approved"
+        HIDDEN = "HIDDEN", "Hidden / Rejected"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     appointment = models.OneToOneField(Appointment, on_delete=models.PROTECT, related_name="rating")
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
@@ -565,7 +570,30 @@ class AppointmentRating(models.Model):
     physiotherapist = models.ForeignKey("staff.StaffProfile", on_delete=models.PROTECT)
     stars = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
     comment = models.CharField(max_length=1000, blank=True)
+    moderation_status = models.CharField(
+        max_length=16, choices=ModerationStatus.choices, default=ModerationStatus.PENDING
+    )
+    moderation_reason = models.CharField(max_length=500, blank=True)
+    moderated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="moderated_appointment_ratings",
+    )
+    moderated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class AppointmentRatingModerationEvent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rating = models.ForeignKey(AppointmentRating, on_delete=models.PROTECT, related_name="moderation_events")
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    previous_status = models.CharField(max_length=16)
+    new_status = models.CharField(max_length=16, choices=AppointmentRating.ModerationStatus.choices)
+    reason = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at",)
 
 
 class PractitionerPayment(models.Model):

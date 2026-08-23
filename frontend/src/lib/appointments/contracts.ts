@@ -50,7 +50,12 @@ export type OperationalAppointment = {
   rating_stars?: number | null;
   rating_comment?: string;
   payment_status?: "PENDING" | "PROCESSING" | "PAID" | "HELD" | null;
+  rating?: CustomerReview | null;
 };
+
+export type CustomerReview = { id:string; appointment:string; stars:number; comment:string; moderation_status:"PENDING"|"APPROVED"|"HIDDEN"; status_display:string; moderation_reason:string; created_at:string };
+export type ReviewItem = { id:string; stars:number; comment:string; moderation_status:"PENDING"|"APPROVED"|"HIDDEN"; moderation_reason:string; customer_display_name:string; physiotherapist_name:string; appointment_date:string; therapy_name:string; created_at:string };
+export type ReviewSummary = { average_rating:number|null; review_count:number; reviews:ReviewItem[] };
 
 export type VisitVerificationStatus = {
   status: "NOT_READY" | "AWAITING_VERIFICATION" | "VERIFIED" | "EXPIRED" | "LOCKED";

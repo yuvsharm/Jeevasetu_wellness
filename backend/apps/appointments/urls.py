@@ -34,6 +34,10 @@ from apps.appointments.views import (
     PractitionerPaymentListView,
     QuickAppointmentCreateView,
     OperationsPaymentView,
+    PractitionerReviewListView,
+    PublicReviewListView,
+    ReviewModerationView,
+    ReviewOperationsListView,
     PhysiotherapistWorkloadView,
     TherapyListView,
 )
@@ -138,4 +142,8 @@ urlpatterns = [
     path("schedule/my-appointments/<uuid:pk>/rating/", CustomerAppointmentRatingView.as_view(), name="schedule-customer-rating"),
     path("schedule/assigned-to-me/payments/", PractitionerPaymentListView.as_view(), name="schedule-practitioner-payments"),
     path("schedule/<uuid:pk>/payment/", OperationsPaymentView.as_view(), name="schedule-operations-payment"),
+    path("reviews/public/", PublicReviewListView.as_view(), name="reviews-public"),
+    path("reviews/operations/", ReviewOperationsListView.as_view(), name="reviews-operations"),
+    path("reviews/operations/<uuid:pk>/moderate/", ReviewModerationView.as_view(), name="reviews-moderate"),
+    path("reviews/mine/", PractitionerReviewListView.as_view(), name="reviews-practitioner-mine"),
 ]

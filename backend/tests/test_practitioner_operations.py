@@ -1,5 +1,6 @@
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.appointments.models import Appointment, AppointmentRating, PractitionerPayment
 from tests.test_appointment_operations import create_scheduled
@@ -14,7 +15,8 @@ def test_customer_only_rates_once_after_completion(api_client):
     appointment = create_scheduled(api_client, values)
     appointment.status = Appointment.Status.COMPLETED
     appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
-    appointment.save(update_fields=("status", "assignment_status"))
+    appointment.completed_at = timezone.now()
+    appointment.save(update_fields=("status", "assignment_status", "completed_at"))
     url = reverse("schedule-customer-rating", args=[appointment.id])
     api_client.force_authenticate(physio_user)
     assert api_client.post(url, {"stars": 5}, format="json", **headers(organization)).status_code == 403

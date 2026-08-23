@@ -412,6 +412,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         source="physiotherapist.experience_years", read_only=True, default=None
     )
     visit_verification = serializers.SerializerMethodField()
+    rating = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -441,12 +442,17 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "completed_at",
             "payment_status",
             "visit_verification",
+            "rating",
         )
 
     def get_physiotherapist_name(self, value):
         if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED or not value.physiotherapist:
             return None
         return value.physiotherapist.user.get_full_name()
+
+    def get_rating(self, value):
+        rating = getattr(value, "rating", None)
+        return AppointmentRatingSerializer(rating).data if rating else None
 
     def get_payment_status(self, value):
         payment = getattr(value, "practitioner_payment", None)
@@ -715,10 +721,54 @@ class AppointmentAuditSerializer(serializers.ModelSerializer):
         )
 
 class AppointmentRatingSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source="get_moderation_status_display", read_only=True)
+
     class Meta:
         model = AppointmentRating
-        fields = ("id", "appointment", "stars", "comment", "created_at")
-        read_only_fields = ("id", "appointment", "created_at")
+        fields = ("id", "appointment", "stars", "comment", "moderation_status", "status_display", "moderation_reason", "created_at")
+        read_only_fields = ("id", "appointment", "moderation_status", "status_display", "moderation_reason", "created_at")
+
+    def validate_comment(self, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise serializers.ValidationError("Please share at least 3 characters about your experience.")
+        return value
+
+
+class ReviewOperationsSerializer(serializers.ModelSerializer):
+    customer_display_name = serializers.SerializerMethodField()
+    physiotherapist_name = serializers.CharField(source="physiotherapist.user.get_full_name", read_only=True)
+    appointment_date = serializers.DateTimeField(source="appointment.scheduled_start", read_only=True)
+    therapy_name = serializers.CharField(source="appointment.therapy.name", read_only=True)
+
+    class Meta:
+        model = AppointmentRating
+        fields = ("id", "stars", "comment", "moderation_status", "moderation_reason", "customer_display_name", "physiotherapist_name", "appointment_date", "therapy_name", "created_at")
+
+    def get_customer_display_name(self, value):
+        return value.customer.first_name or "Customer"
+
+
+class ReviewModerationSerializer(serializers.Serializer):
+    moderation_status = serializers.ChoiceField(choices=(AppointmentRating.ModerationStatus.APPROVED, AppointmentRating.ModerationStatus.HIDDEN))
+    reason = serializers.CharField(max_length=500, required=False, allow_blank=True, trim_whitespace=True)
+
+    def validate(self, attrs):
+        if attrs["moderation_status"] == AppointmentRating.ModerationStatus.HIDDEN and len(attrs.get("reason", "")) < 3:
+            raise serializers.ValidationError({"reason": "A moderation reason is required when hiding a review."})
+        return attrs
+
+
+class PublicReviewSerializer(serializers.ModelSerializer):
+    customer_display_name = serializers.SerializerMethodField()
+    physiotherapist_name = serializers.CharField(source="physiotherapist.user.get_full_name", read_only=True)
+
+    class Meta:
+        model = AppointmentRating
+        fields = ("stars", "comment", "customer_display_name", "physiotherapist_name", "created_at")
+
+    def get_customer_display_name(self, value):
+        return value.customer.first_name or "Customer"
 
 
 class PractitionerPaymentSerializer(serializers.ModelSerializer):

@@ -7,7 +7,8 @@ import { PatientDirectory } from "@/components/patients/patient-management";
 import { StaffDirectory } from "@/components/staff/staff-management";
 import { PractitionerReview } from "@/components/practitioners/manager-review";
 import { PaymentOperations } from "@/components/appointments/payment-operations";
+import { ReviewModerationPanel } from "@/components/appointments/review-panels";
 
 export default function OwnerPage() {
-  return <ProtectedPage role="OWNER" title="Owner operations"><PractitionerReview /><OwnerRequests /><OperationsVisitVerificationPanel /><ScheduleOperations /><PaymentOperations /><AvailabilityOperations /><StaffDirectory allowManagers /><PatientDirectory /></ProtectedPage>;
+  return <ProtectedPage role="OWNER" title="Owner operations"><ReviewModerationPanel /><PractitionerReview /><OwnerRequests /><OperationsVisitVerificationPanel /><ScheduleOperations /><PaymentOperations /><AvailabilityOperations /><StaffDirectory allowManagers /><PatientDirectory /></ProtectedPage>;
 }

@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Avg, Count, Q
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import generics, permissions, status
@@ -27,8 +27,10 @@ from apps.appointments.models import (
     AppointmentChangeRequest,
     AppointmentRequest,
     AppointmentRating,
+    AppointmentRatingModerationEvent,
     PractitionerPayment,
     TherapyOption,
+    VisitVerification,
 )
 from apps.appointments.scheduling import (
     assign_physiotherapist,
@@ -50,6 +52,9 @@ from apps.appointments.serializers import (
     AppointmentRequestSerializer,
     CustomerRebookSerializer,
     AppointmentRatingSerializer,
+    PublicReviewSerializer,
+    ReviewModerationSerializer,
+    ReviewOperationsSerializer,
     PractitionerPaymentSerializer,
     AppointmentRescheduleSerializer,
     AppointmentStatusSerializer,
@@ -1008,16 +1013,92 @@ class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
     serializer_class = AppointmentRatingSerializer
 
     def post(self, request, pk):
-        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user)).first()
-        if appointment is None:
-            raise NotFound("Rating is unavailable.")
-        if AppointmentRating.objects.filter(appointment=appointment).exists():
-            raise ValidationError("This appointment has already been rated.")
+        with transaction.atomic():
+            appointment = Appointment.objects.select_for_update(of=("self",)).filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, completed_at__isnull=False, physiotherapist__isnull=False).filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user)).first()
+            if appointment is None:
+                raise NotFound("Review is unavailable.")
+            verification = appointment.visit_verifications.order_by("-created_at").first()
+            if verification and verification.state != VisitVerification.State.VERIFIED:
+                raise ValidationError("The completed service was not validly verified.")
+            if AppointmentRating.objects.filter(appointment=appointment).exists():
+                raise ValidationError("This appointment has already been reviewed.")
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            value = serializer.save(appointment=appointment, organization=request.organization, customer=request.user, physiotherapist=appointment.physiotherapist)
+            AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event=AppointmentAuditEvent.Event.RATING_SUBMITTED)
+        return Response(self.get_serializer(value).data, status=status.HTTP_201_CREATED)
+
+
+class ReviewOperationsListView(HasTenant, generics.ListAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = ReviewOperationsSerializer
+    pagination_class = AppointmentPagination
+
+    def get_queryset(self):
+        level, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
+        queryset = AppointmentRating.objects.filter(organization=self.request.organization).select_related("customer", "physiotherapist__user", "appointment__therapy", "appointment__clinic")
+        if level == Role.MANAGER and clinic_ids is not None:
+            queryset = queryset.filter(appointment__clinic_id__in=clinic_ids)
+        params = self.request.query_params
+        if params.get("physiotherapist"):
+            queryset = queryset.filter(physiotherapist_id=params["physiotherapist"])
+        if params.get("therapist"):
+            queryset = queryset.filter(
+                Q(physiotherapist__user__first_name__icontains=params["therapist"])
+                | Q(physiotherapist__user__last_name__icontains=params["therapist"])
+            )
+        if params.get("rating"):
+            queryset = queryset.filter(stars=params["rating"])
+        if params.get("status"):
+            queryset = queryset.filter(moderation_status=params["status"])
+        if params.get("date_from"):
+            queryset = queryset.filter(created_at__date__gte=params["date_from"])
+        if params.get("date_to"):
+            queryset = queryset.filter(created_at__date__lte=params["date_to"])
+        return queryset.order_by("-created_at")
+
+
+class ReviewModerationView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = ReviewModerationSerializer
+
+    def post(self, request, pk):
+        level, clinic_ids = actor_role_scope(request.user, request.organization)
+        queryset = AppointmentRating.objects.filter(pk=pk, organization=request.organization)
+        if level == Role.MANAGER and clinic_ids is not None:
+            queryset = queryset.filter(appointment__clinic_id__in=clinic_ids)
+        review = queryset.first()
+        if review is None:
+            raise NotFound("Review is unavailable.")
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        value = serializer.save(appointment=appointment, organization=request.organization, customer=request.user, physiotherapist=appointment.physiotherapist)
-        AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event="RATING_SUBMITTED")
-        return Response(self.get_serializer(value).data, status=status.HTTP_201_CREATED)
+        previous = review.moderation_status
+        review.moderation_status = serializer.validated_data["moderation_status"]
+        review.moderation_reason = serializer.validated_data.get("reason", "")
+        review.moderated_by = request.user
+        review.moderated_at = timezone.now()
+        review.save(update_fields=("moderation_status", "moderation_reason", "moderated_by", "moderated_at"))
+        AppointmentRatingModerationEvent.objects.create(rating=review, organization=request.organization, actor=request.user, previous_status=previous, new_status=review.moderation_status, reason=review.moderation_reason)
+        return Response(ReviewOperationsSerializer(review).data)
+
+
+class PublicReviewListView(HasTenant, GenericAPIView):
+    permission_classes = (permissions.AllowAny,)
+
+    def get(self, request):
+        queryset = AppointmentRating.objects.filter(organization=request.organization, moderation_status=AppointmentRating.ModerationStatus.APPROVED).select_related("customer", "physiotherapist__user").order_by("-created_at")
+        aggregate = queryset.aggregate(average_rating=Avg("stars"), review_count=Count("id"))
+        return Response({"average_rating": aggregate["average_rating"], "review_count": aggregate["review_count"], "reviews": PublicReviewSerializer(queryset[:20], many=True).data})
+
+
+class PractitionerReviewListView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
+
+    def get(self, request):
+        queryset = AppointmentRating.objects.filter(organization=request.organization, physiotherapist__user=request.user).select_related("customer", "physiotherapist__user", "appointment__therapy").order_by("-created_at")
+        approved = queryset.filter(moderation_status=AppointmentRating.ModerationStatus.APPROVED)
+        aggregate = approved.aggregate(average_rating=Avg("stars"), review_count=Count("id"))
+        return Response({"average_rating": aggregate["average_rating"], "review_count": aggregate["review_count"], "reviews": ReviewOperationsSerializer(queryset, many=True).data})
 
 
 class PractitionerPaymentListView(HasTenant, generics.ListAPIView):

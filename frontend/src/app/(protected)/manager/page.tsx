@@ -8,7 +8,8 @@ import { ManagerDashboard } from "@/components/staff/staff-management";
 import { PractitionerReview } from "@/components/practitioners/manager-review";
 import { PaymentOperations } from "@/components/appointments/payment-operations";
 import { ManagerOperationsDashboard } from "@/components/appointments/manager-operations-dashboard";
+import { ReviewModerationPanel } from "@/components/appointments/review-panels";
 
 export default function ManagerPage() {
-  return <ProtectedPage role="MANAGER" title="Operations team"><ManagerOperationsDashboard /><OwnerRequests /><ScheduleOperations /><OperationsVisitVerificationPanel /><PractitionerReview /><ManagerDashboard /><AvailabilityOperations /><PaymentOperations /><PatientDirectory /></ProtectedPage>;
+  return <ProtectedPage role="MANAGER" title="Operations team"><ManagerOperationsDashboard /><ReviewModerationPanel /><OwnerRequests /><ScheduleOperations /><OperationsVisitVerificationPanel /><PractitionerReview /><ManagerDashboard /><AvailabilityOperations /><PaymentOperations /><PatientDirectory /></ProtectedPage>;
 }

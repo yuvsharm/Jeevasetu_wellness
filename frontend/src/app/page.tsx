@@ -7,6 +7,7 @@ import { PublicShell } from "@/components/public/public-shell";
 import { SectionHeading } from "@/components/public/section-heading";
 import { TherapyGrid } from "@/components/public/therapy-grid";
 import { contact, strengths } from "@/lib/public-site/content";
+import { PublicReviews } from "@/components/appointments/review-panels";
 
 export default function Home() { return <PublicShell><main>
   <section className="hero-section relative isolate overflow-hidden">
@@ -32,4 +33,5 @@ export default function Home() { return <PublicShell><main>
   <section className="section bg-[#0b6b3a] text-white"><div className="site-container"><SectionHeading eyebrow="Why choose us" title="Quiet confidence in every visit" copy="Professional conduct, careful preparation, and care that respects your home."/><div className="grid gap-6 md:grid-cols-3">{strengths.slice(0,3).map(([title, copy]) => <div key={title} className="rounded-3xl border border-white/15 p-7"><h3 className="font-serif text-2xl">{title}</h3><p className="mt-3 text-sm leading-7 text-white/70">{copy}</p></div>)}</div></div></section>
   <section className="section bg-[#f7f3e9]"><div className="site-container"><SectionHeading eyebrow="Questions, answered" title="Know what to expect" center/><FaqList limit={4}/><div className="mt-8 text-center"><Link href="/faq" className="button-quiet">Read all FAQs</Link></div></div></section>
   <section className="section"><div className="site-container rounded-[2.5rem] bg-[#173d2a] px-7 py-14 text-center text-white sm:px-14"><p className="eyebrow text-[#e2c679]">Your wellness, closer to home</p><h2 className="mx-auto mt-4 max-w-3xl font-serif text-4xl sm:text-5xl">Ready to begin a more thoughtful care routine?</h2><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/book-appointment" className="button-gold">Book appointment</Link><a href={contact.whatsapp} className="button-light" target="_blank" rel="noreferrer">WhatsApp</a><a href={contact.phoneHref} className="button-light">Call now</a></div></div></section>
+  <PublicReviews/>
 </main></PublicShell>; }

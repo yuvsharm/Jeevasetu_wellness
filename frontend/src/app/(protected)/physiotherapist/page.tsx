@@ -5,7 +5,8 @@ import { MyAvailability } from "@/components/availability/availability-managemen
 import { PhysiotherapistProfile } from "@/components/staff/staff-management";
 import { OpenToWorkControl } from "@/components/practitioners/open-to-work";
 import { PractitionerDashboardOverview } from "@/components/practitioners/practitioner-dashboard";
+import { PractitionerReviews } from "@/components/appointments/review-panels";
 
 export default function PhysiotherapistPage() {
-  return <ProtectedPage role="PHYSIOTHERAPIST" title="Practitioner Dashboard"><PractitionerDashboardOverview /><PhysiotherapistProfile /><OpenToWorkControl /><MyAvailability /><PractitionerVisitWorkflow /><PhysiotherapistVisitVerificationPanel /></ProtectedPage>;
+  return <ProtectedPage role="PHYSIOTHERAPIST" title="Practitioner Dashboard"><PractitionerDashboardOverview /><PractitionerReviews /><PhysiotherapistProfile /><OpenToWorkControl /><MyAvailability /><PractitionerVisitWorkflow /><PhysiotherapistVisitVerificationPanel /></ProtectedPage>;
 }
