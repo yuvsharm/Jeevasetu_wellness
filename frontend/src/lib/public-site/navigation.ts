@@ -1,13 +1,11 @@
 export const publicNavigation = [
   { label: "Home", href: "/" },
-  { label: "About", href: "/about" },
   { label: "Therapies", href: "/therapies" },
-  { label: "Services", href: "/therapies" },
-  { label: "Packages", href: "/packages" },
-  { label: "Why JeevaSetu", href: "/why-choose-us" },
-  { label: "Practitioners", href: "/practitioners" },
-  { label: "FAQ", href: "/faq" },
-  { label: "Contact", href: "/contact" },
+  { label: "Plans & Offers", href: "/packages" },
+  { label: "How It Works", href: "/#how-it-works" },
+  { label: "Reviews", href: "/#reviews" },
+  { label: "Contact Us", href: "/contact" },
+  { label: "Join With Us", href: "/work-with-us" },
 ] as const;
 
 export function isActivePublicRoute(pathname: string | null, href: string) {

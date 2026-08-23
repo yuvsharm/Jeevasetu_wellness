@@ -25,7 +25,8 @@ describe("customer reviews",()=>{
     vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify({average_rating:5,review_count:1,reviews:[review]}),{status:200}));
     renderQuery(<PublicReviews/>);
     expect(await screen.findByText("Excellent professional service")).toBeInTheDocument();
-    expect(screen.getByText(/Asha · Priya/)).toBeInTheDocument();
+    expect(screen.getByText("Asha")).toBeInTheDocument();
+    expect(screen.getByText(/Priya/)).toBeInTheDocument();
   });
 
   it("requires a reason before enabling hide",async()=>{

@@ -8,10 +8,10 @@ import "./globals.css";
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: "JeevaSetu Wellness | Ayurvedic Home Service in Meerut", template: "%s | JeevaSetu Wellness" },
-  description: "Premium Ayurvedic home-service therapies and wellness packages in Meerut. Healing Naturally. Living Better.",
-  keywords: ["Ayurveda Meerut", "Ayurvedic home service", "wellness therapy", "JeevaSetu Wellness"],
-  openGraph: { title: "JeevaSetu Wellness", description: "Healing Naturally. Living Better.", type: "website", locale: "en_IN" },
+  title: { default: "JeevaSetu | Home Physiotherapy & Wellness Care in Meerut", template: "%s | JeevaSetu" },
+  description: "Professional home physiotherapy and wellness services in Meerut with secure booking, transparent therapy information, and coordinated home visits.",
+  keywords: ["home physiotherapy Meerut", "wellness home service", "physiotherapy at home", "JeevaSetu"],
+  openGraph: { title: "JeevaSetu | Professional Care at Your Home", description: "Professional physiotherapy and wellness care coordinated for your home in Meerut.", type: "website", locale: "en_IN",images:[{url:"/images/ayurveda-hero.png",width:1200,height:630,alt:"JeevaSetu home wellness care"}] },
   robots: { index: true, follow: true },
   manifest: "/manifest.webmanifest",
   icons: {
