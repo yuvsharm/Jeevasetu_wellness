@@ -89,6 +89,20 @@ describe("appointment workflow", () => {
     expect(await screen.findByRole("option", { name: "Abhyang" })).toBeInTheDocument();
   });
 
+  it("preserves a therapy-card selection in the existing booking flow",async()=>{
+    const therapy={id:"therapy-kati",name:"Kati Basti",slug:"kati-basti",base_price:"1900.00",default_duration_minutes:50};
+    vi.spyOn(global,"fetch").mockImplementation(async(input)=>String(input)==="/api/commercial/public"
+      ?new Response(JSON.stringify({therapies:[therapy,{...therapy,id:"therapy-nasya",name:"Nasya",slug:"nasya"}],packages:[],offers:[]}),{status:200})
+      :new Response(JSON.stringify([]),{status:200}));
+    renderWithQuery(<BookingForm initialTherapy="therapy-kati"/>);
+    fireEvent.change(screen.getByLabelText("Patient name"),{target:{value:"Asha Sharma"}});
+    fireEvent.change(screen.getByLabelText("Age"),{target:{value:"42"}});
+    fireEvent.change(screen.getByLabelText("Mobile number"),{target:{value:"9876543210"}});
+    fireEvent.click(screen.getByRole("button",{name:"Continue"}));
+    expect(await screen.findByLabelText("Therapy")).toHaveValue("therapy-kati");
+    expect(screen.getByLabelText("Therapy")).not.toHaveValue("therapy-nasya");
+  });
+
   it("renders the customer request module and booking entry point", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
     renderWithQuery(<CustomerRequests/>);

@@ -7,6 +7,9 @@ import Home from "@/app/page";
 import TherapiesPage from "@/app/therapies/page";
 import { PublicHeader } from "./public-header";
 
+const productionTherapyNames=["Abhyang","Potli Massage","Shirodhara","Basti","Jannu Basti","Kati Basti","Griva Basti","Akshiyarpah (Both Eyes)","Nasya","Deeptishu Massage"];
+const productionTherapies=productionTherapyNames.map((name,index)=>({id:`therapy-${index+1}`,name,slug:name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,""),base_price:`${500+index*100}.00`,default_duration_minutes:45,short_description:`Approved information for ${name}`,benefits:[],is_active:true,is_publicly_visible:true,display_order:index+1}));
+
 describe("public website", () => {
   it("publishes only backend-managed visible therapies and current fees", async () => {
     const client=new QueryClient({defaultOptions:{queries:{staleTime:Infinity}}});
@@ -25,7 +28,22 @@ describe("public website", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("navigation", { name: /mobile navigation/i })).toBeInTheDocument();
     expect(screen.getAllByRole("link",{name:"Customer Login"})[0]).toHaveAttribute("href","/customer-login");
+    expect(screen.getAllByRole("link",{name:"Staff Login"})[0]).toHaveAttribute("href","/login");
     expect(screen.getAllByRole("link",{name:"Book Appointment"})[0]).toHaveAttribute("href","/book-appointment");
+  });
+
+  it("shows all ten backend therapies as compact directly bookable cards",async()=>{
+    const client=new QueryClient({defaultOptions:{queries:{staleTime:Infinity}}});
+    client.setQueryData(["commercial-public"],{therapies:productionTherapies,packages:[],offers:[]});
+    client.setQueryData(["public-reviews"],{average_rating:null,review_count:0,reviews:[]});
+    render(<QueryClientProvider client={client}><Home/></QueryClientProvider>);
+    for(const [index,name] of productionTherapyNames.entries()){
+      expect(screen.getByRole("heading",{name})).toBeInTheDocument();
+      expect(screen.getByRole("link",{name:`Book ${name}`})).toHaveAttribute("href",`/book-appointment?therapy=therapy-${index+1}`);
+      expect(screen.getByRole("link",{name:`View details for ${name}`})).toHaveAttribute("href",expect.stringMatching(/^\/therapies#/));
+      expect(screen.getByAltText(`${name} home wellness therapy`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/Runtime OTP Primary Therapy/i)).not.toBeInTheDocument();
   });
 
   it("composes the premium homepage from real catalog and approved review data",async()=>{

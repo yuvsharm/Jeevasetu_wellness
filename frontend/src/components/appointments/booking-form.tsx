@@ -387,6 +387,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
                     <button
                       key={item.id}
                       type="button"
+                      aria-pressed={isSelected}
                       onClick={() => {
                         setSelectedTherapies((current) =>
                           current.includes(item.id)
