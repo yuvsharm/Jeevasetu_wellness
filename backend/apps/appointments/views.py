@@ -289,7 +289,7 @@ class BookingOtpIssueView(HasTenant, generics.GenericAPIView):
             "expires_at": verification.expires_at.isoformat(),
             "message": "Use the OTP sent to your mobile number to continue.",
         }
-        if getattr(settings, "DEBUG", False) or "DevBookingOtpDelivery" in getattr(settings, "BOOKING_OTP_DELIVERY_BACKEND", ""):
+        if not settings.MSG91_ENABLED and (getattr(settings, "DEBUG", False) or "DevBookingOtpDelivery" in getattr(settings, "BOOKING_OTP_DELIVERY_BACKEND", "")):
             payload["otp"] = delivery.otp
         return Response(payload, status=status.HTTP_201_CREATED)
 
@@ -306,7 +306,8 @@ class BookingOtpVerifyView(HasTenant, generics.GenericAPIView):
                 organization=request.organization,
                 verification_id=serializer.validated_data["verification_id"],
                 mobile_number=serializer.validated_data["mobile_number"],
-                otp=serializer.validated_data["otp"],
+                otp=serializer.validated_data.get("otp"),
+                access_token=serializer.validated_data.get("access_token"),
             )
         except DjangoValidationError as error:
             raise ValidationError(error.messages) from error

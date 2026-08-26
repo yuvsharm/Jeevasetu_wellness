@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import password_validation
 from django.db.models import Q
 from rest_framework import serializers
@@ -103,9 +104,16 @@ class LoginSerializer(serializers.Serializer):
 class CustomerOtpLoginSerializer(serializers.Serializer):
     verification_id = serializers.UUIDField()
     mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
-    otp = serializers.RegexField(r"^\d{6}$", write_only=True)
+    otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
+    access_token = serializers.CharField(required=False, write_only=True, trim_whitespace=False, max_length=4096)
     first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        required = "access_token" if settings.MSG91_ENABLED else "otp"
+        if not attrs.get(required):
+            raise serializers.ValidationError({required: "This field is required for mobile verification."})
+        return attrs
 
 
 class RefreshSerializer(serializers.Serializer):

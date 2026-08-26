@@ -208,6 +208,12 @@ BOOKING_OTP_EXPIRY_MINUTES = env.int("BOOKING_OTP_EXPIRY_MINUTES", default=10)
 BOOKING_OTP_MAX_ATTEMPTS = env.int("BOOKING_OTP_MAX_ATTEMPTS", default=5)
 BOOKING_OTP_RESEND_SECONDS = env.int("BOOKING_OTP_RESEND_SECONDS", default=60)
 BOOKING_OTP_TOKEN_SECONDS = env.int("BOOKING_OTP_TOKEN_SECONDS", default=900)
+MSG91_ENABLED = env.bool("MSG91_ENABLED", default=False)
+MSG91_WIDGET_ID = env("MSG91_WIDGET_ID", default="")
+MSG91_WIDGET_TOKEN = env("MSG91_WIDGET_TOKEN", default="")
+MSG91_AUTH_KEY = env("MSG91_AUTH_KEY", default="")
+MSG91_VERIFY_URL = env("MSG91_VERIFY_URL", default="https://control.msg91.com/api/v5/widget/verifyAccessToken")
+MSG91_TIMEOUT_SECONDS = env.float("MSG91_TIMEOUT_SECONDS", default=5.0)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

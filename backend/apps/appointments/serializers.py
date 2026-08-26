@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, transaction
@@ -129,7 +130,14 @@ class BookingOtpVerifySerializer(serializers.Serializer):
         min_length=10,
         validators=[RegexValidator(r"^[6-9]\d{9}$", "Enter a valid 10-digit Indian mobile number.")],
     )
-    otp = serializers.CharField(min_length=6, max_length=6)
+    otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
+    access_token = serializers.CharField(required=False, write_only=True, trim_whitespace=False, max_length=4096)
+
+    def validate(self, attrs):
+        required = "access_token" if settings.MSG91_ENABLED else "otp"
+        if not attrs.get(required):
+            raise serializers.ValidationError({required: "This field is required for mobile verification."})
+        return attrs
 
 
 class CustomerRebookSerializer(serializers.Serializer):

@@ -62,6 +62,12 @@ if CELERY_RESULT_BACKEND:
     require_url_scheme("CELERY_RESULT_BACKEND", CELERY_RESULT_BACKEND, {"redis", "rediss"})
 CELERY_TASK_IGNORE_RESULT = CELERY_RESULT_BACKEND is None
 
+if not MSG91_ENABLED:  # noqa: F405
+    raise ImproperlyConfigured("MSG91_ENABLED must be true in production")
+for name in ("MSG91_WIDGET_ID", "MSG91_WIDGET_TOKEN", "MSG91_AUTH_KEY"):
+    if not globals()[name]:
+        raise ImproperlyConfigured(f"{name} must be configured in production")
+
 DEBUG = False
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True

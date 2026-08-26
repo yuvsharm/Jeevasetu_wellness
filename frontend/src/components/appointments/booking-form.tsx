@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { ClientApiError, requestJson } from "@/lib/api/client";
+import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
 import type { AppointmentRequest, CommercialCatalog, CommercialQuote } from "@/lib/appointments/contracts";
 import type { AppointmentFormValues } from "@/lib/appointments/schema";
 import type { PublicPractitioner } from "@/lib/practitioners/contracts";
@@ -68,6 +69,7 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   const [verifiedMobile, setVerifiedMobile] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpError, setOtpError] = useState("");
+  const [otpWidgetConfig, setOtpWidgetConfig] = useState<OtpWidgetConfig>({ enabled: false });
   const [selectedTherapies, setSelectedTherapies] = useState<string[]>(initialTherapy ? [initialTherapy] : []);
   const [selectedPackage, setSelectedPackage] = useState("");
   const [selectedOffer, setSelectedOffer] = useState("");
@@ -96,11 +98,16 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   });
 
   const issueOtp = useMutation({
-    mutationFn: (mobile_number: string) => requestJson<{ verification_id: string }>("/api/booking-otp/issue", {
-      method: "POST",
-      body: JSON.stringify({ mobile_number }),
-    }),
+    mutationFn: async (mobile_number: string) => {
+      const config = await loadOtpWidgetConfig();
+      const result = await requestJson<{ verification_id: string }>("/api/booking-otp/issue", {
+        method: "POST", body: JSON.stringify({ mobile_number }),
+      });
+      if (config.enabled) await sendMsg91Otp(config, mobile_number);
+      return { ...result, config };
+    },
     onSuccess: (result) => {
+      setOtpWidgetConfig(result.config);
       setOtpVerificationId(result.verification_id);
       setOtpVerificationToken("");
       setVerifiedMobile("");
@@ -112,11 +119,15 @@ export function BookingForm({ initialTherapy = "", quickMode = false }: { initia
   });
 
   const verifyOtp = useMutation({
-    mutationFn: (values: { mobile_number: string; verification_id: string; otp: string }) =>
-      requestJson<{ token: string }>("/api/booking-otp/verify", {
+    mutationFn: async (values: { mobile_number: string; verification_id: string; otp: string }) => {
+      const providerProof = otpWidgetConfig.enabled
+        ? { access_token: await verifyMsg91Otp(otpWidgetConfig, values.otp) }
+        : { otp: values.otp };
+      return requestJson<{ token: string }>("/api/booking-otp/verify", {
         method: "POST",
-        body: JSON.stringify(values),
-      }),
+        body: JSON.stringify({ mobile_number: values.mobile_number, verification_id: values.verification_id, ...providerProof }),
+      });
+    },
     onSuccess: (result) => {
       const mobile = form.getValues("mobile_number");
       setOtpVerificationToken(result.token);

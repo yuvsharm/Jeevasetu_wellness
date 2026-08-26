@@ -138,7 +138,8 @@ class CustomerOtpLoginView(APIView):
                 organization=request.organization,
                 verification_id=data["verification_id"],
                 mobile_number=data["mobile_number"],
-                otp=data["otp"],
+                otp=data.get("otp"),
+                access_token=data.get("access_token"),
             )
             verification = resolve_booking_verification(
                 organization=request.organization,

@@ -27,6 +27,10 @@ def safe_production_environment():
         "DJANGO_CSRF_TRUSTED_ORIGINS": "https://app.example.com",
         "DATABASE_URL": "postgresql://user:password@db.example.com:5432/app",
         "REDIS_URL": "rediss://redis.example.com:6379/0",
+        "MSG91_ENABLED": "true",
+        "MSG91_WIDGET_ID": "test-widget-id",
+        "MSG91_WIDGET_TOKEN": "test-widget-token",
+        "MSG91_AUTH_KEY": "test-server-auth-key",
     }
 
 
@@ -61,6 +65,7 @@ def test_production_auth_cache_defaults_to_dedicated_redis_database(
         ("DJANGO_CSRF_TRUSTED_ORIGINS", "http://app.example.com"),
         ("DATABASE_URL", "sqlite:///db.sqlite3"),
         ("REDIS_URL", "http://redis.example.com"),
+        ("MSG91_ENABLED", "false"),
     ],
 )
 def test_production_settings_reject_unsafe_environment(safe_production_environment, name, value):
