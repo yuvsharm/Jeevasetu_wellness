@@ -113,6 +113,16 @@ export async function customerOtpLogin(payload: unknown) {
   return { tokens, session: { user: tokens.user, access } satisfies Session };
 }
 
+export async function customerRegister(payload: unknown) {
+  if (!ORGANIZATION_SLUG) throw new SessionError(400, "Organization context is not configured.");
+  const tokens = await checkedJson<TokenPair>(
+    await djangoFetch("/auth/customer-register/", { method: "POST", body: JSON.stringify(payload) }),
+  );
+  const access = await checkedJson<AccessSummary>(await djangoFetch(djangoEndpoints.access, {}, tokens.access));
+  if (!tokens.user) throw new SessionError(401, "Customer registration could not be completed.");
+  return { tokens, session: { user: tokens.user, access } satisfies Session };
+}
+
 export async function publicPost<T>(path: string, payload: unknown) {
   return checkedJson<T>(
     await djangoFetch(path, { method: "POST", body: JSON.stringify(payload) }),

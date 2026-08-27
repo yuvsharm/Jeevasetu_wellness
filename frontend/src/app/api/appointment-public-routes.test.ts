@@ -20,24 +20,30 @@ describe("public appointment gateways", () => {
     expect((backend.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 
-  it("passes anonymous requests to the existing public Django endpoint", async () => {
-    const backend = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "request-1", status: "PENDING" }), { status: 201, headers: { "Content-Type": "application/json" } }));
+  it("requires a customer session before creating an appointment", async () => {
+    const backend = vi.spyOn(globalThis, "fetch");
     const request = new NextRequest("http://localhost:3000/api/appointment-requests", { method: "POST", body: JSON.stringify({ patient_name: "Guest" }), headers: { "Content-Type": "application/json" } });
     const response = await POST(request);
-    expect(response.status).toBe(201);
-    expect((backend.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(response.status).toBe(401);
+    expect(backend).not.toHaveBeenCalled();
   });
 
   it.each([
     [issueOtp, "/api/booking-otp/issue", "/appointments/booking-otp/issue/"],
     [verifyOtp, "/api/booking-otp/verify", "/appointments/booking-otp/verify/"],
-    [createQuickAppointment, "/api/quick-appointment-requests", "/appointments/quick-requests/"],
-  ])("proxies the secure public flow without requiring session cookies", async (handler, frontendPath, backendPath) => {
+  ])("proxies registration OTP operations without requiring session cookies", async (handler, frontendPath, backendPath) => {
     const backend = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const request = new NextRequest(`http://localhost:3000${frontendPath}`, { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     const response = await handler(request);
     expect(response.status).toBe(200);
     expect(backend.mock.calls[0]?.[0]).toBe(`http://localhost:8000/api/v1${backendPath}`);
     expect((backend.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it("also requires authentication for the legacy quick-booking alias", async () => {
+    const backend = vi.spyOn(globalThis, "fetch");
+    const request = new NextRequest("http://localhost:3000/api/quick-appointment-requests", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+    expect((await createQuickAppointment(request)).status).toBe(401);
+    expect(backend).not.toHaveBeenCalled();
   });
 });

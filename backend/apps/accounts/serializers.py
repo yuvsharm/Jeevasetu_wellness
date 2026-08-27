@@ -116,6 +116,67 @@ class CustomerOtpLoginSerializer(serializers.Serializer):
         return attrs
 
 
+class CustomerAddressSerializer(serializers.Serializer):
+    address_line_1 = serializers.CharField(max_length=255)
+    address_line_2 = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    landmark = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=120)
+    region = serializers.CharField(max_length=120)
+    pin_code = serializers.RegexField(r"^[1-9]\d{5}$")
+
+
+class CustomerRegistrationSerializer(serializers.Serializer):
+    verification_id = serializers.UUIDField()
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
+    access_token = serializers.CharField(
+        required=False, write_only=True, trim_whitespace=False, max_length=4096
+    )
+    full_name = serializers.CharField(max_length=160)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+    age = serializers.IntegerField(required=False, min_value=0, max_value=120)
+    gender = serializers.ChoiceField(
+        choices=("FEMALE", "MALE", "OTHER", "PREFER_NOT_TO_SAY")
+    )
+    address = CustomerAddressSerializer()
+    guardian_name = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    guardian_relationship = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    guardian_mobile = serializers.RegexField(r"^[6-9]\d{9}$", required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        required = "access_token" if settings.MSG91_ENABLED else "otp"
+        if not attrs.get(required):
+            raise serializers.ValidationError(
+                {required: "This field is required for mobile verification."}
+            )
+        if not attrs.get("date_of_birth") and attrs.get("age") is None:
+            raise serializers.ValidationError({"age": "Age or date of birth is required."})
+        age = attrs.get("age")
+        date_of_birth = attrs.get("date_of_birth")
+        if date_of_birth:
+            from datetime import date
+
+            today = date.today()
+            if date_of_birth > today:
+                raise serializers.ValidationError(
+                    {"date_of_birth": "Date of birth cannot be in the future."}
+                )
+            age = today.year - date_of_birth.year - (
+                (today.month, today.day) < (date_of_birth.month, date_of_birth.day)
+            )
+        if age is not None and age < 18 and not all(
+            attrs.get(field)
+            for field in ("guardian_name", "guardian_relationship", "guardian_mobile")
+        ):
+            raise serializers.ValidationError(
+                {"guardian_name": "Parent or legal guardian details are required for minors."}
+            )
+        attrs["full_name"] = " ".join(attrs["full_name"].split())
+        if len(attrs["full_name"]) < 2:
+            raise serializers.ValidationError({"full_name": "Enter the customer's full name."})
+        return attrs
+
+
 class RefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField(trim_whitespace=False)
 

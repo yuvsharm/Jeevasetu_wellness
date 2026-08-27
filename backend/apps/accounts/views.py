@@ -20,6 +20,7 @@ from apps.accounts.serializers import (
     DetailResponseSerializer,
     LoginSerializer,
     CustomerOtpLoginSerializer,
+    CustomerRegistrationSerializer,
     LogoutSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -39,6 +40,7 @@ from apps.accounts.services import (
 from apps.accounts.validators import normalize_email_address, normalize_mobile_number
 from apps.tenancy.models import OrganizationMembership
 from apps.appointments.booking_verification import resolve_booking_verification, verify_booking_otp
+from apps.patients.models import PatientAddress, PatientProfile
 
 
 def eligible_user(identifier):
@@ -152,14 +154,7 @@ class CustomerOtpLoginView(APIView):
         mobile = f"+91{data['mobile_number']}"
         user = User.objects.select_for_update().filter(mobile_number=mobile).first()
         if user is None:
-            user = User.objects.create_user(
-                username=None,
-                mobile_number=mobile,
-                first_name=data.get("first_name", "").strip(),
-                last_name=data.get("last_name", "").strip(),
-            )
-            user.set_unusable_password()
-            user.save(update_fields=("password",))
+            raise ValidationError("Register as a customer before signing in.")
         if not user.is_active or not user.is_enabled:
             raise ValidationError("This customer account is unavailable.")
         if user.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists():
@@ -188,6 +183,109 @@ class CustomerOtpLoginView(APIView):
             "access": str(refresh.access_token), "refresh": str(refresh),
             "user": UserSummarySerializer(user).data,
         })
+
+
+class CustomerRegistrationView(APIView):
+    """Create the customer identity and self patient only after mobile ownership verification."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_scope = "auth_register"
+
+    @transaction.atomic
+    def post(self, request):
+        if getattr(request, "organization", None) is None:
+            return Response({"detail": "Organization context is unavailable."}, status=404)
+        serializer = CustomerRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            token = verify_booking_otp(
+                organization=request.organization,
+                verification_id=data["verification_id"],
+                mobile_number=data["mobile_number"],
+                otp=data.get("otp"),
+                access_token=data.get("access_token"),
+            )
+            verification = resolve_booking_verification(
+                organization=request.organization,
+                mobile_number=data["mobile_number"],
+                token=token,
+                lock=True,
+            )
+        except Exception as error:
+            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+
+        mobile = f"+91{data['mobile_number']}"
+        existing = User.objects.select_for_update().filter(mobile_number=mobile).first()
+        if existing is not None:
+            if existing.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists():
+                raise ValidationError("Staff accounts must use the staff sign-in flow.")
+            raise ValidationError("This mobile number is already registered. Please sign in.")
+        clinic = request.organization.clinics.filter(is_active=True).order_by("created_at").first()
+        if clinic is None:
+            raise ValidationError("Customer registration is temporarily unavailable.")
+
+        names = data["full_name"].split(" ", 1)
+        user = User.objects.create_user(
+            username=None,
+            mobile_number=mobile,
+            first_name=names[0],
+            last_name=names[1] if len(names) > 1 else "",
+        )
+        user.set_unusable_password()
+        user.save(update_fields=("password",))
+        membership = OrganizationMembership.objects.create(
+            user=user, organization=request.organization
+        )
+        RoleAssignment.objects.create(
+            user=user,
+            role=Role.CUSTOMER,
+            organization=request.organization,
+            organization_membership=membership,
+        )
+        patient = PatientProfile(
+            organization=request.organization,
+            user=user,
+            clinic=clinic,
+            full_name=data["full_name"],
+            mobile_number=data["mobile_number"],
+            gender=data["gender"],
+            date_of_birth=data.get("date_of_birth"),
+            age=data.get("age"),
+            emergency_contact_name=data["full_name"],
+            emergency_contact_relationship="Self",
+            emergency_contact_mobile=data["mobile_number"],
+            guardian_name=data.get("guardian_name", ""),
+            guardian_relationship=data.get("guardian_relationship", ""),
+            guardian_mobile=data.get("guardian_mobile", ""),
+        )
+        patient.save()
+        address = PatientAddress(
+            patient=patient,
+            label="Home",
+            is_primary=True,
+            **data["address"],
+        )
+        address.full_clean()
+        address.save()
+        verification.consumed_at = timezone.now()
+        verification.save(update_fields=("consumed_at",))
+        refresh = RefreshToken.for_user(user)
+        record_auth_event(
+            request,
+            AuthenticationAuditEvent.Event.REGISTRATION,
+            AuthenticationAuditEvent.Outcome.SUCCESS,
+            user=user,
+        )
+        return Response(
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": UserSummarySerializer(user).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class RefreshView(APIView):

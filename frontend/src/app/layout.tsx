@@ -3,6 +3,7 @@ import { Geist } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { QueryProvider } from "@/components/providers/query-provider";
+import { SessionProvider } from "@/components/auth/session-provider";
 import "./globals.css";
 
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -24,7 +25,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return (
     <html lang="en">
       <body className={`${geist.variable} antialiased`}>
-        <QueryProvider>{children}</QueryProvider>
+        <QueryProvider><SessionProvider>{children}</SessionProvider></QueryProvider>
       </body>
     </html>
   );

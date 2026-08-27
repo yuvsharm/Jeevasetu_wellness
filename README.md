@@ -65,6 +65,12 @@ The frontend is served at `http://localhost:3000/`. Backend infrastructure route
 - Swagger UI: `http://localhost:8000/api/v1/docs/`
 - Redoc: `http://localhost:8000/api/v1/redoc/`
 
+## MSG91 OTP environments
+
+Local development uses the same fail-closed MSG91 widget and server-side access-token verification as production. If Firefox tracking protection or a browser extension blocks `verify.msg91.com` on localhost, allow that provider only for the local site or use a clean browser profile. Disabling the browser cache is optional debugging only. MSG91 Captcha Validation may remain off only when the provider cannot validate a localhost origin; this is a local provider limitation, not a customer workaround.
+
+Production and staging must use HTTPS on their real domains with normal browser security and caching. Enable MSG91 Captcha Validation, authorize the deployed origin in MSG91, and complete a controlled widget test on the staging or production domain before launch. Customers must never be asked to disable browser security. The AuthKey remains server-side; only the widget's browser-safe configuration is returned to the frontend.
+
 Development tenancy verification routes use the `X-Organization-Slug` request header:
 
 - Active organization context: `GET /api/v1/tenancy/context/`

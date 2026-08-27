@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { requestJson } from "@/lib/api/client";
 import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
@@ -9,6 +10,9 @@ type Issued = { verification_id: string; otp?: string; message: string };
 
 export function CustomerOtpLogin() {
   const router = useRouter();
+  const search = useSearchParams();
+  const requestedReturn = search.get("returnTo");
+  const returnTo = requestedReturn?.startsWith("/") && !requestedReturn.startsWith("//") ? requestedReturn : "/customer";
   const [mobile, setMobile] = useState("");
   const [otp, setOtp] = useState("");
   const [issued, setIssued] = useState<Issued | null>(null);
@@ -32,7 +36,7 @@ export function CustomerOtpLogin() {
     try {
       const providerProof = widgetConfig.enabled ? { access_token: await verifyMsg91Otp(widgetConfig, otp) } : { otp };
       await requestJson("/api/session/customer-login", { method: "POST", body: JSON.stringify({ verification_id: issued.verification_id, mobile_number: mobile, ...providerProof }) });
-      router.replace("/customer"); router.refresh();
+      router.replace(returnTo); router.refresh();
     } catch (value) { setError(value instanceof Error ? value.message : "OTP could not be verified."); }
     finally { setBusy(false); }
   }

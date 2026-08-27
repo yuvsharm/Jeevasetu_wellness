@@ -28,8 +28,9 @@ describe("public website", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("navigation", { name: /mobile navigation/i })).toBeInTheDocument();
     expect(screen.getAllByRole("link",{name:"Customer Login"})[0]).toHaveAttribute("href","/customer-login");
+    expect(screen.getAllByRole("link",{name:"Customer Register"})[0]).toHaveAttribute("href","/customer-register");
     expect(screen.getAllByRole("link",{name:"Staff Login"})[0]).toHaveAttribute("href","/login");
-    expect(screen.getAllByRole("link",{name:"Book Appointment"})[0]).toHaveAttribute("href","/book-appointment");
+    expect(screen.getAllByRole("link",{name:"Book Appointment"})[0]).toHaveAttribute("href","/customer-access?returnTo=%2Fbook-appointment");
   });
 
   it("shows all ten backend therapies as compact directly bookable cards",async()=>{

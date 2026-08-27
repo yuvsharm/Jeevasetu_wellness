@@ -9,7 +9,7 @@ from django.utils import timezone
 from apps.appointments.commercial import calculate_quote
 from apps.appointments.models import AppointmentRequest, CommercialOffer, TherapyOption, TherapyPackage
 from apps.patients.models import CustomerFamilyMember
-from tests.test_appointments import issue_and_verify, payload, setup_identity, tenant
+from tests.test_appointments import authenticated_payload, setup_identity, tenant
 from tests.test_scheduling import headers, setup_domain
 
 pytestmark = pytest.mark.django_db
@@ -92,15 +92,14 @@ def test_expired_future_private_and_cross_tenant_catalog_security(api_client):
 
 
 def test_secure_booking_recalculates_offer_and_preserves_snapshot(api_client):
-    organization, _, first = setup_identity("CUSTOMER")
+    organization, customer, first = setup_identity("CUSTOMER")
     first.base_price = 1000
     first.save(update_fields=("base_price",))
     free = add_therapy(organization, "free-addon", 400)
     offer = CommercialOffer.objects.create(organization=organization, title="Free add-on", offer_type=CommercialOffer.OfferType.FREE_THERAPY, free_therapy=free, free_quantity=1)
     offer.eligible_therapies.set([first])
-    _, token = issue_and_verify(api_client, organization)
-    data = payload(first)
-    data.update(booking_verification_token=token, selected_offer=str(offer.id), regular_amount="1.00", final_amount="1.00")
+    api_client.force_authenticate(customer)
+    data = authenticated_payload(first, selected_offer=str(offer.id))
     created = api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug))
     assert created.status_code == 201
     value = AppointmentRequest.objects.get(pk=created.data["id"])

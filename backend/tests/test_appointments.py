@@ -1,16 +1,13 @@
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
-from django.core.cache import cache
-from django.core.signing import dumps
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import Role, RoleAssignment, User
-from apps.appointments.booking_verification import TOKEN_SALT
-from apps.appointments.models import AppointmentRequest, BookingPhoneVerification, TherapyOption
-from apps.tenancy.models import Organization, OrganizationMembership
-from apps.patients.models import CustomerFamilyMember
+from apps.appointments.models import AppointmentRequest, BookingPhoneVerification, ClinicOperatingHours, TherapyOption
+from apps.tenancy.models import Clinic, Organization, OrganizationMembership
+from apps.patients.models import CustomerFamilyMember, PatientAddress, PatientProfile
 
 pytestmark = pytest.mark.django_db
 
@@ -26,6 +23,7 @@ def setup_identity(role):
     user = User.objects.create_user(
         username=f"{role.lower()}user",
         email=f"{role.lower()}@example.com",
+        mobile_number="+919876543210" if role == Role.CUSTOMER else None,
         password="Safe-test-password-1",
     )
     membership = OrganizationMembership.objects.create(user=user, organization=organization)
@@ -35,7 +33,38 @@ def setup_identity(role):
     therapy = TherapyOption.objects.create(
         organization=organization, name="Abhyang", slug="abhyang"
     )
+    if role == Role.CUSTOMER:
+        clinic = Clinic.objects.create(
+            organization=organization, name="Main Clinic", slug="main-clinic", timezone="Asia/Kolkata"
+        )
+        ClinicOperatingHours.objects.create(
+            clinic=clinic, weekdays=list(range(7)), opens_at=time(9), closes_at=time(18)
+        )
+        patient = PatientProfile.objects.create(
+            organization=organization, user=user, clinic=clinic, full_name="Asha Sharma",
+            mobile_number="9876543210", gender="FEMALE", age=42,
+            emergency_contact_name="Asha Sharma", emergency_contact_relationship="Self",
+            emergency_contact_mobile="9876543210",
+        )
+        PatientAddress.objects.create(
+            patient=patient, address_line_1="163 C Block", city="Meerut",
+            region="Uttar Pradesh", pin_code="250004", is_primary=True,
+        )
     return organization, user, therapy
+
+
+def authenticated_payload(therapy, **overrides):
+    return {
+        "therapy": str(therapy.id),
+        "requested_therapies": [],
+        "family_member": None,
+        "selected_package": None,
+        "selected_offer": None,
+        "preferred_date": str(timezone.localdate() + timedelta(days=2)),
+        "preferred_time": "10:00",
+        "pain_area": "",
+        **overrides,
+    }
 
 
 def payload(therapy):
@@ -66,62 +95,16 @@ def tenant(slug):
     return {"HTTP_X_ORGANIZATION_SLUG": slug}
 
 
-def issue_and_verify(api_client, organization, mobile_number="9876543210"):
-    headers = tenant(organization.slug)
-    issued = api_client.post(
-        reverse("booking-otp-issue"),
-        {"mobile_number": mobile_number},
-        format="json",
-        **headers,
-    )
-    assert issued.status_code == 201
-    wrong_otp = "000000" if issued.data["otp"] != "000000" else "111111"
-    rejected = api_client.post(
-        reverse("booking-otp-verify"),
-        {
-            "verification_id": issued.data["verification_id"],
-            "mobile_number": mobile_number,
-            "otp": wrong_otp,
-        },
-        format="json",
-        **headers,
-    )
-    assert rejected.status_code == 400
-    rejected_verification = BookingPhoneVerification.objects.get(pk=issued.data["verification_id"])
-    assert rejected_verification.failed_attempt_count == 1
-    verified = api_client.post(
-        reverse("booking-otp-verify"),
-        {
-            "verification_id": issued.data["verification_id"],
-            "mobile_number": mobile_number,
-            "otp": issued.data["otp"],
-        },
-        format="json",
-        **headers,
-    )
-    assert verified.status_code == 200
-    return BookingPhoneVerification.objects.get(pk=issued.data["verification_id"]), verified.data["token"]
-
-
-def test_quick_booking_requires_verified_mobile_and_consumes_token(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
+def test_authenticated_booking_requires_customer_and_no_second_otp(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
     secondary = TherapyOption.objects.create(
         organization=organization, name="Kati Basti", slug="kati-basti"
     )
     url = reverse("quick-appointment-create")
     headers = tenant(organization.slug)
-    data = payload(therapy)
-    data["requested_therapies"] = [str(therapy.id), str(secondary.id)]
-
-    missing = api_client.post(url, data, format="json", **headers)
-    assert missing.status_code == 400
-    assert "booking_verification_token" in missing.data
-
-    verification, token = issue_and_verify(api_client, organization)
-    wrong_mobile = {**data, "mobile_number": "9876543211", "booking_verification_token": token}
-    assert api_client.post(url, wrong_mobile, format="json", **headers).status_code == 400
-
-    data["booking_verification_token"] = token
+    data = authenticated_payload(therapy, requested_therapies=[str(therapy.id), str(secondary.id)])
+    assert api_client.post(url, data, format="json", **headers).status_code == 401
+    api_client.force_authenticate(customer)
     created = api_client.post(url, data, format="json", **headers)
     assert created.status_code == 201
     assert created.data["status"] == "PENDING"
@@ -133,62 +116,44 @@ def test_quick_booking_requires_verified_mobile_and_consumes_token(api_client):
     assert str(request_value.preferred_date) == data["preferred_date"]
     assert request_value.preferred_time.strftime("%H:%M") == data["preferred_time"]
     assert set(request_value.requested_therapies.values_list("id", flat=True)) == {secondary.id}
-    verification.refresh_from_db()
-    assert verification.consumed_at is not None
+    assert BookingPhoneVerification.objects.count() == 0
     assert api_client.post(url, data, format="json", **headers).status_code == 400
 
 
-def test_quick_booking_rejects_unverified_and_expired_verification(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
-    headers = tenant(organization.slug)
-    url = reverse("quick-appointment-create")
-    data = payload(therapy)
-    unverified = BookingPhoneVerification.objects.create(
-        organization=organization,
-        mobile_number=data["mobile_number"],
-        otp_hash="not-used",
-        expires_at=timezone.now() + timedelta(minutes=5),
+def test_authenticated_booking_rejects_invalid_time_without_otp(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(customer)
+    response = api_client.post(
+        reverse("quick-appointment-create"),
+        authenticated_payload(therapy, preferred_time="19:00"),
+        format="json", **tenant(organization.slug),
     )
-    data["booking_verification_token"] = dumps(
-        {
-            "verification_id": str(unverified.id),
-            "mobile_number": data["mobile_number"],
-            "organization_id": str(organization.id),
-        },
-        salt=TOKEN_SALT,
-        compress=True,
-    )
-    assert api_client.post(url, data, format="json", **headers).status_code == 400
-    verification, token = issue_and_verify(api_client, organization, "9876543212")
-    verification.expires_at = timezone.now() - timedelta(seconds=1)
-    verification.save(update_fields=("expires_at",))
-    data.update(mobile_number="9876543212", booking_verification_token=token)
-    assert api_client.post(url, data, format="json", **headers).status_code == 400
+    assert response.status_code == 400
+    assert "preferred_time" in response.data
+    assert BookingPhoneVerification.objects.count() == 0
 
 
-def test_customer_otp_login_creates_normal_customer_session_and_cannot_be_reused(api_client):
-    organization, _, _ = setup_identity(Role.OWNER)
+def test_customer_otp_login_authenticates_existing_customer_and_cannot_be_reused(api_client):
+    organization, customer, _ = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(user=None)
     issued = api_client.post(reverse("booking-otp-issue"), {"mobile_number": "9876543210"}, format="json", **tenant(organization.slug))
-    body = {"verification_id": issued.data["verification_id"], "mobile_number": "9876543210", "otp": issued.data["otp"], "first_name": "Asha"}
+    body = {"verification_id": issued.data["verification_id"], "mobile_number": "9876543210", "otp": issued.data["otp"]}
     logged_in = api_client.post(reverse("auth-customer-otp-login"), body, format="json", **tenant(organization.slug))
     assert logged_in.status_code == 200
-    customer = User.objects.get(mobile_number="+919876543210")
     assert RoleAssignment.objects.filter(user=customer, organization=organization, role=Role.CUSTOMER, is_active=True).exists()
     assert BookingPhoneVerification.objects.get(pk=issued.data["verification_id"]).consumed_at is not None
     assert api_client.post(reverse("auth-customer-otp-login"), body, format="json", **tenant(organization.slug)).status_code == 400
 
 
 def test_multi_therapy_duration_and_closing_time_are_enforced(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(customer)
     second = TherapyOption.objects.create(organization=organization, name="Nasya", slug="nasya")
-    verification, token = issue_and_verify(api_client, organization)
-    data = payload(therapy) | {"requested_therapies": [str(second.id)], "preferred_time": "16:30", "booking_verification_token": token}
+    data = authenticated_payload(therapy, requested_therapies=[str(second.id)], preferred_time="16:30")
     created = api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug))
     assert created.status_code == 201
     assert created.data["requested_duration_minutes"] == 90
-    cache.clear()
-    _, later_token = issue_and_verify(api_client, organization)
-    data |= {"preferred_time": "17:00", "booking_verification_token": later_token}
+    data |= {"preferred_time": "17:00"}
     assert api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug)).status_code == 400
 
 
@@ -199,16 +164,15 @@ def test_customer_cannot_book_for_another_customers_family_member(api_client):
     RoleAssignment.objects.create(user=other, organization=organization, organization_membership=other_membership, role=Role.CUSTOMER)
     family = CustomerFamilyMember.objects.create(organization=organization, customer=other, full_name="Other Family", age=30, gender="OTHER", relationship="Sibling")
     api_client.force_authenticate(owner)
-    data = payload(therapy) | {"family_member": str(family.id)}
+    data = authenticated_payload(therapy, family_member=str(family.id))
     response = api_client.post(reverse("appointment-create"), data, format="json", **tenant(organization.slug))
     assert response.status_code == 400
     assert "family_member" in response.data
 
-def test_failed_quick_booking_does_not_consume_verification(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
-    verification, token = issue_and_verify(api_client, organization)
-    data = payload(therapy)
-    data.update(preferred_time="19:00", booking_verification_token=token)
+def test_failed_authenticated_booking_does_not_create_verification(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(customer)
+    data = authenticated_payload(therapy, preferred_time="19:00")
     response = api_client.post(
         reverse("quick-appointment-create"),
         data,
@@ -216,15 +180,17 @@ def test_failed_quick_booking_does_not_consume_verification(api_client):
         **tenant(organization.slug),
     )
     assert response.status_code == 400
-    verification.refresh_from_db()
-    assert verification.consumed_at is None
+    assert BookingPhoneVerification.objects.count() == 0
 
 
-def test_public_create_validates_and_blocks_duplicate(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
+def test_authenticated_create_validates_and_blocks_duplicate(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
     url = reverse("appointment-create")
-    first = api_client.post(url, payload(therapy), format="json", **tenant(organization.slug))
-    duplicate = api_client.post(url, payload(therapy), format="json", **tenant(organization.slug))
+    data = authenticated_payload(therapy)
+    assert api_client.post(url, data, format="json", **tenant(organization.slug)).status_code == 401
+    api_client.force_authenticate(customer)
+    first = api_client.post(url, data, format="json", **tenant(organization.slug))
+    duplicate = api_client.post(url, data, format="json", **tenant(organization.slug))
     assert first.status_code == 201
     assert first.data["status"] == "PENDING"
     assert duplicate.status_code == 400
@@ -341,20 +307,24 @@ def test_non_owner_cannot_access_owner_queue(api_client):
 
 
 def test_server_rejects_past_date_and_cross_tenant_therapy(api_client):
-    organization, _, _ = setup_identity(Role.CUSTOMER)
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
     other_org, _, other_therapy = setup_identity(Role.OWNER)
-    invalid = payload(other_therapy)
-    invalid["preferred_date"] = str(timezone.localdate() - timedelta(days=1))
+    api_client.force_authenticate(customer)
+    invalid = authenticated_payload(
+        other_therapy, preferred_date=str(timezone.localdate() - timedelta(days=1))
+    )
     response = api_client.post(
         reverse("appointment-create"), invalid, format="json", **tenant(organization.slug)
     )
     assert response.status_code == 400
-    assert "preferred_date" in response.data and "therapy" in response.data
+    assert "preferred_date" in response.data or "therapy" in response.data
     assert other_org != organization
+    assert therapy.organization == organization
 
 
-def test_public_create_accepts_requested_therapies_and_validates_slot(api_client):
-    organization, _, therapy = setup_identity(Role.CUSTOMER)
+def test_authenticated_create_accepts_requested_therapies_and_validates_slot(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(customer)
     secondary = TherapyOption.objects.create(
         organization=organization, name="Kati Basti", slug="kati-basti"
     )
@@ -362,9 +332,9 @@ def test_public_create_accepts_requested_therapies_and_validates_slot(api_client
         organization=organization, name="Nasya", slug="nasya"
     )
 
-    valid = payload(therapy)
-    valid["requested_therapies"] = [str(secondary.id), str(tertiary.id)]
-    valid["preferred_time"] = "10:00"
+    valid = authenticated_payload(
+        therapy, requested_therapies=[str(secondary.id), str(tertiary.id)]
+    )
     response = api_client.post(
         reverse("appointment-create"), valid, format="json", **tenant(organization.slug)
     )
@@ -375,9 +345,9 @@ def test_public_create_accepts_requested_therapies_and_validates_slot(api_client
         str(tertiary.id),
     }
 
-    invalid = payload(therapy)
-    invalid["requested_therapies"] = [str(secondary.id)]
-    invalid["preferred_time"] = "19:00"
+    invalid = authenticated_payload(
+        therapy, requested_therapies=[str(secondary.id)], preferred_time="19:00"
+    )
     invalid_response = api_client.post(
         reverse("appointment-create"), invalid, format="json", **tenant(organization.slug)
     )

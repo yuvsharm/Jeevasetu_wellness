@@ -225,9 +225,9 @@ class AppointmentRequest(models.Model):
     session_preference = models.CharField(max_length=12, choices=SessionPreference.choices)
     preferred_date = models.DateField()
     preferred_time = models.TimeField()
-    problem_description = models.TextField(max_length=2000)
-    pain_area = models.CharField(max_length=160)
-    problem_duration = models.CharField(max_length=120)
+    problem_description = models.TextField(max_length=2000, blank=True, default="")
+    pain_area = models.CharField(max_length=160, blank=True, default="")
+    problem_duration = models.CharField(max_length=120, blank=True, default="")
     doctor_reference = models.CharField(max_length=255, blank=True)
     address = models.CharField(max_length=500)
     city = models.CharField(max_length=120)
@@ -235,7 +235,7 @@ class AppointmentRequest(models.Model):
         max_length=6,
         validators=[RegexValidator(r"^[1-9]\d{5}$", "Enter a valid 6-digit PIN code.")],
     )
-    landmark = models.CharField(max_length=255)
+    landmark = models.CharField(max_length=255, blank=True, default="")
     google_map_link = models.URLField(max_length=500, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     owner_remarks = models.TextField(max_length=1000, blank=True)

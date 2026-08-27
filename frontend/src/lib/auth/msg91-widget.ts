@@ -16,6 +16,7 @@ type WidgetState = {
 
 let scriptPromise: Promise<void> | undefined;
 const widgetStates = new WeakMap<object, WidgetState>();
+const SDK_READY_TIMEOUT_MS = 5000;
 
 export async function loadOtpWidgetConfig(): Promise<OtpWidgetConfig> {
   const response = await fetch("/api/otp-widget/config", { cache: "no-store" });
@@ -28,16 +29,35 @@ function loadScript() {
   scriptPromise = new Promise<void>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>('script[src="https://verify.msg91.com/otp-provider.js"]');
     if (existing && (window as Msg91Window).initSendOTP) return resolve();
-    const script = existing ?? document.createElement("script");
+    existing?.remove();
+    const script = document.createElement("script");
     script.src = "https://verify.msg91.com/otp-provider.js";
     script.async = true;
     script.addEventListener("load", () => resolve(), { once: true });
     script.addEventListener("error", () => reject(new Error("Mobile verification could not be loaded.")), { once: true });
-    if (!existing) document.head.appendChild(script);
+    document.head.appendChild(script);
   });
   return scriptPromise.catch((error) => {
     scriptPromise = undefined;
     throw error;
+  });
+}
+
+function waitForSdkMethods(api: Msg91Window) {
+  return new Promise<void>((resolve, reject) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (typeof api.sendOtp === "function" && typeof api.verifyOtp === "function") {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt >= SDK_READY_TIMEOUT_MS) {
+        reject(new Error("Mobile verification could not be initialized."));
+        return;
+      }
+      window.setTimeout(check, 25);
+    };
+    check();
   });
 }
 
@@ -50,8 +70,8 @@ async function initialize(config: Extract<OtpWidgetConfig, { enabled: true }>) {
   if (!state.initialization) {
     const currentState = state;
     state.initialization = (async () => {
+      await loadScript();
       try {
-        await loadScript();
         const api = window as Msg91Window;
         if (!api.initSendOTP) throw new Error("MSG91 SDK is unavailable.");
         const success: Callback = (data) => {
@@ -67,6 +87,7 @@ async function initialize(config: Extract<OtpWidgetConfig, { enabled: true }>) {
           success,
           failure,
         });
+        await waitForSdkMethods(api);
         return api;
       } catch {
         currentState.initialization = undefined;
@@ -88,6 +109,9 @@ export async function sendMsg91Otp(config: Extract<OtpWidgetConfig, { enabled: t
 }
 
 function findAccessToken(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+  }
   if (!value || typeof value !== "object") return undefined;
   for (const [key, child] of Object.entries(value)) {
     if (["access-token", "access_token", "token"].includes(key) && typeof child === "string") return child;
@@ -101,9 +125,22 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
   const { api, state } = await initialize(config);
   if (!api.verifyOtp) throw new Error("Mobile verification could not be initialized.");
   state.accessToken = undefined;
-  const result = await new Promise<unknown>((resolve, reject) => {
-    const success: Callback = (data) => resolve(data);
-    const failure: Callback = () => reject(new Error("Mobile verification was not completed."));
+  const accessToken = await new Promise<string>((resolve, reject) => {
+    const timeout = window.setTimeout(
+      () => reject(new Error("Mobile verification did not return a valid access token.")),
+      5000,
+    );
+    const success: Callback = (data) => {
+      const token = state.accessToken ?? findAccessToken(data);
+      if (token) {
+        window.clearTimeout(timeout);
+        resolve(token);
+      }
+    };
+    const failure: Callback = () => {
+      window.clearTimeout(timeout);
+      reject(new Error("Mobile verification was not completed."));
+    };
     state.pendingSuccess = success;
     state.pendingFailure = failure;
     api.verifyOtp?.(otp, success, failure);
@@ -111,7 +148,5 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
     state.pendingSuccess = undefined;
     state.pendingFailure = undefined;
   });
-  const accessToken = state.accessToken ?? findAccessToken(result);
-  if (!accessToken) throw new Error("Mobile verification did not return a valid access token.");
   return accessToken;
 }

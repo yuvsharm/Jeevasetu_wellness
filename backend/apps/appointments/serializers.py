@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -22,7 +23,7 @@ from apps.appointments.models import (
     TherapyOption,
     TherapyPackage,
 )
-from apps.appointments.scheduling import save_scheduled_appointment
+from apps.appointments.scheduling import save_scheduled_appointment, validate_schedule
 from apps.patients.models import CustomerFamilyMember, PatientProfile
 from apps.staff.models import StaffProfile
 
@@ -864,6 +865,169 @@ class AppointmentRatingSerializer(serializers.ModelSerializer):
         if len(value) < 3:
             raise serializers.ValidationError("Please share at least 3 characters about your experience.")
         return value
+
+
+class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
+    therapy = serializers.PrimaryKeyRelatedField(queryset=TherapyOption.objects.all())
+    requested_therapies = serializers.PrimaryKeyRelatedField(
+        queryset=TherapyOption.objects.all(), many=True, required=False, allow_empty=True
+    )
+    family_member = serializers.PrimaryKeyRelatedField(
+        queryset=CustomerFamilyMember.objects.all(), required=False, allow_null=True
+    )
+    selected_package = serializers.PrimaryKeyRelatedField(
+        queryset=TherapyPackage.objects.all(), required=False, allow_null=True
+    )
+    selected_offer = serializers.PrimaryKeyRelatedField(
+        queryset=CommercialOffer.objects.all(), required=False, allow_null=True
+    )
+    preferred_date = serializers.DateField()
+    preferred_time = serializers.TimeField()
+    pain_area = serializers.CharField(max_length=160, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        organization = request.organization
+        profile = PatientProfile.objects.filter(
+            organization=organization, user=request.user, is_active=True
+        ).select_related("clinic").prefetch_related("addresses").first()
+        if profile is None:
+            raise serializers.ValidationError(
+                {"detail": "Complete customer registration before booking."}
+            )
+        address = next(
+            (
+                value
+                for value in profile.addresses.all()
+                if value.is_active and value.is_primary
+            ),
+            None,
+        )
+        if address is None:
+            raise serializers.ValidationError(
+                {"detail": "Add a primary service address before booking."}
+            )
+        therapy = attrs["therapy"]
+        requested = list(dict.fromkeys(attrs.get("requested_therapies", [])))
+        if therapy.organization_id != organization.id or not therapy.is_active:
+            raise serializers.ValidationError({"therapy": "The selected therapy is unavailable."})
+        requested = [value for value in requested if value.id != therapy.id]
+        if len(requested) > 7 or any(
+            value.organization_id != organization.id or not value.is_active for value in requested
+        ):
+            raise serializers.ValidationError(
+                {"requested_therapies": "Select up to eight active therapies in this organization."}
+            )
+        attrs["requested_therapies"] = requested
+        family = attrs.get("family_member")
+        if family and (
+            family.organization_id != organization.id
+            or family.customer_id != request.user.id
+            or not family.is_active
+        ):
+            raise serializers.ValidationError(
+                {"family_member": "The selected family member is unavailable."}
+            )
+        try:
+            quote = calculate_quote(
+                organization=organization,
+                therapy_ids=[therapy.id, *[value.id for value in requested]],
+                package_id=getattr(attrs.get("selected_package"), "id", None),
+                offer_id=getattr(attrs.get("selected_offer"), "id", None),
+                family_member=family,
+            )
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
+        zone = ZoneInfo(profile.clinic.timezone or organization.timezone or "Asia/Kolkata")
+        start = datetime.combine(attrs["preferred_date"], attrs["preferred_time"], zone)
+        if attrs["preferred_time"].minute % 15:
+            raise serializers.ValidationError(
+                {"preferred_time": "Select an available 15-minute time slot."}
+            )
+        try:
+            validate_schedule(
+                clinic=profile.clinic,
+                start=start,
+                duration_minutes=quote.duration_minutes,
+            )
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({"preferred_time": error.messages}) from error
+        attrs["_profile"] = profile
+        attrs["_address"] = address
+        attrs["_quote"] = quote
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        request = self.context["request"]
+        profile = validated_data.pop("_profile")
+        address = validated_data.pop("_address")
+        quote = validated_data.pop("_quote")
+        requested = validated_data.pop("requested_therapies", [])
+        family = validated_data.get("family_member")
+        package = validated_data.get("selected_package")
+        user_mobile = "".join(character for character in (request.user.mobile_number or "") if character.isdigit())[-10:]
+        if family:
+            patient_name, age, gender = family.full_name, family.age, family.gender
+        else:
+            patient_name, gender = profile.full_name, profile.gender
+            age = profile.age
+            if profile.date_of_birth:
+                today = timezone.localdate()
+                age = today.year - profile.date_of_birth.year - (
+                    (today.month, today.day)
+                    < (profile.date_of_birth.month, profile.date_of_birth.day)
+                )
+        value = AppointmentRequest(
+            organization=request.organization,
+            creator=request.user,
+            therapy=validated_data["therapy"],
+            family_member=family,
+            selected_package=package,
+            selected_offer=validated_data.get("selected_offer"),
+            patient_name=patient_name,
+            age=age,
+            gender=gender,
+            mobile_number=user_mobile,
+            alternate_mobile="",
+            email=request.user.email,
+            session_preference=(
+                AppointmentRequest.SessionPreference.PACKAGE
+                if package
+                else AppointmentRequest.SessionPreference.SINGLE
+            ),
+            preferred_date=validated_data["preferred_date"],
+            preferred_time=validated_data["preferred_time"],
+            problem_description="",
+            pain_area=validated_data.get("pain_area", "").strip(),
+            problem_duration="",
+            doctor_reference="",
+            address=" ".join(
+                part for part in (address.address_line_1, address.address_line_2) if part
+            ),
+            city=address.city,
+            pin_code=address.pin_code,
+            landmark=address.landmark,
+            google_map_link="",
+            commercial_snapshot=quote.snapshot(),
+            regular_amount=quote.regular_amount,
+            discount_amount=quote.discount_amount,
+            final_amount=quote.final_amount,
+        )
+        try:
+            value.full_clean(exclude=("duplicate_fingerprint",))
+            value.save()
+            free_ids = [benefit["therapy_id"] for benefit in quote.free_benefits]
+            additional = [*requested, *TherapyOption.objects.filter(id__in=free_ids).exclude(id=value.therapy_id)]
+            value.requested_therapies.set(list(dict.fromkeys(additional)))
+        except IntegrityError as error:
+            raise serializers.ValidationError(
+                {"detail": "An identical pending appointment request already exists."}
+            ) from error
+        return value
+
+    def to_representation(self, instance):
+        return AppointmentRequestSerializer(instance, context=self.context).data
 
 
 class ReviewOperationsSerializer(serializers.ModelSerializer):

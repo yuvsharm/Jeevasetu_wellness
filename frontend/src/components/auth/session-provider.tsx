@@ -29,3 +29,7 @@ export function useSession() {
   if (!value) throw new Error("useSession must be used inside SessionProvider");
   return value;
 }
+
+export function useOptionalSession() {
+  return useContext(SessionContext);
+}

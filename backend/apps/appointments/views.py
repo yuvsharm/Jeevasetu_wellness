@@ -55,6 +55,7 @@ from apps.appointments.serializers import (
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
+    AuthenticatedAppointmentRequestSerializer,
     CustomerRebookSerializer,
     AppointmentRatingSerializer,
     PublicReviewSerializer,
@@ -255,16 +256,12 @@ class OfferManagementDetailView(OfferManagementListCreateView, generics.Retrieve
 
 
 class AppointmentCreateView(HasTenant, generics.CreateAPIView):
-    permission_classes = (permissions.AllowAny,)
-    serializer_class = AppointmentRequestSerializer
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = AuthenticatedAppointmentRequestSerializer
 
 
 class QuickAppointmentCreateView(AppointmentCreateView):
-    def get_serializer_context(self):
-        return {
-            **super().get_serializer_context(),
-            "require_booking_verification": True,
-        }
+    """Compatibility alias for the authenticated customer booking endpoint."""
 
 
 class BookingOtpIssueView(HasTenant, generics.GenericAPIView):

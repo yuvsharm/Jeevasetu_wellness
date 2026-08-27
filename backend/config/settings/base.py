@@ -212,7 +212,7 @@ MSG91_ENABLED = env.bool("MSG91_ENABLED", default=False)
 MSG91_WIDGET_ID = env("MSG91_WIDGET_ID", default="")
 MSG91_WIDGET_TOKEN = env("MSG91_WIDGET_TOKEN", default="")
 MSG91_AUTH_KEY = env("MSG91_AUTH_KEY", default="")
-MSG91_VERIFY_URL = env("MSG91_VERIFY_URL", default="https://control.msg91.com/api/v5/widget/verifyAccessToken")
+MSG91_VERIFY_URL = env("MSG91_VERIFY_URL", default="https://api.msg91.com/api/v5/widget/verifyAccessToken")
 MSG91_TIMEOUT_SECONDS = env.float("MSG91_TIMEOUT_SECONDS", default=5.0)
 LOGGING = {
     "version": 1,
