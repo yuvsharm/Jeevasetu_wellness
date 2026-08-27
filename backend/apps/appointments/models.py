@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from datetime import time
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -315,6 +316,7 @@ class ClinicOperatingHours(models.Model):
     weekdays = models.JSONField(default=list)
     opens_at = models.TimeField()
     closes_at = models.TimeField()
+    daily_schedule = models.JSONField(default=dict, blank=True)
     is_active = models.BooleanField(default=True)
     cancellation_cutoff_minutes = models.PositiveSmallIntegerField(default=120)
     rescheduling_cutoff_minutes = models.PositiveSmallIntegerField(default=120)
@@ -330,6 +332,28 @@ class ClinicOperatingHours(models.Model):
             raise ValidationError({"weekdays": "Use weekday numbers from 0 to 6."})
         if self.opens_at >= self.closes_at:
             raise ValidationError("Clinic opening time must precede closing time.")
+        for day, window in self.daily_schedule.items():
+            if str(day) not in {str(value) for value in range(7)} or not isinstance(window, dict):
+                raise ValidationError({"daily_schedule": "Use weekday keys from 0 to 6."})
+            if not window.get("is_open"):
+                continue
+            try:
+                opening = time.fromisoformat(window["opens_at"])
+                closing = time.fromisoformat(window["closes_at"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValidationError({"daily_schedule": "Open days require valid opening and closing times."}) from error
+            if opening >= closing:
+                raise ValidationError({"daily_schedule": "Opening time must precede closing time."})
+
+    def window_for_weekday(self, weekday):
+        window = self.daily_schedule.get(str(weekday))
+        if window is not None:
+            if not window.get("is_open"):
+                return None
+            return time.fromisoformat(window["opens_at"]), time.fromisoformat(window["closes_at"])
+        if weekday in self.weekdays:
+            return self.opens_at, self.closes_at
+        return None
 
 
 class Appointment(models.Model):

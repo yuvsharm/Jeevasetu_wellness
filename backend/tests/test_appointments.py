@@ -1,4 +1,4 @@
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 
 import pytest
 from django.urls import reverse
@@ -7,7 +7,10 @@ from django.utils import timezone
 from apps.accounts.models import Role, RoleAssignment, User
 from apps.appointments.models import AppointmentRequest, BookingPhoneVerification, ClinicOperatingHours, TherapyOption
 from apps.tenancy.models import Clinic, Organization, OrganizationMembership
+from apps.tenancy.models import ClinicMembership
 from apps.patients.models import CustomerFamilyMember, PatientAddress, PatientProfile
+from apps.staff.models import StaffProfile
+from apps.availability.models import ApprovalStatus, AvailabilityRule
 
 pytestmark = pytest.mark.django_db
 
@@ -50,6 +53,30 @@ def setup_identity(role):
             patient=patient, address_line_1="163 C Block", city="Meerut",
             region="Uttar Pradesh", pin_code="250004", is_primary=True,
         )
+        physio_user = User.objects.create_user(
+            username=f"physio-{organization.slug}", email=f"physio-{organization.slug}@example.com",
+            password="Safe-test-password-1",
+        )
+        physio_membership = OrganizationMembership.objects.create(user=physio_user, organization=organization)
+        clinic_membership = ClinicMembership.objects.create(organization_membership=physio_membership, clinic=clinic)
+        RoleAssignment.objects.create(
+            user=physio_user, organization=organization, organization_membership=physio_membership,
+            clinic=clinic, clinic_membership=clinic_membership, role=Role.PHYSIOTHERAPIST,
+        )
+        physio = StaffProfile.objects.create(
+            user=physio_user, organization=organization, clinic=clinic,
+            staff_type=Role.PHYSIOTHERAPIST, gender="FEMALE", date_of_birth=date(1990, 1, 1),
+            qualification="BPT", experience_years=5, languages_known=["Hindi"],
+            emergency_contact="9876543299", current_address="Meerut", city="Meerut",
+            pin_code="250004", joining_date=date.today(),
+        )
+        for weekday in range(7):
+            AvailabilityRule.objects.create(
+                organization=organization, clinic=clinic, physiotherapist=physio, weekday=weekday,
+                starts_at=time(9), ends_at=time(18), effective_from=timezone.localdate(),
+                approval_status=ApprovalStatus.APPROVED, is_active=True,
+                submitted_by=physio_user, reviewed_by=physio_user,
+            )
     return organization, user, therapy
 
 
@@ -131,6 +158,18 @@ def test_authenticated_booking_rejects_invalid_time_without_otp(api_client):
     assert response.status_code == 400
     assert "preferred_time" in response.data
     assert BookingPhoneVerification.objects.count() == 0
+
+
+def test_authenticated_booking_fails_closed_without_operating_hours(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    ClinicOperatingHours.objects.filter(clinic__organization=organization).delete()
+    api_client.force_authenticate(customer)
+    response = api_client.post(
+        reverse("appointment-create"), authenticated_payload(therapy),
+        format="json", **tenant(organization.slug),
+    )
+    assert response.status_code == 400
+    assert str(response.data["detail"][0]) == "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu."
 
 
 def test_customer_otp_login_authenticates_existing_customer_and_cannot_be_reused(api_client):

@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from django.urls import reverse
 
-from apps.appointments.models import Appointment
+from apps.appointments.models import Appointment, ClinicOperatingHours
 from apps.availability.models import (
     AvailabilityAuditEvent,
     AvailabilityException,
@@ -17,6 +17,56 @@ from tests.test_scheduling import (
 )
 
 pytestmark = pytest.mark.django_db
+
+
+def hours_payload(open_weekdays=range(7)):
+    return {"days": [
+        {"weekday": weekday, "is_open": weekday in open_weekdays,
+         "opens_at": "09:00" if weekday in open_weekdays else None,
+         "closes_at": "18:00" if weekday in open_weekdays else None}
+        for weekday in range(7)
+    ]}
+
+
+def test_owner_and_manager_configure_daily_hours_with_tenant_scope(api_client):
+    organization, clinic, owner, manager, physio_user, *_ = setup_domain("hours-config")
+    url = reverse("availability-operating-hours", args=[clinic.id])
+    for actor in (owner, manager):
+        api_client.force_authenticate(actor)
+        response = api_client.put(url, hours_payload({0, 1, 2, 3, 4, 5}), format="json", **headers(organization))
+        assert response.status_code == 200 and response.data["days"][6]["is_open"] is False
+    api_client.force_authenticate(physio_user)
+    assert api_client.put(url, hours_payload(), format="json", **headers(organization)).status_code == 403
+    foreign = setup_domain("hours-foreign")
+    api_client.force_authenticate(foreign[2])
+    assert api_client.get(url, **headers(foreign[0])).status_code == 404
+
+
+def test_customer_slots_fail_closed_for_missing_hours_and_closed_day(api_client):
+    organization, clinic, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-policy")
+    target = start_at(days=3)
+    api_client.force_authenticate(customer)
+    ClinicOperatingHours.objects.filter(clinic=clinic).delete()
+    missing = api_client.get(reverse("availability-customer-slots"), {"therapy": therapy.id, "date": target.date()}, **headers(organization))
+    assert missing.status_code == 409 and missing.data["code"] == "OPERATING_HOURS_UNAVAILABLE"
+    ClinicOperatingHours.objects.create(
+        clinic=clinic, weekdays=[target.weekday()], opens_at="09:00", closes_at="18:00",
+        daily_schedule={str(target.weekday()): {"is_open": False, "opens_at": None, "closes_at": None}},
+    )
+    closed = api_client.get(reverse("availability-customer-slots"), {"therapy": therapy.id, "date": target.date()}, **headers(organization))
+    assert closed.status_code == 200 and closed.data == []
+
+
+def test_customer_slots_exclude_overlapping_appointment(api_client):
+    organization, clinic, owner, _, _, physio, customer, patient, address, therapy = setup_domain("customer-slot-overlap")
+    target = start_at(days=3, hour=10)
+    api_client.force_authenticate(owner)
+    created = api_client.post(reverse("schedule-list"), appointment_payload(clinic, patient, therapy, address, physio, "SCHEDULED", start=target), format="json", **headers(organization))
+    assert created.status_code == 201
+    api_client.force_authenticate(customer)
+    response = api_client.get(reverse("availability-customer-slots"), {"therapy": therapy.id, "date": target.date()}, **headers(organization))
+    values = {item["value"] for item in response.data}
+    assert response.status_code == 200 and target.strftime("%H:%M") not in values and values
 
 
 def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):

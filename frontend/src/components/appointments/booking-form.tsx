@@ -10,6 +10,7 @@ import type { AppointmentRequest, CommercialCatalog, CommercialQuote } from "@/l
 import { activeRoles } from "@/lib/auth/roles";
 
 type FamilyMember = { id: string; full_name: string; age: number; gender: string; relationship: string };
+type AvailableSlot = { value: string; label: string };
 
 export function BookingForm({ initialTherapy = "", initialPackage = "", initialOffer = "" }: {
   initialTherapy?: string;
@@ -72,6 +73,17 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
       }),
     }),
   });
+  const slotsQuery = useQuery({
+    queryKey: ["customer-slots", effectiveTherapies, initialPackage, initialOffer, preferredDate],
+    enabled: customer && Boolean(effectiveTherapies[0]) && Boolean(preferredDate),
+    queryFn: () => {
+      const query = new URLSearchParams({ therapy: effectiveTherapies[0], date: preferredDate });
+      if (effectiveTherapies.length > 1) query.set("requested_therapies", effectiveTherapies.slice(1).join(","));
+      if (initialPackage) query.set("package", initialPackage);
+      if (initialOffer) query.set("offer", initialOffer);
+      return requestJson<AvailableSlot[]>(`/api/availability/customer-slots?${query}`);
+    },
+  });
 
   const createFamily = useMutation({
     mutationFn: () => requestJson<FamilyMember>("/api/customer/family", {
@@ -123,7 +135,9 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
       <button type="button" disabled={createFamily.isPending} onClick={() => createFamily.mutate()} className="button-secondary sm:col-span-2">{createFamily.isPending ? "Adding…" : "Add patient"}</button>
     </div>}
 
-    <div className="grid gap-5 sm:grid-cols-2"><label className="grid gap-2 font-semibold text-[#163c2a]">Date<input type="date" required value={preferredDate} onChange={(event) => setPreferredDate(event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" /></label><label className="grid gap-2 font-semibold text-[#163c2a]">Available time slot<input type="time" step="900" required value={preferredTime} onChange={(event) => setPreferredTime(event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" /></label></div>
+    <div className="grid gap-5 sm:grid-cols-2"><label className="grid gap-2 font-semibold text-[#163c2a]">Date<input type="date" required value={preferredDate} onChange={(event) => { setPreferredDate(event.target.value); setPreferredTime(""); }} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" /></label><label className="grid gap-2 font-semibold text-[#163c2a]">Available time slot<select required disabled={!preferredDate || slotsQuery.isPending || slotsQuery.isError} value={preferredTime} onChange={(event) => setPreferredTime(event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal"><option value="">{slotsQuery.isPending ? "Loading available slots…" : "Select a time"}</option>{slotsQuery.data?.map((slot) => <option key={slot.value} value={slot.value}>{slot.label}</option>)}</select></label></div>
+    {preferredDate && slotsQuery.data?.length === 0 && <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">No appointment slots are available for this date.</p>}
+    {slotsQuery.isError && <p role="alert" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{slotsQuery.error.message}</p>}
     <label className="grid gap-2 font-semibold text-[#163c2a]">Pain area (optional)<input value={painArea} maxLength={160} onChange={(event) => setPainArea(event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" /></label>
 
     {quoteQuery.data && <div className="rounded-xl bg-[#f7f3e9] p-4"><p className="font-semibold text-[#163c2a]">{selectedNames.join(" + ")}</p><p className="mt-2 text-sm">Duration: {quoteQuery.data.duration_minutes} minutes</p><p className="mt-1 text-xl font-bold text-emerald-800">₹{Number(quoteQuery.data.final_amount).toLocaleString("en-IN")}</p>{Number(quoteQuery.data.discount_amount) > 0 && <p className="text-sm text-slate-600">You save ₹{Number(quoteQuery.data.discount_amount).toLocaleString("en-IN")}</p>}</div>}

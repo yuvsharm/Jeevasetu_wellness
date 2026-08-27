@@ -8,6 +8,41 @@ from apps.availability.models import (
 from apps.staff.models import StaffProfile
 
 
+class OperatingDaySerializer(serializers.Serializer):
+    weekday = serializers.IntegerField(min_value=0, max_value=6)
+    is_open = serializers.BooleanField()
+    opens_at = serializers.TimeField(required=False, allow_null=True)
+    closes_at = serializers.TimeField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if attrs["is_open"]:
+            if not attrs.get("opens_at") or not attrs.get("closes_at"):
+                raise serializers.ValidationError("Open days require opening and closing times.")
+            if attrs["opens_at"] >= attrs["closes_at"]:
+                raise serializers.ValidationError("Opening time must precede closing time.")
+        return attrs
+
+
+class OperatingHoursWriteSerializer(serializers.Serializer):
+    days = OperatingDaySerializer(many=True)
+
+    def validate_days(self, value):
+        weekdays = [item["weekday"] for item in value]
+        if sorted(weekdays) != list(range(7)):
+            raise serializers.ValidationError("Provide each weekday exactly once.")
+        if not any(item["is_open"] for item in value):
+            raise serializers.ValidationError("At least one operating day must be open.")
+        return value
+
+
+class CustomerSlotQuerySerializer(serializers.Serializer):
+    therapy = serializers.UUIDField()
+    requested_therapies = serializers.CharField(required=False, allow_blank=True)
+    package = serializers.UUIDField(required=False)
+    offer = serializers.UUIDField(required=False)
+    date = serializers.DateField()
+
+
 class RuleSerializer(serializers.ModelSerializer):
     physiotherapist_name = serializers.CharField(
         source="physiotherapist.user.get_full_name", read_only=True

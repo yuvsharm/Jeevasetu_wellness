@@ -13,6 +13,8 @@ from apps.availability.views import (
     SelfExceptionView,
     SelfRuleView,
     SlotDiscoveryView,
+    CustomerSlotDiscoveryView,
+    OperatingHoursView,
 )
 
 urlpatterns = [
@@ -43,5 +45,7 @@ urlpatterns = [
     path("me/rules/", SelfRuleView.as_view(), name="availability-me-rules"),
     path("me/exceptions/", SelfExceptionView.as_view(), name="availability-me-exceptions"),
     path("slots/", SlotDiscoveryView.as_view(), name="availability-slots"),
+    path("customer-slots/", CustomerSlotDiscoveryView.as_view(), name="availability-customer-slots"),
+    path("operating-hours/<uuid:clinic_id>/", OperatingHoursView.as_view(), name="availability-operating-hours"),
     path("audit/", AuditView.as_view(), name="availability-audit"),
 ]

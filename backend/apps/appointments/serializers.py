@@ -24,6 +24,7 @@ from apps.appointments.models import (
     TherapyPackage,
 )
 from apps.appointments.scheduling import save_scheduled_appointment, validate_schedule
+from apps.availability.services import discover_slots
 from apps.patients.models import CustomerFamilyMember, PatientProfile
 from apps.staff.models import StaffProfile
 
@@ -951,7 +952,26 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
                 duration_minutes=quote.duration_minutes,
             )
         except DjangoValidationError as error:
+            if "operating hours have not been configured" in " ".join(error.messages).lower():
+                raise serializers.ValidationError({
+                    "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu."
+                }) from error
             raise serializers.ValidationError({"preferred_time": error.messages}) from error
+        slots = discover_slots(
+            clinic=profile.clinic,
+            therapy=therapy,
+            date_from=attrs["preferred_date"],
+            date_to=attrs["preferred_date"],
+            duration_minutes=quote.duration_minutes,
+        )
+        requested_time = attrs["preferred_time"].replace(second=0, microsecond=0)
+        if not any(
+            value["scheduled_start"].astimezone(zone).time().replace(tzinfo=None) == requested_time
+            for value in slots
+        ):
+            raise serializers.ValidationError({
+                "preferred_time": "The selected appointment slot is no longer available."
+            })
         attrs["_profile"] = profile
         attrs["_address"] = address
         attrs["_quote"] = quote

@@ -25,10 +25,11 @@ def validate_schedule(*, clinic, start, duration_minutes):
     zone = ZoneInfo(clinic.timezone or clinic.organization.timezone or "Asia/Kolkata")
     local_start = start.astimezone(zone)
     local_end = local_start + timedelta(minutes=duration_minutes)
+    window = hours.window_for_weekday(local_start.weekday())
     if (
-        local_start.weekday() not in hours.weekdays
-        or local_start.time().replace(tzinfo=None) < hours.opens_at
-        or local_end.time().replace(tzinfo=None) > hours.closes_at
+        window is None
+        or local_start.time().replace(tzinfo=None) < window[0]
+        or local_end.time().replace(tzinfo=None) > window[1]
         or local_end.date() != local_start.date()
     ):
         raise ValidationError("The appointment must be within configured clinic operating hours.")

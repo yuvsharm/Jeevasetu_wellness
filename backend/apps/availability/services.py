@@ -61,10 +61,11 @@ def ensure_physiotherapist_available(*, physiotherapist, clinic, start, end, exc
 def validate_rule(rule):
     rule.full_clean()
     hours = rule.clinic.appointment_operating_hours
+    window = hours.window_for_weekday(rule.weekday)
     if (
-        rule.weekday not in hours.weekdays
-        or rule.starts_at < hours.opens_at
-        or rule.ends_at > hours.closes_at
+        window is None
+        or rule.starts_at < window[0]
+        or rule.ends_at > window[1]
     ):
         raise ValidationError("Availability must remain within clinic operating hours.")
     overlap = AvailabilityRule.objects.filter(
@@ -91,11 +92,12 @@ def validate_exception(value):
         local_start = value.starts_at.astimezone(zone)
         local_end = value.ends_at.astimezone(zone)
         hours = value.clinic.appointment_operating_hours
+        window = hours.window_for_weekday(local_start.weekday())
         if (
             local_start.date() != local_end.date()
-            or local_start.weekday() not in hours.weekdays
-            or local_start.time().replace(tzinfo=None) < hours.opens_at
-            or local_end.time().replace(tzinfo=None) > hours.closes_at
+            or window is None
+            or local_start.time().replace(tzinfo=None) < window[0]
+            or local_end.time().replace(tzinfo=None) > window[1]
         ):
             raise ValidationError(
                 "Additional availability must remain within clinic operating hours."
@@ -196,8 +198,8 @@ def review_availability(value, *, actor, approve, reason=""):
         raise
 
 
-def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None):
-    from apps.appointments.models import Appointment
+def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None, duration_minutes=None):
+    from apps.appointments.models import Appointment, ClinicOperatingHours
     from apps.appointments.scheduling import validate_schedule
 
     profiles = StaffProfile.objects.filter(
@@ -221,13 +223,20 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None)
     )
     if physiotherapist:
         profiles = profiles.filter(pk=physiotherapist.pk)
-    duration = therapy.default_duration_minutes or 60
+    duration = duration_minutes or therapy.default_duration_minutes or 60
     zone = _zone(clinic)
     results = []
     day = date_from
     while day <= date_to and len(results) < 500:
-        cursor = datetime.combine(day, clinic.appointment_operating_hours.opens_at, zone)
-        closes = datetime.combine(day, clinic.appointment_operating_hours.closes_at, zone)
+        try:
+            window = clinic.appointment_operating_hours.window_for_weekday(day.weekday())
+        except ClinicOperatingHours.DoesNotExist:
+            raise ValidationError("Clinic operating hours have not been configured.") from None
+        if window is None:
+            day += timedelta(days=1)
+            continue
+        cursor = datetime.combine(day, window[0], zone)
+        closes = datetime.combine(day, window[1], zone)
         while cursor + timedelta(minutes=duration) <= closes and len(results) < 500:
             start = cursor.astimezone(UTC)
             try:

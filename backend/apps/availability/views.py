@@ -4,11 +4,12 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from rest_framework.generics import GenericAPIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
+from zoneinfo import ZoneInfo
 
 from apps.accounts.models import Role
 from apps.accounts.permissions import IsEnabledAuthenticated, IsOwnerOrManager, IsPhysiotherapist
 from apps.accounts.role_policy import actor_role_scope
-from apps.appointments.models import TherapyOption
+from apps.appointments.models import ClinicOperatingHours, TherapyOption
 from apps.availability.models import (
     ApprovalStatus,
     AvailabilityAuditEvent,
@@ -24,6 +25,8 @@ from apps.availability.serializers import (
     SelfExceptionSerializer,
     SelfRuleSerializer,
     SlotQuerySerializer,
+    CustomerSlotQuerySerializer,
+    OperatingHoursWriteSerializer,
     validate_profile,
 )
 from apps.availability.services import (
@@ -35,6 +38,9 @@ from apps.availability.services import (
     validate_rule,
 )
 from apps.staff.models import StaffProfile
+from apps.patients.models import PatientProfile
+from apps.accounts.permissions import IsCustomer
+from apps.appointments.commercial import calculate_quote
 
 
 class Pagination(PageNumberPagination):
@@ -62,6 +68,116 @@ class OperationsMixin:
         level, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
         if clinic.organization_id != self.request.organization.id:
             raise PermissionDenied("Clinic is unavailable.")
+
+
+def operating_hours_payload(clinic, hours):
+    days = []
+    for weekday in range(7):
+        window = hours.window_for_weekday(weekday) if hours else None
+        days.append({
+            "weekday": weekday,
+            "is_open": window is not None,
+            "opens_at": window[0].strftime("%H:%M") if window else None,
+            "closes_at": window[1].strftime("%H:%M") if window else None,
+        })
+    return {
+        "clinic": str(clinic.id),
+        "clinic_name": clinic.name,
+        "timezone": clinic.timezone or clinic.organization.timezone,
+        "configured": hours is not None,
+        "days": days,
+    }
+
+
+class OperatingHoursView(OperationsMixin, GenericAPIView):
+    serializer_class = OperatingHoursWriteSerializer
+
+    def get_clinic(self, request, clinic_id):
+        clinic = request.organization.clinics.filter(pk=clinic_id, is_active=True).first()
+        if clinic is None:
+            raise NotFound("Clinic is unavailable.")
+        self.assert_clinic(clinic)
+        return clinic
+
+    def get(self, request, clinic_id):
+        clinic = self.get_clinic(request, clinic_id)
+        hours = ClinicOperatingHours.objects.filter(clinic=clinic, is_active=True).first()
+        return Response(operating_hours_payload(clinic, hours))
+
+    def put(self, request, clinic_id):
+        clinic = self.get_clinic(request, clinic_id)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        days = serializer.validated_data["days"]
+        opened = [item for item in days if item["is_open"]]
+        schedule = {
+            str(item["weekday"]): {
+                "is_open": item["is_open"],
+                "opens_at": item.get("opens_at").strftime("%H:%M") if item.get("opens_at") else None,
+                "closes_at": item.get("closes_at").strftime("%H:%M") if item.get("closes_at") else None,
+            }
+            for item in days
+        }
+        hours, _ = ClinicOperatingHours.objects.update_or_create(
+            clinic=clinic,
+            defaults={
+                "weekdays": [item["weekday"] for item in opened],
+                "opens_at": min(item["opens_at"] for item in opened),
+                "closes_at": max(item["closes_at"] for item in opened),
+                "daily_schedule": schedule,
+                "is_active": True,
+            },
+        )
+        hours.full_clean()
+        hours.save()
+        return Response(operating_hours_payload(clinic, hours))
+
+
+class CustomerSlotDiscoveryView(GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+    serializer_class = CustomerSlotQuerySerializer
+
+    def get(self, request):
+        if not getattr(request, "organization", None):
+            raise NotFound("Organization context is unavailable.")
+        serializer = self.get_serializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        profile = PatientProfile.objects.filter(
+            organization=request.organization, user=request.user, is_active=True
+        ).select_related("clinic").first()
+        if profile is None:
+            raise NotFound("Customer profile is unavailable.")
+        therapy = TherapyOption.objects.filter(
+            pk=data["therapy"], organization=request.organization, is_active=True
+        ).first()
+        if therapy is None:
+            raise NotFound("Therapy is unavailable.")
+        requested_ids = [value for value in data.get("requested_therapies", "").split(",") if value]
+        try:
+            quote = calculate_quote(
+                organization=request.organization,
+                therapy_ids=[therapy.id, *requested_ids],
+                package_id=data.get("package"),
+                offer_id=data.get("offer"),
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(error.message_dict) from error
+        if not ClinicOperatingHours.objects.filter(clinic=profile.clinic, is_active=True).exists():
+            return Response({
+                "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu.",
+                "code": "OPERATING_HOURS_UNAVAILABLE",
+            }, status=409)
+        slots = discover_slots(
+            clinic=profile.clinic,
+            therapy=therapy,
+            date_from=data["date"],
+            date_to=data["date"],
+            duration_minutes=quote.duration_minutes,
+        )
+        zone = profile.clinic.timezone or request.organization.timezone or "Asia/Kolkata"
+        values = sorted({slot["scheduled_start"].astimezone(ZoneInfo(zone)).strftime("%H:%M") for slot in slots})
+        return Response([{"value": value, "label": value} for value in values])
         if level == Role.MANAGER and clinic.id not in (clinic_ids or ()):
             raise PermissionDenied("Clinic is unavailable.")
 
