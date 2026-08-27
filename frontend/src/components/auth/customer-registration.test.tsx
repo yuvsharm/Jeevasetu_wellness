@@ -28,6 +28,9 @@ describe("customer registration", () => {
     fireEvent.change(screen.getByLabelText("Age"), { target: { value: "34" } });
     fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543210" } });
+    fireEvent.change(screen.getByLabelText("Email (optional)"), { target: { value: "asha@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "Asha-Strong-Password-2026!" } });
     fireEvent.change(screen.getByLabelText("Address"), { target: { value: "163 C Block" } });
     fireEvent.change(screen.getByLabelText("PIN code"), { target: { value: "250004" } });
     fireEvent.click(screen.getByRole("button", { name: "Send OTP" }));
@@ -38,7 +41,21 @@ describe("customer registration", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/book-appointment?therapy=therapy-1"));
     const call = fetchMock.mock.calls.find(([input]) => String(input) === "/api/session/customer-register");
     const body = JSON.parse(String(call?.[1]?.body));
-    expect(body).toMatchObject({ verification_id: "verification-1", access_token: "header.payload.signature", full_name: "Asha Sharma", age: 34, gender: "FEMALE" });
+    expect(body).toMatchObject({ verification_id: "verification-1", access_token: "header.payload.signature", full_name: "Asha Sharma", email: "asha@example.com", password: "Asha-Strong-Password-2026!", confirm_password: "Asha-Strong-Password-2026!", age: 34, gender: "FEMALE" });
     expect(body).not.toHaveProperty("authkey");
+  });
+
+  it("does not send OTP when passwords differ", async () => {
+    const fetchMock = vi.spyOn(global, "fetch");
+    render(<CustomerRegistration />);
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Asha Sharma" } });
+    fireEvent.change(screen.getByLabelText("Age"), { target: { value: "34" } });
+    fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
+    fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543210" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "first-password" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "other-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send OTP" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Passwords do not match.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

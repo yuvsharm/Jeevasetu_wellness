@@ -50,6 +50,9 @@ def registration_payload(issued, otp=None, mobile="9876543210"):
         "mobile_number": mobile,
         "otp": otp if otp is not None else issued.data["otp"],
         "full_name": "Asha Sharma",
+        "email": "asha@example.com",
+        "password": "Asha-Strong-Password-2026!",
+        "confirm_password": "Asha-Strong-Password-2026!",
         "age": 34,
         "gender": "FEMALE",
         "address": {
@@ -79,8 +82,11 @@ def test_customer_registration_requires_verification_then_creates_profile_and_se
         format="json", **tenant(organization),
     )
     assert completed.status_code == 201
-    assert set(completed.data) == {"access", "refresh", "user"}
+    assert set(completed.data) == {"access", "refresh", "refresh_max_age", "user"}
     customer = User.objects.get(mobile_number="+919876543210")
+    assert customer.check_password("Asha-Strong-Password-2026!")
+    assert customer.email == "asha@example.com"
+    assert completed.data["refresh_max_age"] == 7 * 24 * 60 * 60
     assert RoleAssignment.objects.filter(
         user=customer, organization=organization, role=Role.CUSTOMER, is_active=True
     ).exists()

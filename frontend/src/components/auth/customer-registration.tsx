@@ -12,6 +12,9 @@ type Details = {
   age: string;
   gender: string;
   mobile_number: string;
+  email: string;
+  password: string;
+  confirm_password: string;
   address_line_1: string;
   address_line_2: string;
   landmark: string;
@@ -21,7 +24,7 @@ type Details = {
 };
 
 const initial: Details = {
-  full_name: "", age: "", gender: "", mobile_number: "", address_line_1: "",
+  full_name: "", age: "", gender: "", mobile_number: "", email: "", password: "", confirm_password: "", address_line_1: "",
   address_line_2: "", landmark: "", city: "Meerut", region: "Uttar Pradesh", pin_code: "",
 };
 
@@ -39,6 +42,7 @@ export function CustomerRegistration() {
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [visible, setVisible] = useState({ password: false, confirm_password: false });
 
   function update(name: keyof Details, value: string) {
     setDetails((current) => ({ ...current, [name]: value }));
@@ -53,6 +57,8 @@ export function CustomerRegistration() {
     if (!/^\d{1,3}$/.test(details.age) || Number(details.age) > 120) return "Enter a valid age.";
     if (!details.gender) return "Select your gender.";
     if (!/^[6-9]\d{9}$/.test(details.mobile_number)) return "Enter a valid 10-digit Indian mobile number.";
+    if (!details.password) return "Enter a password.";
+    if (details.password !== details.confirm_password) return "Passwords do not match.";
     if (details.address_line_1.trim().length < 5 || !details.city.trim() || !details.region.trim()) return "Enter your complete address.";
     if (!/^[1-9]\d{5}$/.test(details.pin_code)) return "Enter a valid PIN code.";
     if (Number(details.age) < 18) return "A parent or legal guardian must register and add a minor as a family member.";
@@ -88,6 +94,9 @@ export function CustomerRegistration() {
           verification_id: verificationId,
           mobile_number: details.mobile_number,
           full_name: details.full_name,
+          email: details.email,
+          password: details.password,
+          confirm_password: details.confirm_password,
           age: Number(details.age),
           gender: details.gender,
           address: {
@@ -121,6 +130,8 @@ export function CustomerRegistration() {
         <label className="grid gap-2 font-semibold text-slate-800">Gender<select value={details.gender} onChange={(event) => update("gender", event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" required><option value="">Select gender</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option><option value="PREFER_NOT_TO_SAY">Prefer not to say</option></select></label>
       </div>
       {input("mobile_number", "Mobile number", { type: "tel", maxLength: 10 })}
+      {input("email", "Email (optional)", { type: "email" })}
+      {(["password", "confirm_password"] as const).map((name) => <label key={name} className="grid gap-2 font-semibold text-slate-800">{name === "password" ? "Password" : "Confirm password"}<span className="flex rounded-xl border border-slate-300 bg-white focus-within:ring-2 focus-within:ring-emerald-600"><input type={visible[name] ? "text" : "password"} autoComplete="new-password" value={details[name]} onChange={(event) => update(name, event.target.value)} className="min-h-12 min-w-0 flex-1 rounded-xl px-4 outline-none" required /><button type="button" onClick={() => setVisible((current) => ({ ...current, [name]: !current[name] }))} className="px-4 text-sm font-semibold text-emerald-800" aria-label={visible[name] ? `Hide ${name === "password" ? "password" : "confirmation password"}` : `Show ${name === "password" ? "password" : "confirmation password"}`}>{visible[name] ? "Hide" : "Show"}</button></span></label>)}
       {input("address_line_1", "Address")}
       {input("address_line_2", "Address line 2 (optional)")}
       {input("landmark", "Landmark (optional)")}

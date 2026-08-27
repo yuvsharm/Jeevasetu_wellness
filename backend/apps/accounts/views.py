@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
+from datetime import timedelta
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
@@ -12,6 +13,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
 from apps.accounts.audit import record_auth_event
 from apps.accounts.models import AuthenticationAuditEvent, Role, RoleAssignment, User
@@ -21,6 +23,8 @@ from apps.accounts.serializers import (
     LoginSerializer,
     CustomerOtpLoginSerializer,
     CustomerRegistrationSerializer,
+    CustomerPasswordLoginSerializer,
+    CustomerPasswordResetSerializer,
     LogoutSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -41,6 +45,24 @@ from apps.accounts.validators import normalize_email_address, normalize_mobile_n
 from apps.tenancy.models import OrganizationMembership
 from apps.appointments.booking_verification import resolve_booking_verification, verify_booking_otp
 from apps.patients.models import PatientAddress, PatientProfile
+
+
+CUSTOMER_SESSION_LIFETIME = timedelta(days=7)
+
+
+def issue_customer_session(user):
+    refresh = RefreshToken.for_user(user)
+    refresh["customer_session"] = True
+    refresh.set_exp(lifetime=CUSTOMER_SESSION_LIFETIME)
+    OutstandingToken.objects.filter(jti=refresh["jti"]).update(
+        expires_at=timezone.now() + CUSTOMER_SESSION_LIFETIME
+    )
+    return {
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "refresh_max_age": int(CUSTOMER_SESSION_LIFETIME.total_seconds()),
+        "user": UserSummarySerializer(user).data,
+    }
 
 
 def eligible_user(identifier):
@@ -185,6 +207,45 @@ class CustomerOtpLoginView(APIView):
         })
 
 
+class CustomerPasswordLoginView(APIView):
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_scope = "auth_login"
+
+    def post(self, request):
+        if getattr(request, "organization", None) is None:
+            return Response({"detail": "Organization context is unavailable."}, status=404)
+        serializer = CustomerPasswordLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        user = User.objects.filter(mobile_number=f"+91{data['mobile_number']}").first()
+        valid_customer = bool(
+            user
+            and user.is_active
+            and user.is_enabled
+            and user.check_password(data["password"])
+            and OrganizationMembership.objects.filter(
+                user=user, organization=request.organization, is_active=True
+            ).exists()
+            and user.role_assignments.filter(
+                organization=request.organization, role=Role.CUSTOMER, is_active=True
+            ).exists()
+            and not user.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists()
+        )
+        if not valid_customer:
+            record_auth_event(
+                request, AuthenticationAuditEvent.Event.LOGIN,
+                AuthenticationAuditEvent.Outcome.FAILURE, user=user,
+                identifier=data["mobile_number"],
+            )
+            return Response({"detail": "Invalid mobile number or password."}, status=401)
+        record_auth_event(
+            request, AuthenticationAuditEvent.Event.LOGIN,
+            AuthenticationAuditEvent.Outcome.SUCCESS, user=user,
+        )
+        return Response(issue_customer_session(user))
+
+
 class CustomerRegistrationView(APIView):
     """Create the customer identity and self patient only after mobile ownership verification."""
 
@@ -232,9 +293,9 @@ class CustomerRegistrationView(APIView):
             mobile_number=mobile,
             first_name=names[0],
             last_name=names[1] if len(names) > 1 else "",
+            email=data.get("email", ""),
+            password=data["password"],
         )
-        user.set_unusable_password()
-        user.save(update_fields=("password",))
         membership = OrganizationMembership.objects.create(
             user=user, organization=request.organization
         )
@@ -271,21 +332,61 @@ class CustomerRegistrationView(APIView):
         address.save()
         verification.consumed_at = timezone.now()
         verification.save(update_fields=("consumed_at",))
-        refresh = RefreshToken.for_user(user)
         record_auth_event(
             request,
             AuthenticationAuditEvent.Event.REGISTRATION,
             AuthenticationAuditEvent.Outcome.SUCCESS,
             user=user,
         )
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": UserSummarySerializer(user).data,
-            },
-            status=status.HTTP_201_CREATED,
+        return Response(issue_customer_session(user), status=status.HTTP_201_CREATED)
+
+
+class CustomerPasswordResetView(APIView):
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_scope = "auth_password_reset"
+
+    @transaction.atomic
+    def post(self, request):
+        if getattr(request, "organization", None) is None:
+            return Response({"detail": "Organization context is unavailable."}, status=404)
+        serializer = CustomerPasswordResetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            token = verify_booking_otp(
+                organization=request.organization,
+                verification_id=data["verification_id"], mobile_number=data["mobile_number"],
+                otp=data.get("otp"), access_token=data.get("access_token"),
+            )
+            verification = resolve_booking_verification(
+                organization=request.organization, mobile_number=data["mobile_number"],
+                token=token, lock=True,
+            )
+        except Exception as error:
+            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+        user = User.objects.select_for_update().filter(mobile_number=f"+91{data['mobile_number']}").first()
+        eligible = bool(
+            user and user.is_active and user.is_enabled
+            and OrganizationMembership.objects.filter(user=user, organization=request.organization, is_active=True).exists()
+            and user.role_assignments.filter(organization=request.organization, role=Role.CUSTOMER, is_active=True).exists()
+            and not user.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists()
         )
+        if not eligible:
+            raise ValidationError("Password reset could not be completed.")
+        from django.contrib.auth import password_validation
+
+        password_validation.validate_password(data["new_password"], user)
+        user.set_password(data["new_password"])
+        user.save(update_fields=("password",))
+        verification.consumed_at = timezone.now()
+        verification.save(update_fields=("consumed_at",))
+        blacklist_user_refresh_tokens(user)
+        record_auth_event(
+            request, AuthenticationAuditEvent.Event.PASSWORD_RESET_COMPLETE,
+            AuthenticationAuditEvent.Outcome.SUCCESS, user=user,
+        )
+        return Response({"detail": "Password reset completed. Sign in with your new password."})
 
 
 class RefreshView(APIView):
@@ -304,8 +405,18 @@ class RefreshView(APIView):
             user = User.objects.filter(pk=submitted["user_id"]).first()
             if user is None or not user.is_active or not user.is_enabled:
                 raise TokenError("Token user is unavailable")
-            serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
-            serializer.is_valid(raise_exception=True)
+            if submitted.get("customer_session"):
+                if not user.role_assignments.filter(role=Role.CUSTOMER, is_active=True).exists():
+                    raise TokenError("Token user is unavailable")
+                validated_data = {
+                    "access": str(submitted.access_token),
+                    "refresh": raw_refresh,
+                    "refresh_max_age": max(0, int(submitted["exp"] - timezone.now().timestamp())),
+                }
+                serializer = None
+            else:
+                serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
+                serializer.is_valid(raise_exception=True)
         except (TokenError, KeyError, APIException):
             record_auth_event(
                 request,
@@ -324,7 +435,7 @@ class RefreshView(APIView):
             AuthenticationAuditEvent.Outcome.SUCCESS,
             user=user,
         )
-        return Response(serializer.validated_data)
+        return Response(validated_data if serializer is None else serializer.validated_data)
 
 
 class LogoutView(APIView):

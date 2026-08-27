@@ -13,7 +13,7 @@ const secureCookies = process.env.NODE_ENV === "production";
 const ACCESS_COOKIE_SECONDS = 30 * 60;
 const REFRESH_COOKIE_SECONDS = 8 * 60 * 60;
 
-type TokenPair = { access: string; refresh: string; user?: UserSummary };
+type TokenPair = { access: string; refresh: string; refresh_max_age?: number; user?: UserSummary };
 type RefreshResult = { tokens: TokenPair; session: Session };
 const REFRESH_DEDUPE_SECONDS = 10;
 const refreshes = new Map<string, { promise: Promise<RefreshResult>; expiresAt: number }>();
@@ -103,13 +103,13 @@ export async function login(payload: unknown) {
   return { tokens, session: { user: tokens.user, access } satisfies Session };
 }
 
-export async function customerOtpLogin(payload: unknown) {
+export async function customerPasswordLogin(payload: unknown) {
   if (!ORGANIZATION_SLUG) throw new SessionError(400, "Organization context is not configured.");
   const tokens = await checkedJson<TokenPair>(
-    await djangoFetch("/auth/customer-otp-login/", { method: "POST", body: JSON.stringify(payload) }),
+    await djangoFetch("/auth/customer-login/", { method: "POST", body: JSON.stringify(payload) }),
   );
   const access = await checkedJson<AccessSummary>(await djangoFetch(djangoEndpoints.access, {}, tokens.access));
-  if (!tokens.user) throw new SessionError(401, "The OTP or session is invalid.");
+  if (!tokens.user) throw new SessionError(401, "The credentials or session are invalid.");
   return { tokens, session: { user: tokens.user, access } satisfies Session };
 }
 
@@ -121,6 +121,13 @@ export async function customerRegister(payload: unknown) {
   const access = await checkedJson<AccessSummary>(await djangoFetch(djangoEndpoints.access, {}, tokens.access));
   if (!tokens.user) throw new SessionError(401, "Customer registration could not be completed.");
   return { tokens, session: { user: tokens.user, access } satisfies Session };
+}
+
+export async function customerPasswordReset(payload: unknown) {
+  if (!ORGANIZATION_SLUG) throw new SessionError(400, "Organization context is not configured.");
+  return checkedJson<{ detail: string }>(
+    await djangoFetch("/auth/customer-password-reset/", { method: "POST", body: JSON.stringify(payload) }),
+  );
 }
 
 export async function publicPost<T>(path: string, payload: unknown) {
@@ -218,7 +225,7 @@ export function setSessionCookies(response: NextResponse, tokens: TokenPair) {
     secure: secureCookies,
     sameSite: "lax",
     path: "/",
-    maxAge: REFRESH_COOKIE_SECONDS,
+    maxAge: tokens.refresh_max_age ?? REFRESH_COOKIE_SECONDS,
   });
 }
 

@@ -133,6 +133,9 @@ class CustomerRegistrationSerializer(serializers.Serializer):
         required=False, write_only=True, trim_whitespace=False, max_length=4096
     )
     full_name = serializers.CharField(max_length=160)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
     date_of_birth = serializers.DateField(required=False, allow_null=True)
     age = serializers.IntegerField(required=False, min_value=0, max_value=120)
     gender = serializers.ChoiceField(
@@ -174,6 +177,38 @@ class CustomerRegistrationSerializer(serializers.Serializer):
         attrs["full_name"] = " ".join(attrs["full_name"].split())
         if len(attrs["full_name"]) < 2:
             raise serializers.ValidationError({"full_name": "Enter the customer's full name."})
+        if attrs["password"] != attrs.pop("confirm_password"):
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        names = attrs["full_name"].split(" ", 1)
+        candidate = User(
+            first_name=names[0], last_name=names[1] if len(names) > 1 else "",
+            email=normalize_email_address(attrs.get("email", "")),
+            mobile_number=f"+91{attrs['mobile_number']}",
+        )
+        password_validation.validate_password(attrs["password"], candidate)
+        attrs["email"] = candidate.email
+        return attrs
+
+
+class CustomerPasswordLoginSerializer(serializers.Serializer):
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class CustomerPasswordResetSerializer(serializers.Serializer):
+    verification_id = serializers.UUIDField()
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
+    access_token = serializers.CharField(required=False, write_only=True, trim_whitespace=False, max_length=4096)
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        required = "access_token" if settings.MSG91_ENABLED else "otp"
+        if not attrs.get(required):
+            raise serializers.ValidationError({required: "This field is required for mobile verification."})
+        if attrs["new_password"] != attrs.pop("confirm_password"):
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
         return attrs
 
 
@@ -185,11 +220,13 @@ class TokenPairResponseSerializer(serializers.Serializer):
     access = serializers.CharField(read_only=True)
     refresh = serializers.CharField(read_only=True)
     user = UserSummarySerializer(read_only=True)
+    refresh_max_age = serializers.IntegerField(read_only=True, required=False)
 
 
 class RefreshResponseSerializer(serializers.Serializer):
     access = serializers.CharField(read_only=True)
     refresh = serializers.CharField(read_only=True)
+    refresh_max_age = serializers.IntegerField(read_only=True, required=False)
 
 
 class DetailResponseSerializer(serializers.Serializer):

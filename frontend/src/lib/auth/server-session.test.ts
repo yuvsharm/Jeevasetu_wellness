@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -114,5 +114,25 @@ describe("server session", () => {
         detail: expect.stringMatching(/organization access has not been assigned yet/i),
       }),
     );
+  });
+
+  it("uses the customer-only password endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/customer-login/")) return new Response(JSON.stringify({ access: "customer-access", refresh: "customer-refresh", refresh_max_age: 604800, user }), { status: 200 });
+      return new Response(JSON.stringify(access), { status: 200 });
+    });
+    const { customerPasswordLogin } = await import("./server-session");
+    const result = await customerPasswordLogin({ mobile_number: "9876543210", password: "secret" });
+    expect(result.tokens.refresh_max_age).toBe(604800);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/auth/customer-otp-login/"))).toBe(false);
+  });
+
+  it("applies the backend-provided customer refresh lifetime to the secure cookie", async () => {
+    const { setSessionCookies } = await import("./server-session");
+    const response = NextResponse.json({});
+    setSessionCookies(response, { access: "access", refresh: "refresh", refresh_max_age: 604800 });
+    expect(response.cookies.get("jeevasetu_refresh")?.value).toBe("refresh");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=604800");
   });
 });
