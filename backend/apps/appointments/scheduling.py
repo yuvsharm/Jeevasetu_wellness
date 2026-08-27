@@ -12,18 +12,20 @@ from apps.staff.models import StaffProfile
 
 
 def validate_schedule(*, clinic, start, duration_minutes):
-    now = timezone.now()
-    if start < now + timedelta(hours=2):
-        raise ValidationError("Appointments require at least two hours notice.")
-    if start > now + timedelta(days=90):
-        raise ValidationError("Appointments cannot be scheduled more than 90 days ahead.")
-    if duration_minutes < 30 or duration_minutes > 360:
-        raise ValidationError("Appointment duration must be between 30 and 360 minutes.")
     hours = ClinicOperatingHours.objects.filter(clinic=clinic, is_active=True).first()
     if hours is None:
         raise ValidationError("Clinic operating hours have not been configured.")
     zone = ZoneInfo(clinic.timezone or clinic.organization.timezone or "Asia/Kolkata")
+    local_now = timezone.now().astimezone(zone)
     local_start = start.astimezone(zone)
+    if local_start < local_now + timedelta(hours=hours.minimum_advance_notice_hours):
+        raise ValidationError(
+            f"This appointment requires at least {hours.minimum_advance_notice_hours} hours' advance booking."
+        )
+    if local_start > local_now + timedelta(days=90):
+        raise ValidationError("Appointments cannot be scheduled more than 90 days ahead.")
+    if duration_minutes < 30 or duration_minutes > 360:
+        raise ValidationError("Appointment duration must be between 30 and 360 minutes.")
     local_end = local_start + timedelta(minutes=duration_minutes)
     window = hours.window_for_weekday(local_start.weekday())
     if (

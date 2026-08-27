@@ -21,13 +21,16 @@ describe("operating hours management", () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it("renders all weekdays and saves the tenant clinic policy", async () => {
-    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (_input, init) => new Response(JSON.stringify({ clinic: "clinic-1", clinic_name: "Main", timezone: "Asia/Kolkata", configured: true, days }), { status: init?.method === "PUT" ? 200 : 200 }));
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (_input, init) => new Response(JSON.stringify({ clinic: "clinic-1", clinic_name: "Main", timezone: "Asia/Kolkata", configured: true, minimum_advance_notice_hours: 24, days }), { status: init?.method === "PUT" ? 200 : 200 }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     client.setQueryData(["session"], session);
     render(<QueryClientProvider client={client}><SessionProvider><OperatingHoursManagement /></SessionProvider></QueryClientProvider>);
     expect(await screen.findByText("Monday")).toBeInTheDocument();
     expect(screen.getByText("Sunday")).toBeInTheDocument();
+    expect(screen.getByLabelText(/minimum advance booking notice/i)).toHaveValue(24);
     fireEvent.click(screen.getByRole("button", { name: "Save service hours" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/availability/operating-hours/clinic-1", expect.objectContaining({ method: "PUT" })));
+    const saveCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({ minimum_advance_notice_hours: 24 });
   });
 });

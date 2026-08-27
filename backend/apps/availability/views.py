@@ -85,6 +85,7 @@ def operating_hours_payload(clinic, hours):
         "clinic_name": clinic.name,
         "timezone": clinic.timezone or clinic.organization.timezone,
         "configured": hours is not None,
+        "minimum_advance_notice_hours": hours.minimum_advance_notice_hours if hours else 24,
         "days": days,
     }
 
@@ -125,6 +126,7 @@ class OperatingHoursView(OperationsMixin, GenericAPIView):
                 "opens_at": min(item["opens_at"] for item in opened),
                 "closes_at": max(item["closes_at"] for item in opened),
                 "daily_schedule": schedule,
+                "minimum_advance_notice_hours": serializer.validated_data["minimum_advance_notice_hours"],
                 "is_active": True,
             },
         )

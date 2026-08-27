@@ -256,7 +256,7 @@ def test_reschedule_and_cancellation_services_invalidate_active_otp(api_client):
     issue(api_client, values, appointment)
     reschedule_appointment(
         appointment,
-        scheduled_start=start_at(days=1, hour=10),
+        scheduled_start=start_at(days=2, hour=10),
         duration_minutes=60,
         actor=values[2],
         allow_override=True,

@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth.hashers import make_password
+from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.urls import reverse
 from django.utils import timezone
@@ -18,6 +20,7 @@ from apps.appointments.models import (
     VisitVerification,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
+from apps.appointments.scheduling import validate_schedule
 from apps.availability.models import ApprovalStatus, AvailabilityRule
 from apps.patients.models import PatientAddress, PatientProfile
 from apps.staff.models import StaffProfile
@@ -145,7 +148,7 @@ def setup_domain(slug="schedule"):
     )
 
 
-def start_at(days=1, hour=10):
+def start_at(days=2, hour=10):
     local = timezone.now().astimezone(ZoneInfo("Asia/Kolkata")) + timedelta(days=days)
     return datetime.combine(local.date(), time(hour), ZoneInfo("Asia/Kolkata"))
 
@@ -225,6 +228,31 @@ def test_notice_horizon_and_operating_hours_are_enforced(api_client):
         for value in (too_soon, too_late, outside)
     ]
     assert results == [400, 400, 400]
+
+
+def test_configurable_advance_notice_exact_boundary_and_timezone():
+    _, clinic, *_ = setup_domain("schedule-notice-boundary")
+    hours = clinic.appointment_operating_hours
+    hours.minimum_advance_notice_hours = 24
+    hours.save(update_fields=("minimum_advance_notice_hours",))
+    now = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)  # 10:00 Asia/Kolkata
+    with patch("apps.appointments.scheduling.timezone.now", return_value=now):
+        assert validate_schedule(clinic=clinic, start=now + timedelta(hours=24), duration_minutes=45)
+        with pytest.raises(ValidationError, match="at least 24 hours"):
+            validate_schedule(clinic=clinic, start=now + timedelta(hours=23, minutes=59), duration_minutes=45)
+        assert validate_schedule(clinic=clinic, start=now + timedelta(hours=25), duration_minutes=45)
+
+
+def test_configured_notice_other_than_twenty_four_hours_is_enforced():
+    _, clinic, *_ = setup_domain("schedule-notice-custom")
+    hours = clinic.appointment_operating_hours
+    hours.minimum_advance_notice_hours = 48
+    hours.save(update_fields=("minimum_advance_notice_hours",))
+    now = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)
+    with patch("apps.appointments.scheduling.timezone.now", return_value=now):
+        with pytest.raises(ValidationError, match="at least 48 hours"):
+            validate_schedule(clinic=clinic, start=now + timedelta(hours=47, minutes=59), duration_minutes=45)
+        assert validate_schedule(clinic=clinic, start=now + timedelta(hours=48), duration_minutes=45)
 
 
 def test_blocking_overlap_is_rejected(api_client):

@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.django_db
 
 
 def hours_payload(open_weekdays=range(7)):
-    return {"days": [
+    return {"minimum_advance_notice_hours": 24, "days": [
         {"weekday": weekday, "is_open": weekday in open_weekdays,
          "opens_at": "09:00" if weekday in open_weekdays else None,
          "closes_at": "18:00" if weekday in open_weekdays else None}
@@ -33,8 +34,11 @@ def test_owner_and_manager_configure_daily_hours_with_tenant_scope(api_client):
     url = reverse("availability-operating-hours", args=[clinic.id])
     for actor in (owner, manager):
         api_client.force_authenticate(actor)
-        response = api_client.put(url, hours_payload({0, 1, 2, 3, 4, 5}), format="json", **headers(organization))
+        payload = hours_payload({0, 1, 2, 3, 4, 5})
+        payload["minimum_advance_notice_hours"] = 48
+        response = api_client.put(url, payload, format="json", **headers(organization))
         assert response.status_code == 200 and response.data["days"][6]["is_open"] is False
+        assert response.data["minimum_advance_notice_hours"] == 48
     api_client.force_authenticate(physio_user)
     assert api_client.put(url, hours_payload(), format="json", **headers(organization)).status_code == 403
     foreign = setup_domain("hours-foreign")
@@ -67,6 +71,21 @@ def test_customer_slots_exclude_overlapping_appointment(api_client):
     response = api_client.get(reverse("availability-customer-slots"), {"therapy": therapy.id, "date": target.date()}, **headers(organization))
     values = {item["value"] for item in response.data}
     assert response.status_code == 200 and target.strftime("%H:%M") not in values and values
+
+
+def test_customer_slots_hide_times_inside_advance_notice(api_client):
+    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-notice")
+    now = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)  # 10:00 clinic-local
+    api_client.force_authenticate(customer)
+    with patch("apps.appointments.scheduling.timezone.now", return_value=now):
+        response = api_client.get(
+            reverse("availability-customer-slots"),
+            {"therapy": therapy.id, "date": "2026-08-28"},
+            **headers(organization),
+        )
+    values = {item["value"] for item in response.data}
+    assert response.status_code == 200
+    assert "09:45" not in values and "10:00" in values
 
 
 def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):

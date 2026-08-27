@@ -317,6 +317,9 @@ class ClinicOperatingHours(models.Model):
     opens_at = models.TimeField()
     closes_at = models.TimeField()
     daily_schedule = models.JSONField(default=dict, blank=True)
+    minimum_advance_notice_hours = models.PositiveSmallIntegerField(
+        default=24, validators=[MinValueValidator(1), MaxValueValidator(168)]
+    )
     is_active = models.BooleanField(default=True)
     cancellation_cutoff_minutes = models.PositiveSmallIntegerField(default=120)
     rescheduling_cutoff_minutes = models.PositiveSmallIntegerField(default=120)

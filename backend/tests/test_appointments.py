@@ -1,4 +1,5 @@
-from datetime import date, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
@@ -170,6 +171,20 @@ def test_authenticated_booking_fails_closed_without_operating_hours(api_client):
     )
     assert response.status_code == 400
     assert str(response.data["detail"][0]) == "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu."
+
+
+def test_direct_customer_request_inside_advance_notice_is_rejected(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    api_client.force_authenticate(customer)
+    now = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)
+    with patch("apps.appointments.scheduling.timezone.now", return_value=now):
+        response = api_client.post(
+            reverse("appointment-create"),
+            authenticated_payload(therapy, preferred_date="2026-08-28", preferred_time="09:45"),
+            format="json", **tenant(organization.slug),
+        )
+    assert response.status_code == 400
+    assert "at least 24 hours' advance booking" in str(response.data["preferred_time"][0])
 
 
 def test_customer_otp_login_authenticates_existing_customer_and_cannot_be_reused(api_client):

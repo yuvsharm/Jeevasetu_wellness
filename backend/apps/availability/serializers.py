@@ -25,6 +25,7 @@ class OperatingDaySerializer(serializers.Serializer):
 
 class OperatingHoursWriteSerializer(serializers.Serializer):
     days = OperatingDaySerializer(many=True)
+    minimum_advance_notice_hours = serializers.IntegerField(min_value=1, max_value=168)
 
     def validate_days(self, value):
         weekdays = [item["weekday"] for item in value]
