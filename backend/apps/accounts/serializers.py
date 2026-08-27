@@ -126,12 +126,10 @@ class CustomerAddressSerializer(serializers.Serializer):
 
 
 class CustomerRegistrationSerializer(serializers.Serializer):
-    verification_id = serializers.UUIDField()
-    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
-    otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
-    access_token = serializers.CharField(
-        required=False, write_only=True, trim_whitespace=False, max_length=4096
+    booking_verification_token = serializers.CharField(
+        write_only=True, trim_whitespace=False, max_length=4096
     )
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
     full_name = serializers.CharField(max_length=160)
     email = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, trim_whitespace=False)
@@ -147,11 +145,6 @@ class CustomerRegistrationSerializer(serializers.Serializer):
     guardian_mobile = serializers.RegexField(r"^[6-9]\d{9}$", required=False, allow_blank=True)
 
     def validate(self, attrs):
-        required = "access_token" if settings.MSG91_ENABLED else "otp"
-        if not attrs.get(required):
-            raise serializers.ValidationError(
-                {required: "This field is required for mobile verification."}
-            )
         if not attrs.get("date_of_birth") and attrs.get("age") is None:
             raise serializers.ValidationError({"age": "Age or date of birth is required."})
         age = attrs.get("age")

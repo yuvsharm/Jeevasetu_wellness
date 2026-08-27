@@ -261,17 +261,10 @@ class CustomerRegistrationView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         try:
-            token = verify_booking_otp(
-                organization=request.organization,
-                verification_id=data["verification_id"],
-                mobile_number=data["mobile_number"],
-                otp=data.get("otp"),
-                access_token=data.get("access_token"),
-            )
             verification = resolve_booking_verification(
                 organization=request.organization,
                 mobile_number=data["mobile_number"],
-                token=token,
+                token=data["booking_verification_token"],
                 lock=True,
             )
         except Exception as error:

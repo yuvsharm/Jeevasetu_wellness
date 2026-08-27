@@ -4,6 +4,7 @@ import pytest
 from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import Role, RoleAssignment, User
 from apps.appointments.models import BookingPhoneVerification, ClinicOperatingHours
@@ -44,11 +45,19 @@ def issue(api_client, organization, mobile="9876543210"):
     )
 
 
-def registration_payload(issued, otp=None, mobile="9876543210"):
-    return {
-        "verification_id": issued.data["verification_id"],
+def verify(api_client, organization, issued, otp=None, mobile="9876543210"):
+    return api_client.post(
+        reverse("booking-otp-verify"),
+        {"verification_id": issued.data["verification_id"], "mobile_number": mobile,
+         "otp": otp if otp is not None else issued.data["otp"]},
+        format="json", **tenant(organization),
+    )
+
+
+def registration_payload(token, mobile="9876543210", **overrides):
+    payload = {
+        "booking_verification_token": token,
         "mobile_number": mobile,
-        "otp": otp if otp is not None else issued.data["otp"],
         "full_name": "Asha Sharma",
         "email": "asha@example.com",
         "password": "Asha-Strong-Password-2026!",
@@ -64,21 +73,22 @@ def registration_payload(issued, otp=None, mobile="9876543210"):
             "pin_code": "250004",
         },
     }
+    payload.update(overrides)
+    return payload
 
 
 @LOCAL_OTP
 def test_customer_registration_requires_verification_then_creates_profile_and_session(api_client, organization):
     issued = issue(api_client, organization)
     wrong = "000000" if issued.data["otp"] != "000000" else "111111"
-    rejected = api_client.post(
-        reverse("auth-customer-register"), registration_payload(issued, wrong),
-        format="json", **tenant(organization),
-    )
+    rejected = verify(api_client, organization, issued, wrong)
     assert rejected.status_code == 400
     assert not User.objects.filter(mobile_number="+919876543210").exists()
 
+    verified = verify(api_client, organization, issued)
+    assert verified.status_code == 200
     completed = api_client.post(
-        reverse("auth-customer-register"), registration_payload(issued),
+        reverse("auth-customer-register"), registration_payload(verified.data["token"]),
         format="json", **tenant(organization),
     )
     assert completed.status_code == 201
@@ -105,8 +115,9 @@ def test_customer_registration_rejects_duplicate_and_staff_mobile(api_client, or
         user=existing, organization=organization, organization_membership=membership, role=Role.CUSTOMER
     )
     issued = issue(api_client, organization)
+    verified = verify(api_client, organization, issued)
     duplicate = api_client.post(
-        reverse("auth-customer-register"), registration_payload(issued),
+        reverse("auth-customer-register"), registration_payload(verified.data["token"]),
         format="json", **tenant(organization),
     )
     assert duplicate.status_code == 400
@@ -120,13 +131,73 @@ def test_customer_registration_rejects_duplicate_and_staff_mobile(api_client, or
         user=staff, organization=organization, organization_membership=staff_membership, role=Role.OWNER
     )
     staff_issued = issue(api_client, organization, staff_mobile)
+    staff_verified = verify(api_client, organization, staff_issued, mobile=staff_mobile)
     rejected = api_client.post(
-        reverse("auth-customer-register"), registration_payload(staff_issued, mobile=staff_mobile),
+        reverse("auth-customer-register"), registration_payload(staff_verified.data["token"], mobile=staff_mobile),
         format="json", **tenant(organization),
     )
     assert rejected.status_code == 400
     assert rejected.data == ["Staff accounts must use the staff sign-in flow."]
     assert not RoleAssignment.objects.filter(user=staff, role=Role.CUSTOMER).exists()
+
+
+@LOCAL_OTP
+def test_registration_proof_is_mobile_bound_unexpired_and_single_use(api_client, organization):
+    issued = issue(api_client, organization)
+    token = verify(api_client, organization, issued).data["token"]
+    tampered = api_client.post(
+        reverse("auth-customer-register"), registration_payload(token, mobile="9876543211"),
+        format="json", **tenant(organization),
+    )
+    assert tampered.status_code == 400
+    assert not User.objects.filter(mobile_number="+919876543211").exists()
+
+    BookingPhoneVerification.objects.filter(pk=issued.data["verification_id"]).update(
+        expires_at=timezone.now()
+    )
+    expired = api_client.post(
+        reverse("auth-customer-register"), registration_payload(token),
+        format="json", **tenant(organization),
+    )
+    assert expired.status_code == 400
+    assert not User.objects.filter(mobile_number="+919876543210").exists()
+
+    cache.clear()
+    fresh = issue(api_client, organization, mobile="9876543212")
+    fresh_token = verify(api_client, organization, fresh, mobile="9876543212").data["token"]
+    created = api_client.post(
+        reverse("auth-customer-register"), registration_payload(fresh_token, mobile="9876543212"),
+        format="json", **tenant(organization),
+    )
+    assert created.status_code == 201
+    reused = api_client.post(
+        reverse("auth-customer-register"), registration_payload(fresh_token, mobile="9876543212"),
+        format="json", **tenant(organization),
+    )
+    assert reused.status_code == 400
+    assert User.objects.filter(mobile_number="+919876543212").count() == 1
+
+
+@LOCAL_OTP
+def test_registration_password_confirmation_and_django_validation(api_client, organization):
+    issued = issue(api_client, organization)
+    token = verify(api_client, organization, issued).data["token"]
+    mismatch = api_client.post(
+        reverse("auth-customer-register"),
+        registration_payload(token, confirm_password="different"),
+        format="json", **tenant(organization),
+    )
+    assert mismatch.status_code == 400 and "confirm_password" in mismatch.data
+    weak = api_client.post(
+        reverse("auth-customer-register"),
+        registration_payload(token, password="password", confirm_password="password"),
+        format="json", **tenant(organization),
+    )
+    assert weak.status_code == 400
+    serialized_error = str(weak.data)
+    assert token not in serialized_error
+    assert "string='password'" not in serialized_error
+    assert not User.objects.filter(mobile_number="+919876543210").exists()
 
 
 @LOCAL_OTP
