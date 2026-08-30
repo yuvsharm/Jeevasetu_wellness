@@ -69,6 +69,7 @@ for name in ("MSG91_WIDGET_ID", "MSG91_WIDGET_TOKEN", "MSG91_AUTH_KEY"):
         raise ImproperlyConfigured(f"{name} must be configured in production")
 
 DEBUG = False
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["customer_register"] = "5/hour"  # noqa: F405
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

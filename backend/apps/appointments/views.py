@@ -1,5 +1,6 @@
 import csv
 from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -47,6 +48,8 @@ from apps.appointments.scheduling import (
     update_journey,
     unassign_physiotherapist,
     validate_schedule,
+    decide_appointment_request,
+    ensure_request_practitioner_eligible,
 )
 from apps.appointments.serializers import (
     AppointmentAuditSerializer,
@@ -55,6 +58,7 @@ from apps.appointments.serializers import (
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
+    AppointmentRequestDecisionSerializer,
     AuthenticatedAppointmentRequestSerializer,
     CustomerRebookSerializer,
     AppointmentRatingSerializer,
@@ -393,6 +397,12 @@ class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
         queryset = AppointmentRequest.objects.filter(
             organization=self.request.organization
         ).select_related("therapy", "creator")
+        if level == Role.MANAGER:
+            _, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
+            queryset = queryset.filter(
+                Q(creator__patient_profiles__clinic_id__in=clinic_ids or ())
+                | Q(creator=self.request.user)
+            ).distinct()
         status_value = self.request.query_params.get("status", "")
         search = self.request.query_params.get("search", "").strip()
         if status_value:
@@ -751,6 +761,90 @@ class PhysiotherapistWorkloadView(OperationalScopeMixin, GenericAPIView):
                 for profile in profiles
             ]
         )
+
+
+class AppointmentRequestDecisionView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = AppointmentRequestDecisionSerializer
+
+    def post(self, request, pk):
+        source = AppointmentRequest.objects.filter(
+            pk=pk, organization=request.organization
+        ).select_related("creator").first()
+        if source is None:
+            raise NotFound("Appointment request is unavailable.")
+        level, clinic_ids = actor_role_scope(request.user, request.organization)
+        patient = (
+            source.creator.patient_profiles.filter(
+                organization=request.organization, is_active=True
+            ).first()
+            if source.creator_id else None
+        )
+        if level == Role.MANAGER and (patient is None or patient.clinic_id not in (clinic_ids or ())):
+            raise PermissionDenied("Appointment request is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            source, appointment = decide_appointment_request(
+                source, actor=request.user, **serializer.validated_data
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
+        data = AppointmentRequestSerializer(source, context={"request": request}).data
+        if appointment:
+            data["appointment"] = AppointmentDetailSerializer(
+                appointment, context={"request": request}
+            ).data
+        return Response(data)
+
+
+class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+
+    def get(self, request, pk):
+        source = AppointmentRequest.objects.filter(
+            pk=pk, organization=request.organization, status=AppointmentRequest.Status.PENDING
+        ).select_related("creator", "therapy").first()
+        if source is None or source.creator_id is None:
+            raise NotFound("Appointment request is unavailable.")
+        patient = source.creator.patient_profiles.filter(
+            organization=request.organization, is_active=True
+        ).select_related("clinic").first()
+        if patient is None:
+            raise NotFound("Appointment request is unavailable.")
+        level, clinic_ids = actor_role_scope(request.user, request.organization)
+        if level == Role.MANAGER and patient.clinic_id not in (clinic_ids or ()):
+            raise PermissionDenied("Appointment request is unavailable.")
+        zone = ZoneInfo(patient.clinic.timezone or request.organization.timezone or "Asia/Kolkata")
+        start = datetime.combine(source.preferred_date, source.preferred_time, zone)
+        end = validate_schedule(
+            clinic=patient.clinic, start=start,
+            duration_minutes=source.requested_duration_minutes,
+        )
+        candidates = StaffProfile.objects.filter(
+            organization=request.organization, clinic=patient.clinic,
+            staff_type=Role.PHYSIOTHERAPIST,
+        ).select_related("user", "practitioner_profile__source_application")
+        result = []
+        for profile in candidates:
+            try:
+                ensure_request_practitioner_eligible(
+                    source=source, physiotherapist=profile, start=start, end=end
+                )
+            except DjangoValidationError:
+                continue
+            practitioner = getattr(profile, "practitioner_profile", None)
+            result.append({
+                "id": str(profile.id), "full_name": profile.user.get_full_name(),
+                "qualification": profile.qualification,
+                "experience_years": profile.experience_years,
+                "specialization": (
+                    practitioner.qualification_specialization if practitioner else ""
+                ),
+                "rating": None, "review_count": 0,
+                "has_photo": bool(profile.profile_photo),
+            })
+        return Response(result)
 
 
 class AppointmentRescheduleView(OperationalScopeMixin, GenericAPIView):

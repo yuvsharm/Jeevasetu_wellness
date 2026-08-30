@@ -9,7 +9,7 @@ export type AppointmentRequest = {
   preferred_date: string; preferred_time: string; problem_description: string; pain_area: string;
   problem_duration: string; doctor_reference: string; address: string; city: string; pin_code: string;
   landmark: string; google_map_link: string; status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
-  owner_remarks: string; created_at: string; updated_at: string;
+  owner_remarks: string; rejection_category?: string; rejection_customer_reason?: string; created_at: string; updated_at: string;
 };
 
 export type OperationalAppointment = {
@@ -55,6 +55,7 @@ export type OperationalAppointment = {
   rating_comment?: string;
   payment_status?: "PENDING" | "PROCESSING" | "PAID" | "HELD" | null;
   rating?: CustomerReview | null;
+  reminders?: Array<{kind:"HOURS_24"|"HOURS_2";scheduled_for:string;status:"PENDING"|"SENT"}>;
 };
 
 export type CustomerReview = { id:string; appointment:string; stars:number; comment:string; moderation_status:"PENDING"|"APPROVED"|"HIDDEN"; status_display:string; moderation_reason:string; created_at:string };

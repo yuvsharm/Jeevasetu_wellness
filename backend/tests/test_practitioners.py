@@ -676,10 +676,21 @@ def test_public_profile_has_no_private_fields(api_client, domain):
     response = api_client.get(reverse("practitioner-public-list"), **headers(organization))
     payload = response.data[0]
     assert response.status_code == 200
+    assert payload["gender"] == value.get_gender_display()
+    assert payload["average_rating"] is None and payload["review_count"] == 0
     assert not (
-        {"mobile_number", "email", "current_address", "documents", "registration_number"}
+        {
+            "mobile_number", "email", "current_address", "documents",
+            "registration_number", "internal_review_notes", "availability_notes",
+            "exact_workload", "government_id",
+        }
         & set(payload)
     )
+    value.approved_profile.is_approved = False
+    value.approved_profile.save(update_fields=("is_approved",))
+    assert api_client.get(
+        reverse("practitioner-public-list"), **headers(organization)
+    ).data == []
 
 
 def test_preferred_practitioner_never_assigns_request(domain):

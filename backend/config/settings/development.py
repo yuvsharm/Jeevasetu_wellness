@@ -40,3 +40,6 @@ CSRF_COOKIE_SECURE = False
 REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] += [  # noqa: F405
     "rest_framework.renderers.BrowsableAPIRenderer"
 ]
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["customer_register"] = env(  # noqa: F405
+    "CUSTOMER_REGISTRATION_THROTTLE_RATE", default="30/hour"
+)

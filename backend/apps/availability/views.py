@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import generics
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.generics import GenericAPIView
@@ -196,6 +197,7 @@ class OperationsCollection(OperationsMixin, generics.ListCreateAPIView):
                 queryset = queryset.filter(**{key: value})
         return queryset
 
+    @transaction.atomic
     def perform_create(self, serializer):
         clinic = serializer.validated_data["clinic"]
         profile = serializer.validated_data["physiotherapist"]

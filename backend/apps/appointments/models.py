@@ -147,6 +147,12 @@ class CommercialAuditEvent(models.Model):
 
 
 class AppointmentRequest(models.Model):
+    class RejectionCategory(models.TextChoices):
+        NO_PRACTITIONER = "NO_PRACTITIONER", "No practitioner available"
+        SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE", "Service unavailable"
+        OUTSIDE_SERVICE_AREA = "OUTSIDE_SERVICE_AREA", "Outside service area"
+        SCHEDULING_CONFLICT = "SCHEDULING_CONFLICT", "Scheduling conflict"
+        OTHER = "OTHER", "Other"
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
@@ -240,6 +246,11 @@ class AppointmentRequest(models.Model):
     google_map_link = models.URLField(max_length=500, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     owner_remarks = models.TextField(max_length=1000, blank=True)
+    rejection_category = models.CharField(
+        max_length=32, choices=RejectionCategory.choices, blank=True
+    )
+    rejection_customer_reason = models.CharField(max_length=255, blank=True)
+    rejection_internal_note = models.CharField(max_length=500, blank=True)
     duplicate_fingerprint = models.CharField(max_length=64, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -286,6 +297,68 @@ class AppointmentRequest(models.Model):
         if self.commercial_snapshot.get("duration_minutes"):
             return self.commercial_snapshot["duration_minutes"]
         return (1 + self.requested_therapies.count()) * 45
+
+
+class AppointmentRequestAuditEvent(models.Model):
+    class Event(models.TextChoices):
+        SUBMITTED = "SUBMITTED", "Submitted"
+        APPROVED_AND_ASSIGNED = "APPROVED_AND_ASSIGNED", "Approved and assigned"
+        REJECTED = "REJECTED", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment_request = models.ForeignKey(
+        AppointmentRequest, on_delete=models.PROTECT, related_name="audit_events"
+    )
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    event = models.CharField(max_length=32, choices=Event.choices)
+    previous_status = models.CharField(max_length=12, blank=True)
+    new_status = models.CharField(max_length=12)
+    physiotherapist = models.ForeignKey(
+        "staff.StaffProfile", on_delete=models.PROTECT, null=True, blank=True
+    )
+    reason_category = models.CharField(max_length=32, blank=True)
+    customer_reason = models.CharField(max_length=255, blank=True)
+    internal_note = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+
+class AppointmentReminder(models.Model):
+    class Kind(models.TextChoices):
+        HOURS_24 = "HOURS_24", "24 hours before"
+        HOURS_2 = "HOURS_2", "2 hours before"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        SENT = "SENT", "Sent"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.ForeignKey(
+        "Appointment", on_delete=models.PROTECT, related_name="reminders"
+    )
+    practitioner = models.ForeignKey(
+        "staff.StaffProfile", on_delete=models.PROTECT, related_name="appointment_reminders"
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    scheduled_for = models.DateTimeField()
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("appointment", "kind"), name="appt_reminder_appointment_kind_uniq"
+            )
+        ]
+        indexes = [
+            models.Index(fields=("status", "scheduled_for"), name="appt_reminder_due_idx")
+        ]
 
 
 class BookingPhoneVerification(models.Model):

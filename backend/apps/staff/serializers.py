@@ -1,4 +1,4 @@
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
@@ -46,6 +46,14 @@ class StaffProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email")
     mobile = serializers.CharField(source="user.mobile_number")
     is_active = serializers.SerializerMethodField()
+    clinic_name = serializers.CharField(source="clinic.name", read_only=True, allow_null=True)
+    specialization_names = serializers.SlugRelatedField(
+        source="specializations", slug_field="name", many=True, read_only=True
+    )
+    verified_therapy_ids = serializers.SerializerMethodField()
+    verified_therapy_names = serializers.SerializerMethodField()
+    profile_source = serializers.SerializerMethodField()
+    approved_weekly_rule_count = serializers.IntegerField(read_only=True, default=0)
     specialization_ids = serializers.PrimaryKeyRelatedField(
         source="specializations",
         queryset=Specialization.objects.filter(is_active=True),
@@ -83,6 +91,12 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             "city",
             "pin_code",
             "clinic",
+            "clinic_name",
+            "specialization_names",
+            "verified_therapy_ids",
+            "verified_therapy_names",
+            "profile_source",
+            "approved_weekly_rule_count",
             "service_area_ids",
             "availability",
             "is_online",
@@ -99,6 +113,26 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         return value.user.role_assignments.filter(
             organization=value.organization, role=value.staff_type, is_active=True
         ).exists()
+
+    def _verified_competencies(self, value):
+        try:
+            application = value.practitioner_profile.source_application
+        except (AttributeError, ObjectDoesNotExist):
+            return []
+        return application.competencies.filter(verification_status="VERIFIED").select_related("therapy")
+
+    def get_verified_therapy_ids(self, value) -> list[str]:
+        return [str(item.therapy_id) for item in self._verified_competencies(value)]
+
+    def get_verified_therapy_names(self, value) -> list[str]:
+        return [item.therapy.name for item in self._verified_competencies(value)]
+
+    def get_profile_source(self, value) -> str:
+        try:
+            value.practitioner_profile.source_application
+        except (AttributeError, ObjectDoesNotExist):
+            return "STAFF_CREATED"
+        return "PRACTITIONER_APPLICATION"
 
     def validate(self, attrs):
         request = self.context["request"]

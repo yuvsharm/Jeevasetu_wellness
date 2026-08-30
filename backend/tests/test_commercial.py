@@ -100,6 +100,7 @@ def test_secure_booking_recalculates_offer_and_preserves_snapshot(api_client):
     offer.eligible_therapies.set([first])
     api_client.force_authenticate(customer)
     data = authenticated_payload(first, selected_offer=str(offer.id))
+    data.update({"regular_amount": "1.00", "discount_amount": "999999.00", "final_amount": "0.01"})
     created = api_client.post(reverse("quick-appointment-create"), data, format="json", **tenant(organization.slug))
     assert created.status_code == 201
     value = AppointmentRequest.objects.get(pk=created.data["id"])

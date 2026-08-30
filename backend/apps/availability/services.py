@@ -60,7 +60,12 @@ def ensure_physiotherapist_available(*, physiotherapist, clinic, start, end, exc
 
 def validate_rule(rule):
     rule.full_clean()
-    hours = rule.clinic.appointment_operating_hours
+    from apps.appointments.models import ClinicOperatingHours
+
+    try:
+        hours = rule.clinic.appointment_operating_hours
+    except ClinicOperatingHours.DoesNotExist:
+        raise ValidationError("Clinic operating hours have not been configured.") from None
     window = hours.window_for_weekday(rule.weekday)
     if (
         window is None
@@ -88,10 +93,15 @@ def validate_rule(rule):
 def validate_exception(value):
     value.full_clean()
     if value.kind == AvailabilityException.Kind.ADDITIONAL_AVAILABILITY:
+        from apps.appointments.models import ClinicOperatingHours
+
         zone = _zone(value.clinic)
         local_start = value.starts_at.astimezone(zone)
         local_end = value.ends_at.astimezone(zone)
-        hours = value.clinic.appointment_operating_hours
+        try:
+            hours = value.clinic.appointment_operating_hours
+        except ClinicOperatingHours.DoesNotExist:
+            raise ValidationError("Clinic operating hours have not been configured.") from None
         window = hours.window_for_weekday(local_start.weekday())
         if (
             local_start.date() != local_end.date()
@@ -221,6 +231,16 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None,
             practitioner_profile__is_open_to_work=True,
         )
     )
+    # Approved application-backed practitioners may only be offered for therapies whose
+    # competency was explicitly verified. Legacy staff profiles have no application
+    # competency record and retain their existing scheduling behavior.
+    profiles = profiles.filter(
+        Q(practitioner_profile__isnull=True)
+        | Q(
+            practitioner_profile__source_application__competencies__therapy=therapy,
+            practitioner_profile__source_application__competencies__verification_status="VERIFIED",
+        )
+    ).distinct()
     if physiotherapist:
         profiles = profiles.filter(pk=physiotherapist.pk)
     duration = duration_minutes or therapy.default_duration_minutes or 60

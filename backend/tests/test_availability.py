@@ -1,8 +1,9 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.appointments.models import Appointment, ClinicOperatingHours
 from apps.availability.models import (
@@ -10,6 +11,7 @@ from apps.availability.models import (
     AvailabilityException,
     AvailabilityRule,
 )
+from apps.practitioners.models import PractitionerApplication, PractitionerCompetency, PractitionerProfile
 from tests.test_scheduling import (
     appointment_payload,
     headers,
@@ -74,7 +76,8 @@ def test_customer_slots_exclude_overlapping_appointment(api_client):
 
 
 def test_customer_slots_hide_times_inside_advance_notice(api_client):
-    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-notice")
+    organization, _, _, _, _, physio, customer, *_, therapy = setup_domain("customer-slot-notice")
+    AvailabilityRule.objects.filter(physiotherapist=physio).update(effective_from=date(2026, 8, 27))
     now = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)  # 10:00 clinic-local
     api_client.force_authenticate(customer)
     with patch("apps.appointments.scheduling.timezone.now", return_value=now):
@@ -114,6 +117,22 @@ def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):
     assert submitted.status_code == 201 and submitted.data["approval_status"] == "PENDING"
     assert approved.status_code == 200 and approved.data["is_active"]
     assert AvailabilityAuditEvent.objects.filter(rule_id=submitted.data["id"]).count() == 2
+
+
+def test_owner_rule_creation_without_clinic_hours_fails_cleanly_and_rolls_back(api_client):
+    organization, clinic, owner, _, _, physio, *_ = setup_domain("availability-no-hours")
+    ClinicOperatingHours.objects.filter(clinic=clinic).delete()
+    AvailabilityRule.objects.filter(physiotherapist=physio).delete()
+    api_client.force_authenticate(owner)
+    response = api_client.post(
+        reverse("availability-rule-list"),
+        {"clinic": clinic.id, "physiotherapist": physio.id, "weekday": 0, "starts_at": "10:00", "ends_at": "19:00", "effective_from": timezone.localdate()},
+        format="json",
+        **headers(organization),
+    )
+    assert response.status_code == 400
+    assert "operating hours" in str(response.data).lower()
+    assert not AvailabilityRule.objects.filter(physiotherapist=physio).exists()
 
 
 def test_physiotherapist_sees_only_own_request_history(api_client):
@@ -235,6 +254,39 @@ def test_operations_slot_discovery_uses_fifteen_minute_intervals_and_blocks_book
     assert response.status_code == 200 and starts
     assert all(value.minute % 15 == 0 for value in starts)
     assert target not in starts
+
+
+def test_application_backed_slots_require_verified_therapy_competency(api_client):
+    organization, clinic, owner, _, physio_user, physio, *_, therapy = setup_domain("availability-competency")
+    application = PractitionerApplication.objects.create(
+        applicant=physio_user,
+        organization=organization,
+        clinic=clinic,
+        status=PractitionerApplication.Status.APPROVED,
+        full_legal_name="Approved Practitioner",
+    )
+    profile = PractitionerProfile.objects.create(
+        user=physio_user,
+        organization=organization,
+        clinic=clinic,
+        staff_profile=physio,
+        category=PractitionerApplication.Category.PHYSIOTHERAPIST,
+        is_approved=True,
+        is_open_to_work=True,
+        approved_at=timezone.now(),
+    )
+    application.approved_profile = profile
+    application.save(update_fields=("approved_profile",))
+    target = start_at(days=3)
+    params = {"clinic": clinic.id, "therapy": therapy.id, "date_from": target.date(), "date_to": target.date()}
+    api_client.force_authenticate(owner)
+    assert api_client.get(reverse("availability-slots"), params, **headers(organization)).data == []
+    PractitionerCompetency.objects.create(
+        application=application,
+        therapy=therapy,
+        verification_status=PractitionerCompetency.Verification.VERIFIED,
+    )
+    assert api_client.get(reverse("availability-slots"), params, **headers(organization)).data
 
 
 def test_appointment_paths_require_approved_availability(api_client):

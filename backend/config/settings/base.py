@@ -95,6 +95,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {
         "auth_register": "5/hour",
+        "customer_register": "5/hour",
         "auth_login": "10/minute",
         "auth_refresh": "30/minute",
         "auth_logout": "30/minute",
@@ -173,7 +174,17 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     "visibility_timeout": env.int("CELERY_VISIBILITY_TIMEOUT", default=3600),
 }
 CELERY_IMPORTS = ("config.tasks",)
-CELERY_BEAT_SCHEDULE = {}
+APPOINTMENT_REMINDER_OFFSETS_HOURS = tuple(
+    int(value.strip())
+    for value in env.str("APPOINTMENT_REMINDER_OFFSETS_HOURS", default="24,2").split(",")
+    if value.strip()
+)
+CELERY_BEAT_SCHEDULE = {
+    "dispatch-appointment-reminders": {
+        "task": "apps.appointments.tasks.dispatch_due_appointment_reminders",
+        "schedule": 60.0,
+    }
+}
 
 CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 CORS_ALLOW_CREDENTIALS = True

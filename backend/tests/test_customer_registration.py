@@ -1,12 +1,16 @@
 from datetime import time
 
 import pytest
+from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.test import APIRequestFactory
+from rest_framework.throttling import ScopedRateThrottle
 
 from apps.accounts.models import Role, RoleAssignment, User
+from apps.accounts.throttling import CustomerRegistrationRateThrottle
 from apps.appointments.models import BookingPhoneVerification, ClinicOperatingHours
 from apps.patients.models import PatientAddress, PatientProfile
 from apps.tenancy.models import Clinic, Organization, OrganizationMembership
@@ -121,7 +125,9 @@ def test_customer_registration_rejects_duplicate_and_staff_mobile(api_client, or
         format="json", **tenant(organization),
     )
     assert duplicate.status_code == 400
-    assert "already registered" in str(duplicate.data).lower()
+    assert duplicate.data == {
+        "mobile_number": "This mobile number is already registered. Please sign in."
+    }
 
     cache.clear()
     staff_mobile = "9876543211"
@@ -137,7 +143,9 @@ def test_customer_registration_rejects_duplicate_and_staff_mobile(api_client, or
         format="json", **tenant(organization),
     )
     assert rejected.status_code == 400
-    assert rejected.data == ["Staff accounts must use the staff sign-in flow."]
+    assert rejected.data == {
+        "mobile_number": "Staff accounts must use the staff sign-in flow."
+    }
     assert not RoleAssignment.objects.filter(user=staff, role=Role.CUSTOMER).exists()
 
 
@@ -150,6 +158,7 @@ def test_registration_proof_is_mobile_bound_unexpired_and_single_use(api_client,
         format="json", **tenant(organization),
     )
     assert tampered.status_code == 400
+    assert "verification_proof" in tampered.data
     assert not User.objects.filter(mobile_number="+919876543211").exists()
 
     BookingPhoneVerification.objects.filter(pk=issued.data["verification_id"]).update(
@@ -160,6 +169,7 @@ def test_registration_proof_is_mobile_bound_unexpired_and_single_use(api_client,
         format="json", **tenant(organization),
     )
     assert expired.status_code == 400
+    assert expired.data == {"verification_proof": ["Please verify your mobile number again."]}
     assert not User.objects.filter(mobile_number="+919876543210").exists()
 
     cache.clear()
@@ -176,6 +186,24 @@ def test_registration_proof_is_mobile_bound_unexpired_and_single_use(api_client,
     )
     assert reused.status_code == 400
     assert User.objects.filter(mobile_number="+919876543212").count() == 1
+
+
+@LOCAL_OTP
+def test_registration_proof_is_bound_to_organization(api_client, organization):
+    issued = issue(api_client, organization)
+    token = verify(api_client, organization, issued).data["token"]
+    other = Organization.objects.create(
+        legal_name="Other", display_name="Other", slug="other-proof-tenant",
+        timezone="Asia/Kolkata", default_currency="INR",
+    )
+    Clinic.objects.create(organization=other, name="Other Clinic", slug="other")
+    response = api_client.post(
+        reverse("auth-customer-register"), registration_payload(token),
+        format="json", **tenant(other),
+    )
+    assert response.status_code == 400
+    assert response.data == {"verification_proof": ["Mobile verification does not match this booking."]}
+    assert not User.objects.filter(mobile_number="+919876543210").exists()
 
 
 @LOCAL_OTP
@@ -215,3 +243,54 @@ def test_customer_login_never_registers_an_unknown_mobile(api_client, organizati
     assert response.status_code == 400
     assert response.data == ["Register as a customer before signing in."]
     assert not User.objects.filter(mobile_number="+919876543210").exists()
+
+
+def test_customer_registration_throttle_is_tenant_and_ip_scoped(organization):
+    factory = APIRequestFactory()
+    first = factory.post("/api/v1/auth/customer-register/", {}, REMOTE_ADDR="192.0.2.10")
+    first.organization = organization
+    same = factory.post("/api/v1/auth/customer-register/", {}, REMOTE_ADDR="192.0.2.10")
+    same.organization = organization
+    other_ip = factory.post("/api/v1/auth/customer-register/", {}, REMOTE_ADDR="192.0.2.11")
+    other_ip.organization = organization
+    other_tenant = Organization.objects.create(
+        legal_name="Other", display_name="Other", slug="other-registration",
+        timezone="Asia/Kolkata", default_currency="INR",
+    )
+    other = factory.post("/api/v1/auth/customer-register/", {}, REMOTE_ADDR="192.0.2.10")
+    other.organization = other_tenant
+    throttle = CustomerRegistrationRateThrottle()
+    assert throttle.get_cache_key(first, None) == throttle.get_cache_key(same, None)
+    assert throttle.get_cache_key(first, None) != throttle.get_cache_key(other_ip, None)
+    assert throttle.get_cache_key(first, None) != throttle.get_cache_key(other, None)
+
+
+def test_customer_registration_throttle_limit_retry_and_expiry(api_client, organization, monkeypatch):
+    monkeypatch.setitem(CustomerRegistrationRateThrottle.THROTTLE_RATES, "customer_register", "1/minute")
+    clock = [1_000.0]
+    monkeypatch.setattr(CustomerRegistrationRateThrottle, "timer", staticmethod(lambda: clock[0]))
+    url = reverse("auth-customer-register")
+    first = api_client.post(url, {}, format="json", **tenant(organization))
+    limited = api_client.post(url, {}, format="json", **tenant(organization))
+    assert first.status_code == 400
+    assert limited.status_code == 429
+    assert 1 <= limited.data["retry_after"] <= 60
+    assert limited.headers["Retry-After"] == str(limited.data["retry_after"])
+    assert "Too many registration attempts" in str(limited.data["detail"])
+    clock[0] += 61
+    assert api_client.post(url, {}, format="json", **tenant(organization)).status_code == 400
+
+
+def test_customer_registration_does_not_inherit_generic_registration_lockout(api_client, organization, monkeypatch):
+    monkeypatch.setitem(ScopedRateThrottle.THROTTLE_RATES, "auth_register", "1/hour")
+    monkeypatch.setitem(CustomerRegistrationRateThrottle.THROTTLE_RATES, "customer_register", "5/hour")
+    generic = reverse("auth-register")
+    assert api_client.post(generic, {}, format="json").status_code == 400
+    assert api_client.post(generic, {}, format="json").status_code == 429
+    assert api_client.post(
+        reverse("auth-customer-register"), {}, format="json", **tenant(organization)
+    ).status_code == 400
+
+
+def test_development_customer_registration_rate_is_practical():
+    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["customer_register"] == "30/hour"

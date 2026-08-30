@@ -228,10 +228,13 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
         source="source_application.experience_years", read_only=True
     )
     languages = serializers.JSONField(source="source_application.languages", read_only=True)
+    gender = serializers.CharField(source="source_application.get_gender_display", read_only=True)
     bio = serializers.CharField(source="source_application.bio", read_only=True)
     service_area = serializers.CharField(source="source_application.city", read_only=True)
     verified_services = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
+    average_rating = serializers.FloatField(read_only=True, allow_null=True)
+    review_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = PractitionerProfile
@@ -242,11 +245,14 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
             "highest_qualification",
             "qualification_specialization",
             "experience_years",
+            "gender",
             "languages",
             "bio",
             "service_area",
             "verified_services",
             "photo_url",
+            "average_rating",
+            "review_count",
         )
 
     def get_verified_services(self, value) -> list[str]:

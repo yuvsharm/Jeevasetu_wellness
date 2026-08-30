@@ -7,10 +7,10 @@ const future = (labels: string[]): NavigationItem[] => labels.map((label) => ({ 
 
 export const roleNavigation: Record<Role, NavigationItem[]> = {
   OWNER: [
-    { label: "Appointment Requests", href: roleDestinations.OWNER },
-    { label: "Appointment Schedule", href: roleDestinations.OWNER },
-    { label: "Managers & Physiotherapists", href: roleDestinations.OWNER },
-    { label: "Patients", href: roleDestinations.OWNER },
+    { label: "Appointment Requests", href: `${roleDestinations.OWNER}#owner-appointment-requests` },
+    { label: "Appointment Schedule", href: `${roleDestinations.OWNER}#owner-appointment-schedule` },
+    { label: "Managers & Physiotherapists", href: `${roleDestinations.OWNER}#owner-staff` },
+    { label: "Patients", href: `${roleDestinations.OWNER}#owner-patients` },
     ...future(["Operations", "Revenue & Payments", "Therapies & Pricing", "Inventory", "Reports", "Audit Logs", "Settings"]),
   ],
   MANAGER: [
@@ -31,8 +31,8 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
   CUSTOMER: [
     { label: "My Appointments", href: roleDestinations.CUSTOMER },
     { label: "Book Service", href: "/book-appointment" },
-    { label: "Practitioner Application", href: "/practitioner-application" },
-    ...future(["My Family", "Treatment Progress", "Packages", "Payments & Invoices", "Notifications", "Support"]),
+    { label: "Offers & Packages", href: "/customer/offers" },
+    ...future(["My Family", "Treatment Progress", "Payments & Invoices", "Notifications", "Support"]),
     { label: "Profile", href: "/profile" },
   ],
 };

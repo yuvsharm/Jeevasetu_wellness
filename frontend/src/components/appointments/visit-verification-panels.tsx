@@ -138,62 +138,39 @@ export function PhysiotherapistVisitVerificationPanel() {
   );
 }
 
-export function CustomerVisitVerificationPanel() {
+export function CustomerVisitVerification({ appointment: item }: { appointment: OperationalAppointment }) {
   const client = useQueryClient();
-  const [delivered, setDelivered] = useState<
-    Record<string, { otp: string; expires_at: string | null }>
-  >({});
-  const query = useQuery({
-    queryKey: ["visit-verification-customer"],
-    queryFn: () => requestJson<OperationalAppointment[]>("/api/schedule/my-appointments"),
-  });
+  const [delivery, setDelivery] = useState<{ otp: string; expires_at: string | null } | null>(null);
   const issue = useMutation({
-    mutationFn: (id: string) =>
+    mutationFn: () =>
       requestJson<{ otp: string; expires_at: string | null }>(
-        `/api/schedule/my-appointments/${id}/visit-verification`,
+        `/api/schedule/my-appointments/${item.id}/visit-verification`,
         { method: "POST" },
       ),
-    onSuccess: (value, id) => {
-      setDelivered((current) => ({ ...current, [id]: value }));
-      client.invalidateQueries({ queryKey: ["visit-verification-customer"] });
+    onSuccess: (value) => {
+      setDelivery(value);
+      client.invalidateQueries({ queryKey: ["customer-operational"] });
     },
   });
-  return (
-    <section className="mt-8" aria-labelledby="customer-visit-verification-heading">
-      <h2 id="customer-visit-verification-heading" className="text-2xl font-bold">
-        Visit Verification
-      </h2>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        {query.data?.map((item) => {
-          const state = item.visit_verification;
-          const delivery = delivered[item.id];
-          return (
-            <article key={item.id} className="min-w-0 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+  const state = item.visit_verification;
+  if (!["AWAITING_VERIFICATION", "EXPIRED", "LOCKED"].includes(state.status)) return null;
+  return <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4" aria-label={`Visit verification for ${item.therapy_name}`}>
+              <h4 className="font-bold text-emerald-950">Service arrival verification</h4>
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <div><h3 className="font-bold">{item.therapy_name}</h3><p className="text-sm">{new Date(item.scheduled_start).toLocaleString()}</p></div>
                 <StatusBadge value={state} />
               </div>
-              {state.status === "VERIFIED" ? (
-                <p className="mt-4 font-semibold">✓ Verified · Check-in verified{state.verified_at ? ` · ${new Date(state.verified_at).toLocaleString()}` : ""}</p>
-              ) : state.status === "AWAITING_VERIFICATION" ? (
+              {state.status === "AWAITING_VERIFICATION" ? (
                 <>
                   {delivery ? (
                     <><p aria-label="Visit OTP" className="mt-4 break-all text-center font-mono text-3xl font-bold tracking-[0.2em]">{delivery.otp}</p><p className="mt-2 text-sm">Expires {delivery.expires_at ? new Date(delivery.expires_at).toLocaleString() : "soon"}.</p></>
                   ) : (
-                    <button type="button" onClick={() => issue.mutate(item.id)} disabled={issue.isPending} className="mt-4 min-h-11 w-full rounded-xl bg-emerald-700 px-4 font-bold text-white">{issue.isPending ? "Generating…" : "Generate Visit OTP"}</button>
+                    <button type="button" onClick={() => issue.mutate()} disabled={issue.isPending} className="mt-4 min-h-11 w-full rounded-xl bg-emerald-700 px-4 font-bold text-white">{issue.isPending ? "Generating…" : "Generate Visit OTP"}</button>
                   )}
                   <p className="mt-3 text-sm font-semibold">Share this OTP only after your assigned JeevaSetu Physiotherapist reaches your location.</p>
                 </>
-              ) : (
-                <p className="mt-4 text-sm">Visit OTP will become available when your confirmed visit is ready.</p>
-              )}
-              {state.status === "EXPIRED" && <button type="button" onClick={() => issue.mutate(item.id)} className="mt-3 min-h-11 w-full rounded-xl border border-emerald-700 font-bold">Generate a new Visit OTP</button>}
+              ) : null}
+              {state.status === "EXPIRED" && <button type="button" onClick={() => issue.mutate()} className="mt-3 min-h-11 w-full rounded-xl border border-emerald-700 font-bold">Generate a new Visit OTP</button>}
               {state.status === "LOCKED" && <p className="mt-3 font-semibold text-red-700">Too many attempts. Verification is locked.</p>}
               {issue.isError && <p role="alert" className="mt-2 text-red-700">{issue.error.message}</p>}
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
+            </div>;
 }

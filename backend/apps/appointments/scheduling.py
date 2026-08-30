@@ -1,12 +1,18 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, RoleAssignment
-from apps.appointments.models import Appointment, AppointmentAuditEvent, ClinicOperatingHours
+from apps.appointments.models import (
+    Appointment,
+    AppointmentAuditEvent,
+    AppointmentRequest,
+    AppointmentRequestAuditEvent,
+    ClinicOperatingHours,
+)
 from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
 
@@ -41,7 +47,10 @@ def validate_schedule(*, clinic, start, duration_minutes):
 def ensure_no_overlap(*, physiotherapist, start, end, exclude_id=None):
     if physiotherapist is None:
         return
-    StaffProfile.objects.select_for_update().get(pk=physiotherapist.pk)
+    profile_query = StaffProfile.objects
+    if connection.in_atomic_block:
+        profile_query = profile_query.select_for_update()
+    profile_query.get(pk=physiotherapist.pk)
     conflicts = Appointment.objects.filter(
         physiotherapist=physiotherapist,
         status__in=Appointment.BLOCKING_STATUSES,
@@ -59,6 +68,131 @@ def ensure_practitioner_operationally_eligible(physiotherapist):
     # Staff approved before Phase 4B remain operational; all new enrollment profiles are gated.
     if profile is not None and (not profile.is_approved or not profile.is_open_to_work):
         raise ValidationError("The Physiotherapist is not open to new assignments.")
+
+
+def ensure_request_practitioner_eligible(*, source, physiotherapist, start, end):
+    if (
+        physiotherapist.organization_id != source.organization_id
+        or physiotherapist.staff_type != Role.PHYSIOTHERAPIST
+        or not RoleAssignment.objects.filter(
+            user=physiotherapist.user,
+            organization=source.organization,
+            clinic=physiotherapist.clinic,
+            role=Role.PHYSIOTHERAPIST,
+            is_active=True,
+            organization_membership__is_active=True,
+            clinic_membership__is_active=True,
+            user__is_active=True,
+            user__is_enabled=True,
+        ).exists()
+    ):
+        raise ValidationError("The selected Physiotherapist is unavailable.")
+    ensure_practitioner_operationally_eligible(physiotherapist)
+    profile = getattr(physiotherapist, "practitioner_profile", None)
+    if profile is not None and not profile.source_application.competencies.filter(
+        therapy=source.therapy, verification_status="VERIFIED"
+    ).exists():
+        raise ValidationError("The selected Physiotherapist is not verified for this therapy.")
+    service_areas = list(physiotherapist.service_areas.filter(is_active=True))
+    if service_areas and not any(source.pin_code in area.pin_codes for area in service_areas):
+        raise ValidationError("The selected Physiotherapist does not serve this area.")
+    ensure_no_overlap(physiotherapist=physiotherapist, start=start, end=end)
+    ensure_physiotherapist_available(
+        physiotherapist=physiotherapist,
+        clinic=physiotherapist.clinic,
+        start=start,
+        end=end,
+    )
+
+
+@transaction.atomic
+def decide_appointment_request(
+    source, *, actor, action, physiotherapist=None, rejection_category="",
+    customer_reason="", internal_note=""
+):
+    source = AppointmentRequest.objects.select_for_update(of=("self",)).select_related(
+        "organization", "creator", "therapy", "family_member", "selected_package", "selected_offer"
+    ).get(pk=source.pk)
+    if source.status != AppointmentRequest.Status.PENDING:
+        raise ValidationError("This appointment request has already been decided.")
+    previous_status = source.status
+    if action == "REJECT":
+        source.status = AppointmentRequest.Status.REJECTED
+        source.rejection_category = rejection_category
+        source.rejection_customer_reason = customer_reason.strip()
+        source.rejection_internal_note = internal_note.strip()
+        source.save(update_fields=(
+            "status", "rejection_category", "rejection_customer_reason",
+            "rejection_internal_note", "updated_at",
+        ))
+        AppointmentRequestAuditEvent.objects.create(
+            appointment_request=source, organization=source.organization, actor=actor,
+            event=AppointmentRequestAuditEvent.Event.REJECTED,
+            previous_status=previous_status, new_status=source.status,
+            reason_category=rejection_category, customer_reason=customer_reason.strip(),
+            internal_note=internal_note.strip(),
+        )
+        return source, None
+
+    if source.creator_id is None:
+        raise ValidationError("A customer profile is required before this request can be assigned.")
+    patient = source.creator.patient_profiles.filter(
+        organization=source.organization, is_active=True
+    ).select_related("clinic").first()
+    if patient is None:
+        raise ValidationError("A customer patient profile is required before assignment.")
+    clinic = patient.clinic
+    zone = ZoneInfo(clinic.timezone or source.organization.timezone or "Asia/Kolkata")
+    start = datetime.combine(source.preferred_date, source.preferred_time, zone)
+    end = validate_schedule(
+        clinic=clinic, start=start, duration_minutes=source.requested_duration_minutes
+    )
+    ensure_request_practitioner_eligible(
+        source=source, physiotherapist=physiotherapist, start=start, end=end
+    )
+    from apps.appointments.commercial import calculate_quote
+
+    quote = calculate_quote(
+        organization=source.organization,
+        therapy_ids=[source.therapy_id, *source.requested_therapies.values_list("id", flat=True)],
+        package_id=source.selected_package_id,
+        offer_id=source.selected_offer_id,
+        family_member=source.family_member,
+    )
+    source.commercial_snapshot = quote.snapshot()
+    source.regular_amount = quote.regular_amount
+    source.discount_amount = quote.discount_amount
+    source.final_amount = quote.final_amount
+    source.status = AppointmentRequest.Status.APPROVED
+    source.save(update_fields=(
+        "commercial_snapshot", "regular_amount", "discount_amount", "final_amount",
+        "status", "updated_at",
+    ))
+    appointment = Appointment(
+        organization=source.organization, clinic=clinic, originating_request=source,
+        patient=patient, therapy=source.therapy, physiotherapist=physiotherapist,
+        scheduled_start=start, scheduled_end=end, duration_minutes=source.requested_duration_minutes,
+        status=Appointment.Status.SCHEDULED,
+        address_line_1=source.address[:255], landmark=source.landmark,
+        city=source.city, region="Uttar Pradesh", pin_code=source.pin_code,
+        assignment_status=Appointment.AssignmentStatus.PENDING,
+        assigned_by=actor, assigned_at=timezone.now(), created_by=actor, updated_by=actor,
+    )
+    appointment.full_clean()
+    appointment.save()
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment, organization=source.organization, actor=actor,
+        event=AppointmentAuditEvent.Event.CONVERTED, new_status=appointment.status,
+        new_start=start, new_physiotherapist=physiotherapist,
+        reason="Approved and assigned from customer request",
+    )
+    AppointmentRequestAuditEvent.objects.create(
+        appointment_request=source, organization=source.organization, actor=actor,
+        event=AppointmentRequestAuditEvent.Event.APPROVED_AND_ASSIGNED,
+        previous_status=previous_status, new_status=source.status,
+        physiotherapist=physiotherapist,
+    )
+    return source, appointment
 
 
 @transaction.atomic
@@ -270,6 +404,9 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
         new_physiotherapist=appointment.physiotherapist,
         reason=appointment.assignment_rejection_reason,
     )
+    from apps.appointments.tasks import reconcile_appointment_reminders
+
+    reconcile_appointment_reminders(appointment)
     return appointment
 
 
@@ -505,6 +642,9 @@ def reschedule_appointment(
                 override_used=override_needed,
                 override_reason=override_reason.strip()[:255] if override_needed else "",
             )
+            from apps.appointments.tasks import reconcile_appointment_reminders
+
+            reconcile_appointment_reminders(appointment)
             return appointment
     except ValidationError as error:
         record_rejected_lifecycle_action(
@@ -595,6 +735,9 @@ def cancel_appointment(
                 override_used=cutoff_breached,
                 override_reason=override_reason.strip()[:255] if cutoff_breached else "",
             )
+            from apps.appointments.tasks import reconcile_appointment_reminders
+
+            reconcile_appointment_reminders(appointment)
             return appointment
     except ValidationError as error:
         record_rejected_lifecycle_action(

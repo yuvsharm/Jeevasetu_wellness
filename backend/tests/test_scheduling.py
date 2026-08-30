@@ -15,6 +15,8 @@ from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
     AppointmentRequest,
+    AppointmentRequestAuditEvent,
+    AppointmentReminder,
     ClinicOperatingHours,
     TherapyOption,
     VisitVerification,
@@ -362,6 +364,69 @@ def test_conversion_requires_explicit_patient_and_is_idempotent(api_client):
     assert rejected.status_code == 400
     assert first.status_code == 201 and second.status_code == 200
     assert Appointment.objects.filter(originating_request=source).count() == 1
+
+
+def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client):
+    values = setup_domain("request-decision")
+    organization, _, owner, _, physio_user, physio, customer, _, _, therapy = values
+    source = AppointmentRequest.objects.create(
+        organization=organization, creator=customer, therapy=therapy,
+        patient_name="Asha Sharma", age=28, gender="FEMALE",
+        mobile_number="9876543210", session_preference="SINGLE",
+        preferred_date=start_at().date(), preferred_time=time(10),
+        address="Shastri Nagar", city="Meerut", pin_code="250004",
+        commercial_snapshot={"duration_minutes": 45}, regular_amount="0.00",
+        discount_amount="0.00", final_amount="0.00",
+    )
+    api_client.force_authenticate(owner)
+    response = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "ACCEPT_ASSIGN", "physiotherapist": str(physio.id)},
+        format="json", **headers(organization),
+    )
+    assert response.status_code == 200
+    appointment = Appointment.objects.get(originating_request=source)
+    assert appointment.assignment_status == Appointment.AssignmentStatus.PENDING
+    assert AppointmentRequestAuditEvent.objects.filter(
+        appointment_request=source,
+        event=AppointmentRequestAuditEvent.Event.APPROVED_AND_ASSIGNED,
+    ).exists()
+    api_client.force_authenticate(physio_user)
+    accepted = api_client.post(
+        reverse("schedule-assignment-response", args=[appointment.id]),
+        {"accept": True}, format="json", **headers(organization),
+    )
+    assert accepted.status_code == 200
+    assert AppointmentReminder.objects.filter(
+        appointment=appointment, status=AppointmentReminder.Status.PENDING
+    ).count() >= 1
+
+
+def test_request_rejection_requires_customer_safe_structured_reason(api_client):
+    values = setup_domain("request-reject")
+    organization, _, owner, _, _, _, customer, _, _, therapy = values
+    source = AppointmentRequest.objects.create(
+        organization=organization, creator=customer, therapy=therapy,
+        patient_name="Asha Sharma", age=28, gender="FEMALE",
+        mobile_number="9876543210", session_preference="SINGLE",
+        preferred_date=start_at().date(), preferred_time=time(10),
+        address="Shastri Nagar", city="Meerut", pin_code="250004",
+    )
+    api_client.force_authenticate(owner)
+    missing = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "REJECT"}, format="json", **headers(organization),
+    )
+    rejected = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "REJECT", "rejection_category": "SCHEDULING_CONFLICT",
+         "customer_reason": "The requested slot is no longer available.",
+         "internal_note": "Do not expose this note."},
+        format="json", **headers(organization),
+    )
+    assert missing.status_code == 400 and rejected.status_code == 200
+    assert rejected.data["rejection_customer_reason"] == "The requested slot is no longer available."
+    assert "rejection_internal_note" not in rejected.data
 
 
 def test_manager_scope_assignment_and_reassignment_audit(api_client):

@@ -57,6 +57,15 @@ def test_production_auth_cache_defaults_to_dedicated_redis_database(
     assert "rediss://redis.example.com:6379/1" in result.stdout
 
 
+def test_production_customer_registration_throttle_remains_secure(safe_production_environment):
+    result = load_production_settings(
+        safe_production_environment,
+        ["shell", "-c", "from django.conf import settings; print(settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['customer_register'])"],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "5/hour" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [

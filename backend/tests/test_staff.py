@@ -125,6 +125,11 @@ def test_owner_search_filter_status_and_password_reset(api_client):
         **headers(organization),
     )
     assert listed.status_code == 200 and len(listed.data["results"]) == 1
+    row = listed.data["results"][0]
+    assert row["clinic_name"] == clinic.name
+    assert row["specialization_names"] == []
+    assert row["profile_source"] == "STAFF_CREATED"
+    assert row["approved_weekly_rule_count"] == 0
     disabled = api_client.post(
         reverse("staff-status", args=[profile_id]),
         {"is_active": False, "reason": "Leave"},

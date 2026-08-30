@@ -91,7 +91,7 @@ describe("appointment workflow", () => {
     vi.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
     renderWithQuery(<OwnerRequests />);
     expect(screen.getByRole("heading", { name: "Appointment Requests" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/name, mobile/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Search")).toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toBeInTheDocument();
   });
 

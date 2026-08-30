@@ -32,9 +32,15 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
         const detail = Array.isArray(values.detail)
           ? values.detail.filter((value): value is string => typeof value === "string").join(" ")
           : typeof values.detail === "string" ? values.detail : error.detail;
-        const fieldErrors = Object.fromEntries(Object.entries(values)
-          .filter(([field]) => field !== "detail")
+        const directFieldErrors = Object.fromEntries(Object.entries(values)
+          .filter(([field]) => field !== "detail" && field !== "retry_after")
           .map(([field, value]) => [field, Array.isArray(value) ? value.join(" ") : String(value)]));
+        const nestedFieldErrors = values.fieldErrors && typeof values.fieldErrors === "object" && !Array.isArray(values.fieldErrors)
+          ? Object.fromEntries(Object.entries(values.fieldErrors as Record<string, unknown>)
+            .map(([field, value]) => [field, Array.isArray(value) ? value.join(" ") : String(value)]))
+          : {};
+        delete directFieldErrors.fieldErrors;
+        const fieldErrors = { ...directFieldErrors, ...nestedFieldErrors };
         error = { detail, ...(Object.keys(fieldErrors).length ? { fieldErrors } : {}) };
       }
     } catch {

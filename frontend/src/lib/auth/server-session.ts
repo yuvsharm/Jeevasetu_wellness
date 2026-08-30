@@ -23,6 +23,7 @@ export class SessionError extends Error {
     public status: number,
     public detail: string,
     public fieldErrors?: Record<string, string>,
+    public retryAfter?: number,
   ) {
     super(detail);
   }
@@ -51,7 +52,23 @@ async function parseError(response: Response): Promise<SessionError> {
   } catch {
     return new SessionError(response.status, "The service is temporarily unavailable.");
   }
-  if (response.status === 429) return new SessionError(429, "Too many attempts. Please try again later.");
+  if (response.status === 429) {
+    const bodyRetry = body && typeof body === "object" && "retry_after" in body
+      ? Number((body as { retry_after?: unknown }).retry_after)
+      : Number.NaN;
+    const headerRetry = Number(response.headers.get("retry-after"));
+    const retryAfter = Number.isFinite(bodyRetry) && bodyRetry > 0
+      ? Math.ceil(bodyRetry)
+      : Number.isFinite(headerRetry) && headerRetry > 0 ? Math.ceil(headerRetry) : undefined;
+    return new SessionError(429, "Too many attempts. Please try again later.", undefined, retryAfter);
+  }
+  if (Array.isArray(body)) {
+    const messages = body.filter((value): value is string => typeof value === "string");
+    return new SessionError(
+      response.status,
+      messages.length ? messages.join(" ") : "Please review the submitted information.",
+    );
+  }
   if (response.status === 401) return new SessionError(401, "The credentials or session are invalid.");
   if (response.status === 403) return new SessionError(403, "Your account does not have active access.");
   if (response.status === 404) {
@@ -115,9 +132,31 @@ export async function customerPasswordLogin(payload: unknown) {
 
 export async function customerRegister(payload: unknown) {
   if (!ORGANIZATION_SLUG) throw new SessionError(400, "Organization context is not configured.");
-  const tokens = await checkedJson<TokenPair>(
-    await djangoFetch("/auth/customer-register/", { method: "POST", body: JSON.stringify(payload) }),
-  );
+  let tokens: TokenPair;
+  try {
+    tokens = await checkedJson<TokenPair>(
+      await djangoFetch("/auth/customer-register/", { method: "POST", body: JSON.stringify(payload) }),
+    );
+  } catch (error) {
+    if (error instanceof SessionError && error.status === 429) {
+      const minutes = error.retryAfter ? Math.max(1, Math.ceil(error.retryAfter / 60)) : undefined;
+      throw new SessionError(
+        429,
+        minutes
+          ? `Too many registration attempts. Please try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`
+          : "Too many registration attempts. Please try again later.",
+        undefined,
+        error.retryAfter,
+      );
+    }
+    if (error instanceof SessionError && error.fieldErrors) {
+      const actionable = Object.values(error.fieldErrors).find(Boolean);
+      if (actionable) {
+        throw new SessionError(error.status, actionable, error.fieldErrors, error.retryAfter);
+      }
+    }
+    throw error;
+  }
   const access = await checkedJson<AccessSummary>(await djangoFetch(djangoEndpoints.access, {}, tokens.access));
   if (!tokens.user) throw new SessionError(401, "Customer registration could not be completed.");
   return { tokens, session: { user: tokens.user, access } satisfies Session };

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  CustomerVisitVerificationPanel,
+  CustomerVisitVerification,
   OperationsVisitVerificationPanel,
   PhysiotherapistVisitVerificationPanel,
 } from "@/components/appointments/visit-verification-panels";
@@ -73,11 +73,16 @@ describe("visit verification panels", () => {
       }
       return new Response(JSON.stringify([appointment]), { status: 200 });
     });
-    wrap(<CustomerVisitVerificationPanel />);
+    wrap(<CustomerVisitVerification appointment={appointment as never} />);
     const button = await screen.findByRole("button", { name: "Generate Visit OTP" });
     expect(screen.queryByLabelText("Visit OTP")).not.toBeInTheDocument();
     fireEvent.click(button);
     await waitFor(() => expect(screen.getByLabelText("Visit OTP")).toHaveTextContent("482913"));
     expect(screen.getByText(/Share this OTP only after/)).toBeInTheDocument();
+  });
+
+  it("renders no customer verification control when the visit is not ready", () => {
+    wrap(<CustomerVisitVerification appointment={{ ...appointment, visit_verification: { ...appointment.visit_verification, status: "NOT_READY" } } as never} />);
+    expect(screen.queryByText("Service arrival verification")).not.toBeInTheDocument();
   });
 });

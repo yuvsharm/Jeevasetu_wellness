@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Count, Q
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.generics import GenericAPIView
@@ -33,8 +33,23 @@ class TenantMixin:
     def scoped_queryset(self):
         queryset = (
             StaffProfile.objects.filter(organization=self.request.organization)
-            .select_related("user", "clinic")
-            .prefetch_related("specializations", "service_areas", "documents")
+            .select_related("user", "clinic", "practitioner_profile__source_application")
+            .prefetch_related(
+                "specializations",
+                "service_areas",
+                "documents",
+                "practitioner_profile__source_application__competencies__therapy",
+            )
+            .annotate(
+                approved_weekly_rule_count=Count(
+                    "availabilityrule",
+                    filter=Q(
+                        availabilityrule__approval_status="APPROVED",
+                        availabilityrule__is_active=True,
+                    ),
+                    distinct=True,
+                )
+            )
         )
         level, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
         if level == Role.MANAGER:

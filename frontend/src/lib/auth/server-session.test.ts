@@ -135,4 +135,58 @@ describe("server session", () => {
     expect(response.cookies.get("jeevasetu_refresh")?.value).toBe("refresh");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=604800");
   });
+
+  it("preserves customer registration retry timing from Django", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Request was throttled.", retry_after: 601 }), {
+        status: 429,
+        headers: { "Retry-After": "601" },
+      }),
+    );
+    const { customerRegister } = await import("./server-session");
+    await expect(customerRegister({})).rejects.toEqual(expect.objectContaining({
+      status: 429,
+      retryAfter: 601,
+      detail: "Too many registration attempts. Please try again in 11 minutes.",
+    }));
+  });
+
+  it("promotes meaningful registration field errors instead of numeric keys", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ mobile_number: ["This mobile number is already registered. Please sign in."] }), { status: 400 }),
+    );
+    const { customerRegister } = await import("./server-session");
+    await expect(customerRegister({})).rejects.toEqual(expect.objectContaining({
+      status: 400,
+      detail: "This mobile number is already registered. Please sign in.",
+      fieldErrors: { mobile_number: "This mobile number is already registered. Please sign in." },
+    }));
+  });
+
+  it("forwards the exact signed registration proof and field name to Django", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).endsWith("/auth/customer-register/")) {
+        return new Response(JSON.stringify({ access: "customer-access", refresh: "customer-refresh", user }), { status: 201 });
+      }
+      return new Response(JSON.stringify(access), { status: 200 });
+    });
+    const { customerRegister } = await import("./server-session");
+    await customerRegister({ booking_verification_token: "exact-signed-proof", mobile_number: "9876543210" });
+    const registrationCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/auth/customer-register/"));
+    expect(JSON.parse(String(registrationCall?.[1]?.body))).toEqual({
+      booking_verification_token: "exact-signed-proof",
+      mobile_number: "9876543210",
+    });
+  });
+
+  it("treats legacy list validation responses as detail rather than field zero", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(["Please verify your mobile number again."]), { status: 400 }),
+    );
+    const { customerRegister } = await import("./server-session");
+    await expect(customerRegister({})).rejects.toEqual(expect.objectContaining({
+      detail: "Please verify your mobile number again.",
+      fieldErrors: undefined,
+    }));
+  });
 });

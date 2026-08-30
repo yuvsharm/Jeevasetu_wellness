@@ -10,9 +10,11 @@ export function sessionErrorResponse(error: unknown, clear = false) {
     {
       detail: known ? error.detail : "The service is temporarily unavailable.",
       ...(known && error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+      ...(known && error.retryAfter ? { retry_after: error.retryAfter } : {}),
     },
     { status: known ? error.status : 500 },
   );
+  if (known && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
   if (clear || (known && error.status === 401)) clearSessionCookies(response);
   return response;
 }

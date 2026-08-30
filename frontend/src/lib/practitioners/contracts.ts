@@ -13,5 +13,5 @@ export type PractitionerApplication = {
   documents: Array<{id:string;kind:string;original_name:string;content_type:string;size_bytes:number;verification_status:string;created_at:string}>;
   competencies: Array<{id:string;therapy:string;therapy_name:string;experience_months:number;verification_status:string}>;
 };
-export type PublicPractitioner = { id:string; display_name:string; category:string; highest_qualification:string; qualification_specialization:string; experience_years:number; languages:string[]; bio:string; service_area:string; verified_services:string[]; photo_url:string };
+export type PublicPractitioner = { id:string; display_name:string; category:string; highest_qualification:string; qualification_specialization:string; experience_years:number; gender:string; languages:string[]; bio:string; service_area:string; verified_services:string[]; photo_url:string; average_rating:number|null; review_count:number };
 

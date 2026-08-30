@@ -17,6 +17,7 @@ from apps.appointments.models import (
     AppointmentAuditEvent,
     AppointmentChangeRequest,
     AppointmentRequest,
+    AppointmentRequestAuditEvent,
     AppointmentRating,
     CommercialOffer,
     PractitionerPayment,
@@ -199,6 +200,8 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "google_map_link",
             "status",
             "owner_remarks",
+            "rejection_category",
+            "rejection_customer_reason",
             "created_at",
             "updated_at",
         )
@@ -207,6 +210,8 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "therapy_name",
             "status",
             "owner_remarks",
+            "rejection_category",
+            "rejection_customer_reason",
             "created_at",
             "updated_at",
             "commercial_snapshot",
@@ -482,6 +487,7 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
     rating_stars = serializers.IntegerField(source="rating.stars", read_only=True, default=None)
     rating_comment = serializers.CharField(source="rating.comment", read_only=True, default="")
     requested_therapy_names = serializers.SerializerMethodField()
+    reminders = serializers.SerializerMethodField()
 
     class Meta(AppointmentListSerializer.Meta):
         fields = AppointmentListSerializer.Meta.fields + (
@@ -507,6 +513,7 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "arrived_at",
             "service_started_at",
             "completed_at",
+            "reminders",
         )
 
     def get_patient_name(self, value):
@@ -519,6 +526,16 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
         if source is None:
             return [value.therapy.name]
         return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
+
+    def get_reminders(self, value):
+        return [
+            {
+                "kind": reminder.kind,
+                "scheduled_for": reminder.scheduled_for,
+                "status": reminder.status,
+            }
+            for reminder in value.reminders.exclude(status="CANCELLED").order_by("scheduled_for")
+        ]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -868,6 +885,34 @@ class AppointmentRatingSerializer(serializers.ModelSerializer):
         return value
 
 
+class AppointmentRequestDecisionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=("ACCEPT_ASSIGN", "REJECT"))
+    physiotherapist = serializers.PrimaryKeyRelatedField(
+        queryset=StaffProfile.objects.all(), required=False
+    )
+    rejection_category = serializers.ChoiceField(
+        choices=AppointmentRequest.RejectionCategory.choices, required=False
+    )
+    customer_reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    internal_note = serializers.CharField(max_length=500, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        if attrs["action"] == "ACCEPT_ASSIGN" and not attrs.get("physiotherapist"):
+            raise serializers.ValidationError(
+                {"physiotherapist": "Select an eligible practitioner."}
+            )
+        if attrs["action"] == "REJECT":
+            if not attrs.get("rejection_category"):
+                raise serializers.ValidationError(
+                    {"rejection_category": "Select a rejection reason."}
+                )
+            if len(attrs.get("customer_reason", "").strip()) < 3:
+                raise serializers.ValidationError(
+                    {"customer_reason": "Provide a customer-safe rejection reason."}
+                )
+        return attrs
+
+
 class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
     therapy = serializers.PrimaryKeyRelatedField(queryset=TherapyOption.objects.all())
     requested_therapies = serializers.PrimaryKeyRelatedField(
@@ -1040,6 +1085,14 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             free_ids = [benefit["therapy_id"] for benefit in quote.free_benefits]
             additional = [*requested, *TherapyOption.objects.filter(id__in=free_ids).exclude(id=value.therapy_id)]
             value.requested_therapies.set(list(dict.fromkeys(additional)))
+            AppointmentRequestAuditEvent.objects.create(
+                appointment_request=value,
+                organization=request.organization,
+                actor=request.user,
+                event=AppointmentRequestAuditEvent.Event.SUBMITTED,
+                previous_status="",
+                new_status=value.status,
+            )
         except IntegrityError as error:
             raise serializers.ValidationError(
                 {"detail": "An identical pending appointment request already exists."}

@@ -1,7 +1,7 @@
 import mimetypes
 from pathlib import Path
 
-from django.db.models import Q
+from django.db.models import Avg, Count, Q
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -448,6 +448,21 @@ class PublicPractitionerListView(generics.ListAPIView):
                 is_publicly_visible=True,
                 user__is_active=True,
                 user__is_enabled=True,
+            )
+            .annotate(
+                average_rating=Avg(
+                    "staff_profile__appointmentrating__stars",
+                    filter=Q(
+                        staff_profile__appointmentrating__moderation_status="APPROVED"
+                    ),
+                ),
+                review_count=Count(
+                    "staff_profile__appointmentrating",
+                    filter=Q(
+                        staff_profile__appointmentrating__moderation_status="APPROVED"
+                    ),
+                    distinct=True,
+                ),
             )
             .select_related("user", "source_application")
             .prefetch_related("source_application__competencies__therapy")

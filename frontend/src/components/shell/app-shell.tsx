@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 
 import { Wordmark } from "@/components/brand/wordmark";
 import type { Role, Session } from "@/lib/api/contracts";
@@ -16,15 +16,36 @@ export function AppShell({ session, role, title, children }: { session: Session;
   const [collapsed, setCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [activeHash, setActiveHash] = useState("");
   const pathname = usePathname();
   const router = useRouter();
   const displayName = `${session.user.first_name} ${session.user.last_name}`.trim() || "JeevaSetu user";
+  useEffect(() => {
+    const sync = () => setActiveHash(window.location.hash);
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  function navigateToSection(event: MouseEvent<HTMLAnchorElement>, href: string) {
+    const [targetPath, hash] = href.split("#");
+    if (!hash || targetPath !== pathname) return;
+    const target = document.getElementById(hash);
+    if (!target) return;
+    event.preventDefault();
+    window.history.replaceState(null, "", `#${hash}`);
+    setActiveHash(`#${hash}`);
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    const focusTarget = target.querySelector<HTMLElement>("h1, h2, h3") ?? target;
+    if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
+    focusTarget.focus({ preventScroll: true });
+    setMobileOpen(false);
+  }
   async function logout() {
     setLoggingOut(true);
     try { await requestJson(sessionEndpoints.logout, { method: "POST" }); }
     finally { router.replace("/login"); router.refresh(); }
   }
-  const navigation = <nav aria-label={`${roleLabels[role]} navigation`} className="mt-6 space-y-1">{roleNavigation[role].map((item) => item.href ? <Link key={item.label} href={item.href} onClick={() => setMobileOpen(false)} aria-current={pathname === item.href ? "page" : undefined} className={`flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold ${pathname === item.href ? "bg-emerald-100 text-emerald-950" : "text-slate-700 hover:bg-slate-100"}`}>{item.label}</Link> : <span key={item.label} aria-disabled="true" title="Coming in a future phase" className="flex min-h-11 cursor-not-allowed items-center justify-between rounded-xl px-3 text-sm text-slate-400"><span>{item.label}</span><span className="text-[10px] font-bold uppercase">Later</span></span>)}</nav>;
+  const navigation = <nav aria-label={`${roleLabels[role]} navigation`} className="mt-6 space-y-1">{roleNavigation[role].map((item) => { const [itemPath, itemHash=""] = item.href?.split("#") ?? []; const active = item.href ? pathname === itemPath && (itemHash ? activeHash === `#${itemHash}` : !activeHash) : false; return item.href ? <Link key={item.label} href={item.href} onClick={(event) => navigateToSection(event, item.href!)} aria-current={active ? "location" : undefined} className={`flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold ${active ? "bg-emerald-100 text-emerald-950" : "text-slate-700 hover:bg-slate-100"}`}>{item.label}</Link> : <span key={item.label} aria-disabled="true" title="Coming in a future phase" className="flex min-h-11 cursor-not-allowed items-center justify-between rounded-xl px-3 text-sm text-slate-400"><span>{item.label}</span><span className="text-[10px] font-bold uppercase">Later</span></span>; })}</nav>;
   return (
     <div className="min-h-screen bg-slate-50">
       <aside className={`fixed inset-y-0 left-0 z-30 hidden border-r border-slate-200 bg-white p-4 transition-[width] lg:block ${collapsed ? "w-20" : "w-72"}`}><Wordmark compact={collapsed} /><button className="mt-6 min-h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold" onClick={() => setCollapsed((value) => !value)} aria-expanded={!collapsed}>{collapsed ? "Expand" : "Collapse sidebar"}</button>{!collapsed && navigation}</aside>

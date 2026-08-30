@@ -156,6 +156,21 @@ def test_msg91_invalid_or_wrong_mobile_fails_closed(
 
 
 @MSG91
+@pytest.mark.parametrize("verified_identifier", ["9876543210", "919876543210", "+919876543210"])
+def test_msg91_verified_mobile_normalizes_supported_indian_formats(
+    api_client, organization, monkeypatch, verified_identifier
+):
+    issued = issue(api_client, organization)
+    monkeypatch.setattr(
+        "apps.appointments.booking_verification.urllib.request.urlopen",
+        lambda *_args, **_kwargs: Msg91Response({"type": "success", "message": verified_identifier}),
+    )
+    response = verify(api_client, organization, issued.data["verification_id"])
+    assert response.status_code == 200
+    assert "token" in response.data
+
+
+@MSG91
 def test_msg91_timeout_fails_closed_without_token_disclosure(api_client, organization, monkeypatch, caplog):
     issued = issue(api_client, organization)
 

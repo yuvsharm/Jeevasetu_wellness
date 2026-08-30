@@ -4,7 +4,7 @@ type Callback = (value: unknown) => void;
 type Msg91Window = Window & {
   initSendOTP?: (configuration: Record<string, unknown>) => void | Promise<void>;
   sendOtp?: (identifier: string, success?: Callback, failure?: Callback) => void;
-  verifyOtp?: (otp: string, success?: Callback, failure?: Callback) => void;
+  verifyOtp?: (otp: string, success?: Callback, failure?: Callback) => unknown;
 };
 
 type WidgetState = {
@@ -14,9 +14,25 @@ type WidgetState = {
   pendingFailure?: Callback;
 };
 
+type TokenMatch = { token: string; path: string };
+
 let scriptPromise: Promise<void> | undefined;
 const widgetStates = new WeakMap<object, WidgetState>();
 const SDK_READY_TIMEOUT_MS = 5000;
+
+function describeCallbackValue(stage: string, value: unknown) {
+  if (process.env.NODE_ENV === "production") return;
+  const match = findAccessToken(value);
+  console.info("msg91_otp_callback", {
+    stage,
+    valueType: Array.isArray(value) ? "array" : typeof value,
+    topLevelKeys: value && typeof value === "object" && !Array.isArray(value)
+      ? Object.keys(value)
+      : [],
+    jwtLikeTokenFound: Boolean(match),
+    tokenPath: match?.path ?? "absent",
+  });
+}
 
 export async function loadOtpWidgetConfig(): Promise<OtpWidgetConfig> {
   const response = await fetch("/api/otp-widget/config", { cache: "no-store" });
@@ -75,8 +91,9 @@ async function initialize(config: Extract<OtpWidgetConfig, { enabled: true }>) {
         const api = window as Msg91Window;
         if (!api.initSendOTP) throw new Error("MSG91 SDK is unavailable.");
         const success: Callback = (data) => {
+          describeCallbackValue("initialization_success", data);
           const accessToken = findAccessToken(data);
-          if (accessToken) currentState.accessToken = accessToken;
+          if (accessToken) currentState.accessToken = accessToken.token;
           currentState.pendingSuccess?.(data);
         };
         const failure: Callback = (error) => currentState.pendingFailure?.(error);
@@ -108,14 +125,21 @@ export async function sendMsg91Otp(config: Extract<OtpWidgetConfig, { enabled: t
   await callbackCall((success, failure) => api.sendOtp?.(`91${mobile}`, success, failure));
 }
 
-function findAccessToken(value: unknown): string | undefined {
+function findAccessToken(value: unknown, path = "$", seen = new Set<object>()): TokenMatch | undefined {
   if (typeof value === "string") {
-    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
+      ? { token: value, path }
+      : undefined;
   }
   if (!value || typeof value !== "object") return undefined;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
   for (const [key, child] of Object.entries(value)) {
-    if (["access-token", "access_token", "token"].includes(key) && typeof child === "string") return child;
-    const nested = findAccessToken(child);
+    const childPath = `${path}.${key}`;
+    if (["access-token", "access_token", "token"].includes(key) && typeof child === "string") {
+      return { token: child, path: childPath };
+    }
+    const nested = findAccessToken(child, childPath, seen);
     if (nested) return nested;
   }
   return undefined;
@@ -131,7 +155,8 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
       5000,
     );
     const success: Callback = (data) => {
-      const token = state.accessToken ?? findAccessToken(data);
+      describeCallbackValue("verify_method_success", data);
+      const token = state.accessToken ?? findAccessToken(data)?.token;
       if (token) {
         window.clearTimeout(timeout);
         resolve(token);
@@ -143,7 +168,12 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
     };
     state.pendingSuccess = success;
     state.pendingFailure = failure;
-    api.verifyOtp?.(otp, success, failure);
+    const returned = api.verifyOtp?.(otp, success, failure);
+    if (process.env.NODE_ENV !== "production") {
+      console.info("msg91_otp_verify_invoked", {
+        returnType: returned instanceof Promise ? "promise" : typeof returned,
+      });
+    }
   }).finally(() => {
     state.pendingSuccess = undefined;
     state.pendingFailure = undefined;

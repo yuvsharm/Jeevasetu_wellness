@@ -98,4 +98,36 @@ describe("customer registration", () => {
     expect(screen.queryByText("Mobile number verified")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send OTP" })).toBeInTheDocument();
   });
+
+  it("displays registration retry timing returned by the session API", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/booking-otp/issue") return new Response(JSON.stringify({ verification_id: "verification-1" }), { status: 201 });
+      if (String(input) === "/api/booking-otp/verify") return new Response(JSON.stringify({ token: "server-signed-mobile-proof" }), { status: 200 });
+      return new Response(JSON.stringify({ detail: "Too many registration attempts. Please try again in 10 minutes.", retry_after: 600 }), { status: 429 });
+    });
+    render(<CustomerRegistration />);
+    await reachSecureStep();
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Account" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many registration attempts. Please try again in 10 minutes.");
+  });
+
+  it("shows the actionable backend registration error instead of a generic field-zero message", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/booking-otp/issue") return new Response(JSON.stringify({ verification_id: "verification-1" }), { status: 201 });
+      if (String(input) === "/api/booking-otp/verify") return new Response(JSON.stringify({ token: "server-signed-mobile-proof" }), { status: 200 });
+      return new Response(JSON.stringify({
+        detail: "This mobile number is already registered. Please sign in.",
+        fieldErrors: { mobile_number: "This mobile number is already registered. Please sign in." },
+      }), { status: 400 });
+    });
+    render(<CustomerRegistration />);
+    await reachSecureStep();
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Account" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("This mobile number is already registered. Please sign in.");
+    expect(screen.queryByText("Please review the highlighted information.")).not.toBeInTheDocument();
+  });
 });

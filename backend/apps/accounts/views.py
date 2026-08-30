@@ -5,7 +5,7 @@ from django.utils import timezone
 from datetime import timedelta
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import APIException, Throttled, ValidationError
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -18,6 +18,7 @@ from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from apps.accounts.audit import record_auth_event
 from apps.accounts.models import AuthenticationAuditEvent, Role, RoleAssignment, User
 from apps.accounts.permissions import IsEnabledAuthenticated
+from apps.accounts.throttling import CustomerRegistrationRateThrottle
 from apps.accounts.serializers import (
     DetailResponseSerializer,
     LoginSerializer,
@@ -251,7 +252,16 @@ class CustomerRegistrationView(APIView):
 
     authentication_classes = ()
     permission_classes = (AllowAny,)
-    throttle_scope = "auth_register"
+    throttle_classes = (CustomerRegistrationRateThrottle,)
+
+    def throttled(self, request, wait):
+        minutes = max(1, int((wait + 59) // 60))
+        error = Throttled(
+            wait=wait,
+            detail=f"Too many registration attempts. Please try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+        )
+        error.detail = {"detail": error.detail, "retry_after": error.wait}
+        raise error
 
     @transaction.atomic
     def post(self, request):
@@ -268,14 +278,20 @@ class CustomerRegistrationView(APIView):
                 lock=True,
             )
         except Exception as error:
-            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+            raise ValidationError(
+                {"verification_proof": getattr(error, "messages", [str(error)])}
+            ) from error
 
         mobile = f"+91{data['mobile_number']}"
         existing = User.objects.select_for_update().filter(mobile_number=mobile).first()
         if existing is not None:
             if existing.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists():
-                raise ValidationError("Staff accounts must use the staff sign-in flow.")
-            raise ValidationError("This mobile number is already registered. Please sign in.")
+                raise ValidationError(
+                    {"mobile_number": "Staff accounts must use the staff sign-in flow."}
+                )
+            raise ValidationError(
+                {"mobile_number": "This mobile number is already registered. Please sign in."}
+            )
         clinic = request.organization.clinics.filter(is_active=True).order_by("created_at").first()
         if clinic is None:
             raise ValidationError("Customer registration is temporarily unavailable.")
