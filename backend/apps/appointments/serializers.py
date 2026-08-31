@@ -37,9 +37,19 @@ class TherapyOptionSerializer(serializers.ModelSerializer):
 
 
 class TherapyCommercialSerializer(serializers.ModelSerializer):
+    can_delete = serializers.SerializerMethodField()
+    protected_references = serializers.SerializerMethodField()
+
     class Meta:
         model = TherapyOption
-        fields = ("id", "name", "slug", "short_description", "detailed_description", "benefits", "default_duration_minutes", "base_price", "is_active", "is_publicly_visible", "display_order")
+        fields = ("id", "name", "slug", "short_description", "detailed_description", "benefits", "default_duration_minutes", "base_price", "is_active", "is_publicly_visible", "display_order", "can_delete", "protected_references")
+        read_only_fields = ("id", "can_delete", "protected_references")
+
+    def get_can_delete(self, value):
+        return value.can_be_deleted()
+
+    def get_protected_references(self, value):
+        return value.protected_reference_summary()
 
     def validate_default_duration_minutes(self, value):
         if value not in (None, 45):
@@ -81,19 +91,30 @@ class TherapyPackageSerializer(serializers.ModelSerializer):
 class CommercialOfferSerializer(serializers.ModelSerializer):
     eligible_therapy_names = serializers.SerializerMethodField()
     free_therapy_name = serializers.CharField(source="free_therapy.name", read_only=True, default="")
+    can_delete = serializers.SerializerMethodField()
+    protected_references = serializers.SerializerMethodField()
 
     class Meta:
         model = CommercialOffer
-        fields = ("id", "title", "promotional_text", "offer_type", "eligible_therapies", "eligible_therapy_names", "qualifying_package", "minimum_therapy_count", "maximum_therapy_count", "discount_value", "fixed_price", "free_therapy", "free_therapy_name", "free_quantity", "family_required", "valid_from", "valid_until", "is_active", "is_publicly_visible", "display_order")
+        fields = ("id", "title", "promotional_text", "offer_type", "eligible_therapies", "eligible_therapy_names", "qualifying_package", "minimum_therapy_count", "maximum_therapy_count", "discount_value", "fixed_price", "free_therapy", "free_therapy_name", "free_quantity", "family_required", "minimum_family_members", "rule_config", "valid_from", "valid_until", "is_active", "is_publicly_visible", "display_order", "created_at", "updated_at", "can_delete", "protected_references")
+        read_only_fields = ("id", "created_at", "updated_at", "can_delete", "protected_references")
 
     def get_eligible_therapy_names(self, value):
         return list(value.eligible_therapies.values_list("name", flat=True))
+
+    def get_can_delete(self, value):
+        return value.can_be_deleted()
+
+    def get_protected_references(self, value):
+        return value.protected_reference_summary()
 
     def validate(self, attrs):
         value = self.instance or CommercialOffer(organization=self.context["request"].organization)
         for key, item in attrs.items():
             if key != "eligible_therapies":
                 setattr(value, key, item)
+        if value.is_active and value.valid_until and value.valid_until <= timezone.now():
+            raise serializers.ValidationError({"valid_until": "Edit the offer end date to a future date before reactivating it." if self.instance and attrs.get("is_active") else "Offer end date must be in the future."})
         try:
             value.full_clean(exclude=("id",))
         except DjangoValidationError as error:
@@ -102,12 +123,20 @@ class CommercialOfferSerializer(serializers.ModelSerializer):
         organization_id = self.context["request"].organization.id
         if any(item.organization_id != organization_id for item in therapies):
             raise serializers.ValidationError({"eligible_therapies": "Select therapies from this organization only."})
+        if value.is_active and any(not item.is_active for item in therapies):
+            raise serializers.ValidationError({"eligible_therapies": "Reactivate the selected therapies before activating this offer."})
         free_therapy = attrs.get("free_therapy", getattr(self.instance, "free_therapy", None))
         if free_therapy and free_therapy.organization_id != organization_id:
             raise serializers.ValidationError({"free_therapy": "Select a therapy from this organization only."})
         qualifying_package = attrs.get("qualifying_package", getattr(self.instance, "qualifying_package", None))
         if qualifying_package and qualifying_package.organization_id != organization_id:
             raise serializers.ValidationError({"qualifying_package": "Select a package from this organization only."})
+        if not therapies:
+            raise serializers.ValidationError({"eligible_therapies": "Please select at least one therapy."})
+        eligible_ids = {str(item.id) for item in therapies}
+        for rule in attrs.get("rule_config", {}).get("therapy_discounts", []):
+            if str(rule.get("therapy_id")) not in eligible_ids:
+                raise serializers.ValidationError({"rule_config": "Discount rules must use selected therapies."})
         return attrs
 
 
@@ -116,6 +145,7 @@ class CommercialQuoteSerializer(serializers.Serializer):
     package_id = serializers.UUIDField(required=False, allow_null=True)
     offer_id = serializers.UUIDField(required=False, allow_null=True)
     family_member_id = serializers.UUIDField(required=False, allow_null=True)
+    service_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
 class BookingOtpRequestSerializer(serializers.Serializer):
@@ -336,6 +366,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
                 value.regular_amount = quote.regular_amount
                 value.discount_amount = quote.discount_amount
                 value.final_amount = quote.final_amount
+                value.selected_offer_id = quote.offer_id
                 value.save()
                 all_additional = list(requested_therapies)
                 free_ids = [benefit["therapy_id"] for benefit in quote.free_benefits]
@@ -563,11 +594,17 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     )
     visit_verification = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
+    requested_at = serializers.DateTimeField(
+        source="originating_request.created_at", read_only=True, default=None
+    )
 
     class Meta:
         model = Appointment
         fields = (
             "id",
+            "originating_request",
+            "requested_at",
+            "created_at",
             "patient_name",
             "scheduled_start",
             "scheduled_end",
@@ -594,6 +631,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "visit_verification",
             "rating",
         )
+        read_only_fields = ("id", "originating_request", "requested_at", "created_at")
 
     def get_physiotherapist_name(self, value):
         if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED or not value.physiotherapist:
@@ -974,6 +1012,8 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"family_member": "The selected family member is unavailable."}
             )
+        zone = ZoneInfo(profile.clinic.timezone or organization.timezone or "Asia/Kolkata")
+        start = datetime.combine(attrs["preferred_date"], attrs["preferred_time"], zone)
         try:
             quote = calculate_quote(
                 organization=organization,
@@ -981,11 +1021,10 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
                 package_id=getattr(attrs.get("selected_package"), "id", None),
                 offer_id=getattr(attrs.get("selected_offer"), "id", None),
                 family_member=family,
+                at=start,
             )
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.message_dict) from error
-        zone = ZoneInfo(profile.clinic.timezone or organization.timezone or "Asia/Kolkata")
-        start = datetime.combine(attrs["preferred_date"], attrs["preferred_time"], zone)
         if attrs["preferred_time"].minute % 15:
             raise serializers.ValidationError(
                 {"preferred_time": "Select an available 15-minute time slot."}
@@ -1049,7 +1088,7 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             therapy=validated_data["therapy"],
             family_member=family,
             selected_package=package,
-            selected_offer=validated_data.get("selected_offer"),
+            selected_offer_id=quote.offer_id,
             patient_name=patient_name,
             age=age,
             gender=gender,

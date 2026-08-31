@@ -63,7 +63,7 @@ def test_customer_slots_fail_closed_for_missing_hours_and_closed_day(api_client)
     assert closed.status_code == 200 and closed.data == []
 
 
-def test_customer_slots_exclude_overlapping_appointment(api_client):
+def test_customer_slots_are_clinic_bookable_despite_one_practitioner_overlap(api_client):
     organization, clinic, owner, _, _, physio, customer, patient, address, therapy = setup_domain("customer-slot-overlap")
     target = start_at(days=3, hour=10)
     api_client.force_authenticate(owner)
@@ -72,7 +72,34 @@ def test_customer_slots_exclude_overlapping_appointment(api_client):
     api_client.force_authenticate(customer)
     response = api_client.get(reverse("availability-customer-slots"), {"therapy": therapy.id, "date": target.date()}, **headers(organization))
     values = {item["value"] for item in response.data}
-    assert response.status_code == 200 and target.strftime("%H:%M") not in values and values
+    assert response.status_code == 200 and target.strftime("%H:%M") in values
+
+
+def test_customer_slots_ignore_practitioner_absence_and_availability(api_client):
+    organization, clinic, owner, _, physio_user, physio, customer, *_, therapy = setup_domain("customer-slot-independent")
+    target = start_at(days=3, hour=10)
+    AvailabilityRule.objects.filter(physiotherapist=physio).update(is_active=False)
+    AvailabilityException.objects.create(
+        organization=organization,
+        clinic=clinic,
+        physiotherapist=physio,
+        kind="UNAVAILABLE",
+        starts_at=target,
+        ends_at=target + timedelta(hours=4),
+        reason="Approved leave",
+        submitted_by=physio_user,
+        approval_status="APPROVED",
+        is_active=True,
+        reviewed_by=owner,
+    )
+    api_client.force_authenticate(customer)
+    response = api_client.get(
+        reverse("availability-customer-slots"),
+        {"therapy": therapy.id, "date": target.date()},
+        **headers(organization),
+    )
+    assert response.status_code == 200
+    assert target.strftime("%H:%M") in {item["value"] for item in response.data}
 
 
 def test_customer_slots_hide_times_inside_advance_notice(api_client):
@@ -278,7 +305,7 @@ def test_application_backed_slots_require_verified_therapy_competency(api_client
     application.approved_profile = profile
     application.save(update_fields=("approved_profile",))
     target = start_at(days=3)
-    params = {"clinic": clinic.id, "therapy": therapy.id, "date_from": target.date(), "date_to": target.date()}
+    params = {"clinic": clinic.id, "therapy": therapy.id, "date_from": target.date(), "date_to": target.date(), "physiotherapist": physio.id}
     api_client.force_authenticate(owner)
     assert api_client.get(reverse("availability-slots"), params, **headers(organization)).data == []
     PractitionerCompetency.objects.create(

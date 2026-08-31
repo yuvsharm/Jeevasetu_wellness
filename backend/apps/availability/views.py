@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from rest_framework import generics
@@ -156,6 +158,17 @@ class CustomerSlotDiscoveryView(GenericAPIView):
         ).first()
         if therapy is None:
             raise NotFound("Therapy is unavailable.")
+        hours = ClinicOperatingHours.objects.filter(clinic=profile.clinic, is_active=True).first()
+        if hours is None:
+            return Response({
+                "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu.",
+                "code": "OPERATING_HOURS_UNAVAILABLE",
+            }, status=409)
+        window = hours.window_for_weekday(data["date"].weekday())
+        if window is None:
+            return Response([])
+        zone = profile.clinic.timezone or request.organization.timezone or "Asia/Kolkata"
+        service_at = datetime.combine(data["date"], window[0], ZoneInfo(zone))
         requested_ids = [value for value in data.get("requested_therapies", "").split(",") if value]
         try:
             quote = calculate_quote(
@@ -163,14 +176,10 @@ class CustomerSlotDiscoveryView(GenericAPIView):
                 therapy_ids=[therapy.id, *requested_ids],
                 package_id=data.get("package"),
                 offer_id=data.get("offer"),
+                at=service_at,
             )
         except DjangoValidationError as error:
             raise ValidationError(error.message_dict) from error
-        if not ClinicOperatingHours.objects.filter(clinic=profile.clinic, is_active=True).exists():
-            return Response({
-                "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu.",
-                "code": "OPERATING_HOURS_UNAVAILABLE",
-            }, status=409)
         slots = discover_slots(
             clinic=profile.clinic,
             therapy=therapy,
@@ -178,7 +187,6 @@ class CustomerSlotDiscoveryView(GenericAPIView):
             date_to=data["date"],
             duration_minutes=quote.duration_minutes,
         )
-        zone = profile.clinic.timezone or request.organization.timezone or "Asia/Kolkata"
         values = sorted({slot["scheduled_start"].astimezone(ZoneInfo(zone)).strftime("%H:%M") for slot in slots})
         return Response([{"value": value, "label": value} for value in values])
         if level == Role.MANAGER and clinic.id not in (clinic_ids or ()):

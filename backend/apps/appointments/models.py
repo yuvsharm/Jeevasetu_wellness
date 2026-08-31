@@ -43,6 +43,20 @@ class TherapyOption(models.Model):
     def __str__(self):
         return self.name
 
+    def protected_reference_summary(self):
+        return {
+            "appointment_requests": self.appointment_requests.count(),
+            "multi_therapy_requests": self.multi_therapy_requests.count(),
+            "appointments": self.appointments.count(),
+            "packages": self.packages.count(),
+            "offers": self.commercial_offers.count(),
+            "free_addon_offers": self.free_addon_offers.count(),
+            "practitioner_competencies": self.practitioner_competencies.count(),
+        }
+
+    def can_be_deleted(self):
+        return not any(self.protected_reference_summary().values())
+
 
 class TherapyPackage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -73,7 +87,6 @@ class TherapyPackage(models.Model):
         at = at or timezone.now()
         return self.is_active and (not self.valid_from or self.valid_from <= at) and (not self.valid_until or self.valid_until > at)
 
-
 class CommercialOffer(models.Model):
     class OfferType(models.TextChoices):
         PERCENTAGE = "PERCENTAGE", "Percentage discount"
@@ -81,6 +94,8 @@ class CommercialOffer(models.Model):
         FIXED_BUNDLE = "FIXED_BUNDLE", "Fixed-price bundle"
         FREE_THERAPY = "FREE_THERAPY", "Free therapy / add-on"
         FAMILY = "FAMILY", "Family discount"
+        THERAPY_DISCOUNT = "THERAPY_DISCOUNT", "Therapy discount"
+        FAMILY_FREE = "FAMILY_FREE", "Family free therapy"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
@@ -96,6 +111,10 @@ class CommercialOffer(models.Model):
     free_therapy = models.ForeignKey(TherapyOption, on_delete=models.PROTECT, null=True, blank=True, related_name="free_addon_offers")
     free_quantity = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1)])
     family_required = models.BooleanField(default=False)
+    rule_config = models.JSONField(default=dict, blank=True)
+    minimum_family_members = models.PositiveSmallIntegerField(
+        default=1, validators=[MinValueValidator(1)]
+    )
     valid_from = models.DateTimeField(null=True, blank=True)
     valid_until = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -123,12 +142,35 @@ class CommercialOffer(models.Model):
             errors["fixed_price"] = "A fixed bundle price is required."
         if self.offer_type == self.OfferType.FREE_THERAPY and self.free_therapy_id is None:
             errors["free_therapy"] = "Select the free therapy or add-on."
+        if self.offer_type == self.OfferType.FAMILY_FREE and self.free_therapy_id is None:
+            errors["free_therapy"] = "Select the free therapy."
+        if self.offer_type == self.OfferType.THERAPY_DISCOUNT:
+            rules = self.rule_config.get("therapy_discounts", [])
+            if not rules:
+                errors["rule_config"] = "Add a discount for at least one therapy."
+            for rule in rules:
+                if rule.get("discount_type") not in ("PERCENTAGE", "FIXED"):
+                    errors["rule_config"] = "Select percentage or fixed discount for every therapy."
+                    break
+                try:
+                    amount = float(rule.get("discount", 0))
+                except (TypeError, ValueError):
+                    amount = 0
+                if amount <= 0 or (rule.get("discount_type") == "PERCENTAGE" and amount > 100):
+                    errors["rule_config"] = "Enter a valid discount for every selected therapy."
+                    break
         if errors:
             raise ValidationError(errors)
 
     def is_current(self, at=None):
         at = at or timezone.now()
         return self.is_active and (not self.valid_from or self.valid_from <= at) and (not self.valid_until or self.valid_until > at)
+
+    def protected_reference_summary(self):
+        return {"appointment_requests": self.appointment_requests.count()}
+
+    def can_be_deleted(self):
+        return not any(self.protected_reference_summary().values())
 
 
 class CommercialAuditEvent(models.Model):

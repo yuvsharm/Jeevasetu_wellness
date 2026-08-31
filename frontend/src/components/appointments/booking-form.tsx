@@ -61,7 +61,7 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   }, [catalog, initialOffer, initialPackage, selectedTherapies]);
 
   const quoteQuery = useQuery({
-    queryKey: ["commercial-quote", effectiveTherapies, initialPackage, initialOffer, familyMember],
+    queryKey: ["commercial-quote", effectiveTherapies, initialPackage, initialOffer, familyMember, preferredDate, preferredTime],
     enabled: customer && effectiveTherapies.length > 0,
     queryFn: () => requestJson<CommercialQuote>("/api/commercial/quote", {
       method: "POST",
@@ -70,6 +70,9 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
         package_id: initialPackage || null,
         offer_id: initialOffer || null,
         family_member_id: familyMember || null,
+        service_at: preferredDate
+          ? new Date(`${preferredDate}T${preferredTime || "12:00"}:00+05:30`).toISOString()
+          : null,
       }),
     }),
   });
@@ -117,7 +120,7 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   const selectedNames = useMemo(() => (catalog?.therapies ?? []).filter((value) => effectiveTherapies.includes(value.id)).map((value) => value.name), [catalog, effectiveTherapies]);
 
   if (session.isPending || !customer) return <div className="card p-8 text-center text-slate-600">Confirming customer access…</div>;
-  if (submitted) return <div className="card p-8 text-center" role="status"><p className="eyebrow">Request received</p><h2 className="mt-4 font-serif text-4xl text-[#103c27]">Your appointment request is ready for review.</h2><p className="mt-4 text-[#5b6c63]">Reference: <strong>{submitted.id}</strong></p></div>;
+  if (submitted) return <div className="card p-8 text-center" role="status"><p className="eyebrow">Request received</p><h2 className="mt-4 font-serif text-4xl text-[#103c27]">Booking request submitted successfully.</h2><dl className="mx-auto mt-5 grid max-w-sm gap-2 text-left"><div className="flex justify-between gap-4"><dt>Requested Date</dt><dd className="font-semibold">{submitted.preferred_date}</dd></div><div className="flex justify-between gap-4"><dt>Requested Time</dt><dd className="font-semibold">{submitted.preferred_time}</dd></div><div className="flex justify-between gap-4"><dt>Status</dt><dd className="font-semibold">Awaiting confirmation</dd></div></dl><p className="mt-4 text-[#5b6c63]">Reference: <strong>{submitted.id}</strong></p></div>;
 
   const error = submit.error instanceof Error ? submit.error.message : "";
   return <form className="card space-y-7 p-5 sm:p-8" onSubmit={(event) => { event.preventDefault(); submit.mutate(); }}>

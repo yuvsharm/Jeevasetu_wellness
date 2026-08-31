@@ -7,11 +7,19 @@ const future = (labels: string[]): NavigationItem[] => labels.map((label) => ({ 
 
 export const roleNavigation: Record<Role, NavigationItem[]> = {
   OWNER: [
-    { label: "Appointment Requests", href: `${roleDestinations.OWNER}#owner-appointment-requests` },
-    { label: "Appointment Schedule", href: `${roleDestinations.OWNER}#owner-appointment-schedule` },
-    { label: "Managers & Physiotherapists", href: `${roleDestinations.OWNER}#owner-staff` },
-    { label: "Patients", href: `${roleDestinations.OWNER}#owner-patients` },
-    ...future(["Operations", "Revenue & Payments", "Therapies & Pricing", "Inventory", "Reports", "Audit Logs", "Settings"]),
+    { label: "Business Analytics", href: `${roleDestinations.OWNER}#business-analytics` },
+    { label: "Appointment Requests", href: `${roleDestinations.OWNER}#appointment-requests` },
+    { label: "Appointment Schedule", href: `${roleDestinations.OWNER}#appointment-schedule` },
+    { label: "Managers & Physiotherapists", href: `${roleDestinations.OWNER}#staff-management` },
+    { label: "Patients", href: `${roleDestinations.OWNER}#patients` },
+    { label: "Operating Hours", href: `${roleDestinations.OWNER}#operating-hours` },
+    { label: "Therapy Management", href: `${roleDestinations.OWNER}#therapy-management` },
+    { label: "Offers & Packages", href: `${roleDestinations.OWNER}#offers-packages` },
+    { label: "Customer Reviews", href: `${roleDestinations.OWNER}#customer-reviews` },
+    { label: "Practitioner Applications", href: `${roleDestinations.OWNER}#practitioner-applications` },
+    { label: "Visit Verification", href: `${roleDestinations.OWNER}#visit-verification` },
+    { label: "Payments", href: `${roleDestinations.OWNER}#payments` },
+    { label: "Practitioner Availability", href: `${roleDestinations.OWNER}#availability-management` },
   ],
   MANAGER: [
     { label: "Dashboard", href: roleDestinations.MANAGER },

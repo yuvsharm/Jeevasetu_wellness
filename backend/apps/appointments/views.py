@@ -1,9 +1,11 @@
 import csv
+import json
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, Q
 from django.http import FileResponse, HttpResponse
@@ -92,6 +94,11 @@ from apps.appointments.booking_verification import (
     issue_booking_otp_details,
     verify_booking_otp,
 )
+
+
+def commercial_audit_payload(data):
+    """Convert serializer return values (including UUIDs) to JSON-safe primitives."""
+    return json.loads(json.dumps(data, cls=DjangoJSONEncoder))
 from apps.appointments.commercial import calculate_quote
 from apps.appointments.analytics import build_owner_analytics, resolve_range
 from apps.patients.models import CustomerFamilyMember
@@ -190,7 +197,14 @@ class CommercialQuoteView(HasTenant, GenericAPIView):
             if not family:
                 raise PermissionDenied("The selected family member is unavailable.")
         try:
-            quote = calculate_quote(organization=request.organization, therapy_ids=serializer.validated_data["therapy_ids"], package_id=serializer.validated_data.get("package_id"), offer_id=serializer.validated_data.get("offer_id"), family_member=family)
+            quote = calculate_quote(
+                organization=request.organization,
+                therapy_ids=serializer.validated_data["therapy_ids"],
+                package_id=serializer.validated_data.get("package_id"),
+                offer_id=serializer.validated_data.get("offer_id"),
+                family_member=family,
+                at=serializer.validated_data.get("service_at"),
+            )
         except DjangoValidationError as error:
             raise ValidationError(error.message_dict) from error
         return Response(quote.snapshot())
@@ -205,10 +219,10 @@ class TherapyManagementListCreateView(HasTenant, generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         value = serializer.save(organization=self.request.organization, default_duration_minutes=45)
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="CREATED", after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="CREATED", after=commercial_audit_payload(serializer.data))
 
 
-class TherapyManagementDetailView(HasTenant, generics.RetrieveUpdateAPIView):
+class TherapyManagementDetailView(HasTenant, generics.RetrieveUpdateDestroyAPIView):
     permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
     serializer_class = TherapyCommercialSerializer
 
@@ -218,7 +232,26 @@ class TherapyManagementDetailView(HasTenant, generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         before = TherapyCommercialSerializer(self.get_object()).data
         value = serializer.save()
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="THERAPY", object_id=value.id, action="UPDATED", before=commercial_audit_payload(before), after=commercial_audit_payload(serializer.data))
+
+    def perform_destroy(self, instance):
+        references = instance.protected_reference_summary()
+        if any(references.values()):
+            raise ValidationError({
+                "detail": "This therapy has protected history and cannot be deleted. Deactivate it instead.",
+                "protected_references": references,
+            })
+        before = TherapyCommercialSerializer(instance).data
+        object_id = instance.id
+        instance.delete()
+        CommercialAuditEvent.objects.create(
+            organization=self.request.organization,
+            actor=self.request.user,
+            object_kind="THERAPY",
+            object_id=object_id,
+            action="DELETED",
+            before=commercial_audit_payload(before),
+        )
 
 
 class PackageManagementListCreateView(HasTenant, generics.ListCreateAPIView):
@@ -230,14 +263,14 @@ class PackageManagementListCreateView(HasTenant, generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         value = serializer.save(organization=self.request.organization)
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="CREATED", after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="CREATED", after=commercial_audit_payload(serializer.data))
 
 
 class PackageManagementDetailView(PackageManagementListCreateView, generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         before = TherapyPackageSerializer(self.get_object()).data
         value = serializer.save()
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="PACKAGE", object_id=value.id, action="UPDATED", before=commercial_audit_payload(before), after=commercial_audit_payload(serializer.data))
 
 
 class OfferManagementListCreateView(HasTenant, generics.ListCreateAPIView):
@@ -249,14 +282,33 @@ class OfferManagementListCreateView(HasTenant, generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         value = serializer.save(organization=self.request.organization)
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="CREATED", after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="CREATED", after=commercial_audit_payload(serializer.data))
 
 
-class OfferManagementDetailView(OfferManagementListCreateView, generics.RetrieveUpdateAPIView):
+class OfferManagementDetailView(OfferManagementListCreateView, generics.RetrieveUpdateDestroyAPIView):
     def perform_update(self, serializer):
         before = CommercialOfferSerializer(self.get_object()).data
         value = serializer.save()
-        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="UPDATED", before=before, after=serializer.data)
+        CommercialAuditEvent.objects.create(organization=self.request.organization, actor=self.request.user, object_kind="OFFER", object_id=value.id, action="UPDATED", before=commercial_audit_payload(before), after=commercial_audit_payload(serializer.data))
+
+    def perform_destroy(self, instance):
+        references = instance.protected_reference_summary()
+        if any(references.values()):
+            raise ValidationError({
+                "detail": "This offer has historical booking records and cannot be permanently deleted. Archive it instead.",
+                "protected_references": references,
+            })
+        before = CommercialOfferSerializer(instance).data
+        object_id = instance.id
+        instance.delete()
+        CommercialAuditEvent.objects.create(
+            organization=self.request.organization,
+            actor=self.request.user,
+            object_kind="OFFER",
+            object_id=object_id,
+            action="DELETED",
+            before=commercial_audit_payload(before),
+        )
 
 
 class AppointmentCreateView(HasTenant, generics.CreateAPIView):
@@ -827,12 +879,15 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
         ).select_related("user", "practitioner_profile__source_application")
         result = []
         for profile in candidates:
+            eligibility_reason = "Available for this requested time"
+            eligible = True
             try:
                 ensure_request_practitioner_eligible(
                     source=source, physiotherapist=profile, start=start, end=end
                 )
-            except DjangoValidationError:
-                continue
+            except DjangoValidationError as error:
+                eligible = False
+                eligibility_reason = " ".join(error.messages)
             practitioner = getattr(profile, "practitioner_profile", None)
             result.append({
                 "id": str(profile.id), "full_name": profile.user.get_full_name(),
@@ -843,6 +898,8 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
                 ),
                 "rating": None, "review_count": 0,
                 "has_photo": bool(profile.profile_photo),
+                "eligible": eligible,
+                "eligibility_reason": eligibility_reason,
             })
         return Response(result)
 
@@ -1083,7 +1140,9 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
     def get_queryset(self):
         return Appointment.objects.filter(organization=self.request.organization).filter(
             Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)
-        ).select_related("clinic", "patient", "therapy", "physiotherapist__user")
+        ).select_related(
+            "clinic", "patient", "therapy", "physiotherapist__user", "originating_request"
+        )
 
 
 class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView):

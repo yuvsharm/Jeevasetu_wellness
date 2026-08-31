@@ -123,7 +123,7 @@ def tenant(slug):
     return {"HTTP_X_ORGANIZATION_SLUG": slug}
 
 
-def test_authenticated_booking_requires_customer_and_no_second_otp(api_client):
+def test_authenticated_booking_requires_customer_not_therapist_availability_or_second_otp(api_client):
     organization, customer, therapy = setup_identity(Role.CUSTOMER)
     secondary = TherapyOption.objects.create(
         organization=organization, name="Kati Basti", slug="kati-basti"
@@ -131,6 +131,7 @@ def test_authenticated_booking_requires_customer_and_no_second_otp(api_client):
     url = reverse("quick-appointment-create")
     headers = tenant(organization.slug)
     data = authenticated_payload(therapy, requested_therapies=[str(therapy.id), str(secondary.id)])
+    AvailabilityRule.objects.filter(organization=organization).update(is_active=False)
     assert api_client.post(url, data, format="json", **headers).status_code == 401
     api_client.force_authenticate(customer)
     created = api_client.post(url, data, format="json", **headers)

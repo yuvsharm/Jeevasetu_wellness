@@ -212,37 +212,33 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None,
     from apps.appointments.models import Appointment, ClinicOperatingHours
     from apps.appointments.scheduling import validate_schedule
 
-    profiles = StaffProfile.objects.filter(
-        organization=clinic.organization,
-        clinic=clinic,
-        staff_type="PHYSIOTHERAPIST",
-        user__is_active=True,
-        user__is_enabled=True,
-        user__role_assignments__organization=clinic.organization,
-        user__role_assignments__clinic=clinic,
-        user__role_assignments__role="PHYSIOTHERAPIST",
-        user__role_assignments__is_active=True,
-        user__role_assignments__organization_membership__is_active=True,
-        user__role_assignments__clinic_membership__is_active=True,
-    ).filter(
-        Q(practitioner_profile__isnull=True)
-        | Q(
-            practitioner_profile__is_approved=True,
-            practitioner_profile__is_open_to_work=True,
-        )
-    )
-    # Approved application-backed practitioners may only be offered for therapies whose
-    # competency was explicitly verified. Legacy staff profiles have no application
-    # competency record and retain their existing scheduling behavior.
-    profiles = profiles.filter(
-        Q(practitioner_profile__isnull=True)
-        | Q(
-            practitioner_profile__source_application__competencies__therapy=therapy,
-            practitioner_profile__source_application__competencies__verification_status="VERIFIED",
-        )
-    ).distinct()
-    if physiotherapist:
-        profiles = profiles.filter(pk=physiotherapist.pk)
+    profiles = StaffProfile.objects.none()
+    if physiotherapist is not None:
+        profiles = StaffProfile.objects.filter(
+            organization=clinic.organization,
+            clinic=clinic,
+            staff_type="PHYSIOTHERAPIST",
+            user__is_active=True,
+            user__is_enabled=True,
+            user__role_assignments__organization=clinic.organization,
+            user__role_assignments__clinic=clinic,
+            user__role_assignments__role="PHYSIOTHERAPIST",
+            user__role_assignments__is_active=True,
+            user__role_assignments__organization_membership__is_active=True,
+            user__role_assignments__clinic_membership__is_active=True,
+        ).filter(
+            Q(practitioner_profile__isnull=True)
+            | Q(
+                practitioner_profile__is_approved=True,
+                practitioner_profile__is_open_to_work=True,
+            )
+        ).filter(
+            Q(practitioner_profile__isnull=True)
+            | Q(
+                practitioner_profile__source_application__competencies__therapy=therapy,
+                practitioner_profile__source_application__competencies__verification_status="VERIFIED",
+            )
+        ).filter(pk=physiotherapist.pk).distinct()
     duration = duration_minutes or therapy.default_duration_minutes or 60
     zone = _zone(clinic)
     results = []
@@ -262,6 +258,20 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None,
             try:
                 end = validate_schedule(clinic=clinic, start=start, duration_minutes=duration)
             except ValidationError:
+                cursor += timedelta(minutes=15)
+                continue
+            # Clinic slots accept customer requests independently of practitioner
+            # availability. Practitioner checks run later during assignment.
+            if physiotherapist is None:
+                results.append(
+                    {
+                        "physiotherapist_id": None,
+                        "physiotherapist_name": "",
+                        "scheduled_start": start,
+                        "scheduled_end": end,
+                        "duration_minutes": duration,
+                    }
+                )
                 cursor += timedelta(minutes=15)
                 continue
             for profile in profiles:

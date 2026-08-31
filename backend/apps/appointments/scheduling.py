@@ -89,10 +89,18 @@ def ensure_request_practitioner_eligible(*, source, physiotherapist, start, end)
         raise ValidationError("The selected Physiotherapist is unavailable.")
     ensure_practitioner_operationally_eligible(physiotherapist)
     profile = getattr(physiotherapist, "practitioner_profile", None)
-    if profile is not None and not profile.source_application.competencies.filter(
-        therapy=source.therapy, verification_status="VERIFIED"
-    ).exists():
-        raise ValidationError("The selected Physiotherapist is not verified for this therapy.")
+    if profile is not None:
+        required_ids = {
+            source.therapy_id,
+            *source.requested_therapies.values_list("id", flat=True),
+        }
+        verified_ids = set(
+            profile.source_application.competencies.filter(
+                therapy_id__in=required_ids, verification_status="VERIFIED"
+            ).values_list("therapy_id", flat=True)
+        )
+        if not required_ids.issubset(verified_ids):
+            raise ValidationError("The selected Physiotherapist is missing a required therapy competency.")
     service_areas = list(physiotherapist.service_areas.filter(is_active=True))
     if service_areas and not any(source.pin_code in area.pin_codes for area in service_areas):
         raise ValidationError("The selected Physiotherapist does not serve this area.")
@@ -158,6 +166,7 @@ def decide_appointment_request(
         package_id=source.selected_package_id,
         offer_id=source.selected_offer_id,
         family_member=source.family_member,
+        at=start,
     )
     source.commercial_snapshot = quote.snapshot()
     source.regular_amount = quote.regular_amount

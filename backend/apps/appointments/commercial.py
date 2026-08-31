@@ -2,6 +2,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.appointments.models import CommercialOffer, TherapyOption, TherapyPackage
@@ -57,6 +58,32 @@ def calculate_quote(*, organization, therapy_ids, package_id=None, offer_id=None
 
     if package_id and offer_id:
         raise ValidationError({"offer": "Only one package or promotional offer may be applied."})
+    if not package_id and not offer_id:
+        eligible_quotes = []
+        candidates = CommercialOffer.objects.filter(
+            organization=organization,
+            is_active=True,
+            is_publicly_visible=True,
+        ).filter(
+            Q(valid_from__isnull=True) | Q(valid_from__lte=at),
+            Q(valid_until__isnull=True) | Q(valid_until__gt=at),
+        ).values_list("id", flat=True)
+        for candidate_id in candidates:
+            try:
+                eligible_quotes.append(calculate_quote(
+                    organization=organization,
+                    therapy_ids=unique_ids,
+                    offer_id=candidate_id,
+                    family_member=family_member,
+                    at=at,
+                ))
+            except ValidationError:
+                continue
+        if eligible_quotes:
+            return min(
+                eligible_quotes,
+                key=lambda quote: (Decimal(quote.final_amount), -len(quote.free_benefits)),
+            )
     if package_id:
         package = TherapyPackage.objects.filter(id=package_id, organization=organization).select_related("therapy").first()
         if not package or not package.is_publicly_visible or not package.is_current(at) or str(package.therapy_id) not in unique_ids:
@@ -75,19 +102,39 @@ def calculate_quote(*, organization, therapy_ids, package_id=None, offer_id=None
         count = len(selected_eligible)
         if count < offer.minimum_therapy_count or (offer.maximum_therapy_count and count > offer.maximum_therapy_count):
             raise ValidationError({"offer": "The selected therapies do not meet this offer's therapy-count rules."})
-        if offer.offer_type == CommercialOffer.OfferType.FIXED_BUNDLE and {str(item.id) for item in therapies} != eligible_ids:
-            raise ValidationError({"offer": "Select every therapy in this fixed bundle."})
-        if offer.family_required or offer.offer_type == CommercialOffer.OfferType.FAMILY:
+        if offer.family_required or offer.offer_type in (CommercialOffer.OfferType.FAMILY, CommercialOffer.OfferType.FAMILY_FREE):
             if not family_member:
                 raise ValidationError({"offer": "This offer requires an owned family-member booking."})
+            owned_count = family_member.customer.family_members.filter(is_active=True).count()
+            if owned_count < offer.minimum_family_members:
+                raise ValidationError({"offer": f"Register at least {offer.minimum_family_members} family members to use this offer."})
+        if offer.offer_type == CommercialOffer.OfferType.THERAPY_DISCOUNT:
+            discounts = {str(rule["therapy_id"]): rule for rule in offer.rule_config.get("therapy_discounts", [])}
+            final = Decimal("0.00")
+            for item in therapies:
+                price = _money(item.base_price)
+                rule = discounts.get(str(item.id))
+                if not rule:
+                    final += price
+                elif rule["discount_type"] == "PERCENTAGE":
+                    final += _money(price * (Decimal("100") - Decimal(str(rule["discount"]))) / Decimal("100"))
+                else:
+                    final += max(Decimal("0.00"), _money(price - Decimal(str(rule["discount"]))))
+        if offer.offer_type == CommercialOffer.OfferType.FIXED_BUNDLE and {str(item.id) for item in therapies} != eligible_ids:
+            raise ValidationError({"offer": "Select every therapy in this fixed bundle."})
         if offer.offer_type in (CommercialOffer.OfferType.PERCENTAGE, CommercialOffer.OfferType.FAMILY):
-            final = _money(regular * (Decimal("100") - offer.discount_value) / Decimal("100"))
+            if offer.offer_type == CommercialOffer.OfferType.FAMILY and offer.rule_config.get("discount_type") == "FIXED":
+                final = max(Decimal("0.00"), _money(regular - offer.discount_value))
+            else:
+                final = _money(regular * (Decimal("100") - offer.discount_value) / Decimal("100"))
         elif offer.offer_type == CommercialOffer.OfferType.FIXED_DISCOUNT:
             final = max(Decimal("0.00"), _money(regular - offer.discount_value))
         elif offer.offer_type == CommercialOffer.OfferType.FIXED_BUNDLE:
             final = _money(offer.fixed_price)
         elif offer.offer_type == CommercialOffer.OfferType.FREE_THERAPY:
             free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": offer.free_quantity})
+        elif offer.offer_type == CommercialOffer.OfferType.FAMILY_FREE:
+            free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": 1})
 
     discount = max(Decimal("0.00"), _money(regular - final))
     duration_count = len(therapies) + sum(item["quantity"] for item in free_benefits)

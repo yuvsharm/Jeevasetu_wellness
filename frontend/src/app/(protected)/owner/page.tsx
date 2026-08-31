@@ -11,7 +11,23 @@ import { PaymentOperations } from "@/components/appointments/payment-operations"
 import { ReviewModerationPanel } from "@/components/appointments/review-panels";
 import { CommercialManagement } from "@/components/appointments/commercial-management";
 import { OwnerAnalyticsDashboard } from "@/components/analytics/owner-analytics-dashboard";
+import { TherapyManagement } from "@/components/appointments/therapy-management";
 
 export default function OwnerPage() {
-  return <ProtectedPage role="OWNER" title="Owner operations"><OwnerAnalyticsDashboard /><div id="operations"><CommercialManagement /><ReviewModerationPanel /><div id="practitioner-review"><PractitionerReview /></div><div id="owner-appointment-requests" tabIndex={-1} className="scroll-mt-24 focus:outline-none"><OwnerRequests /></div><OperationsVisitVerificationPanel /><div id="owner-appointment-schedule" tabIndex={-1} className="scroll-mt-24 focus:outline-none"><ScheduleOperations /></div><PaymentOperations /><OperatingHoursManagement /><div id="owner-staff" tabIndex={-1} className="scroll-mt-24 focus:outline-none"><StaffDirectory allowManagers /></div><AvailabilityOperations /><div id="owner-patients" tabIndex={-1} className="scroll-mt-24 focus:outline-none"><PatientDirectory /></div></div></ProtectedPage>;
+  const sectionClass = "scroll-mt-24 focus:outline-none";
+  return <ProtectedPage role="OWNER" title="Owner operations">
+    <div id="business-analytics" tabIndex={-1} className={sectionClass}><OwnerAnalyticsDashboard /></div>
+    <TherapyManagement />
+    <CommercialManagement />
+    <div id="customer-reviews" tabIndex={-1} className={sectionClass}><ReviewModerationPanel /></div>
+    <div id="practitioner-applications" tabIndex={-1} className={sectionClass}><PractitionerReview /></div>
+    <div id="appointment-requests" tabIndex={-1} className={sectionClass}><OwnerRequests /></div>
+    <div id="visit-verification" tabIndex={-1} className={sectionClass}><OperationsVisitVerificationPanel /></div>
+    <div id="appointment-schedule" tabIndex={-1} className={sectionClass}><ScheduleOperations /></div>
+    <div id="payments" tabIndex={-1} className={sectionClass}><PaymentOperations /></div>
+    <OperatingHoursManagement />
+    <div id="staff-management" tabIndex={-1} className={sectionClass}><StaffDirectory allowManagers /></div>
+    <AvailabilityOperations />
+    <div id="patients" tabIndex={-1} className={sectionClass}><PatientDirectory /></div>
+  </ProtectedPage>;
 }
