@@ -52,7 +52,7 @@ export function AppShell({ session, role, title, children }: { session: Session;
   async function logout() {
     setLoggingOut(true);
     try { await requestJson(sessionEndpoints.logout, { method: "POST" }); }
-    finally { router.replace("/login"); router.refresh(); }
+    finally { router.replace(role === "CUSTOMER" ? "/customer-login" : "/login"); router.refresh(); }
   }
   const navigation = <nav aria-label={`${roleLabels[role]} navigation`} className="mt-6 space-y-1">{roleNavigation[role].map((item) => { const [itemPath, itemHash=""] = item.href?.split("#") ?? []; const active = item.href ? pathname === itemPath && (itemHash ? activeHash === `#${itemHash}` : !activeHash) : false; return item.href ? <Link key={item.label} href={item.href} onClick={(event) => navigateToSection(event, item.href!)} aria-current={active ? "location" : undefined} className={`flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold ${active ? "bg-emerald-100 text-emerald-950" : "text-slate-700 hover:bg-slate-100"}`}>{item.label}</Link> : <span key={item.label} aria-disabled="true" title="Coming in a future phase" className="flex min-h-11 cursor-not-allowed items-center justify-between rounded-xl px-3 text-sm text-slate-400"><span>{item.label}</span><span className="text-[10px] font-bold uppercase">Later</span></span>; })}</nav>;
   return (

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from apps.accounts.models import Role
 from apps.accounts.permissions import IsEnabledAuthenticated, IsOwnerOrManager, IsPhysiotherapist
 from apps.accounts.role_policy import actor_role_scope
-from apps.appointments.models import ClinicOperatingHours, TherapyOption
+from apps.appointments.models import ClinicOperatingHours, CommercialOffer, TherapyOption
 from apps.availability.models import (
     ApprovalStatus,
     AvailabilityAuditEvent,
@@ -169,17 +169,50 @@ class CustomerSlotDiscoveryView(GenericAPIView):
             return Response([])
         zone = profile.clinic.timezone or request.organization.timezone or "Asia/Kolkata"
         service_at = datetime.combine(data["date"], window[0], ZoneInfo(zone))
+        requested_offer = None
+        if data.get("offer"):
+            requested_offer = CommercialOffer.objects.filter(
+                pk=data["offer"], organization=request.organization,
+                is_active=True, is_publicly_visible=True,
+            ).first()
+            if requested_offer is None:
+                raise ValidationError({"offer": "This offer is not currently available."})
+            if requested_offer.valid_from and requested_offer.valid_from.astimezone(ZoneInfo(zone)).date() > data["date"]:
+                raise ValidationError({"offer": "This offer is not valid on the selected appointment date."})
+            if requested_offer.valid_from and requested_offer.valid_from > service_at:
+                service_at = requested_offer.valid_from.astimezone(ZoneInfo(zone))
+            if requested_offer.valid_until and service_at >= requested_offer.valid_until:
+                raise ValidationError({"offer": "This offer is not valid on the selected appointment date."})
         requested_ids = [value for value in data.get("requested_therapies", "").split(",") if value]
+        family = None
+        if data.get("family_member"):
+            family = profile.user.family_members.filter(
+                pk=data["family_member"], organization=request.organization, is_active=True
+            ).first()
         try:
             quote = calculate_quote(
                 organization=request.organization,
                 therapy_ids=[therapy.id, *requested_ids],
                 package_id=data.get("package"),
                 offer_id=data.get("offer"),
+                family_member=family,
                 at=service_at,
             )
         except DjangoValidationError as error:
-            raise ValidationError(error.message_dict) from error
+            if data.get("offer"):
+                raise ValidationError(error.message_dict) from error
+            # Commercial eligibility never controls base clinic capacity. If the
+            # selected benefit is invalid for this service date, discover slots
+            # using the same therapies and the best currently applicable quote.
+            try:
+                quote = calculate_quote(
+                    organization=request.organization,
+                    therapy_ids=[therapy.id, *requested_ids],
+                    family_member=family,
+                    at=service_at,
+                )
+            except DjangoValidationError as error:
+                raise ValidationError(error.message_dict) from error
         slots = discover_slots(
             clinic=profile.clinic,
             therapy=therapy,
@@ -187,6 +220,8 @@ class CustomerSlotDiscoveryView(GenericAPIView):
             date_to=data["date"],
             duration_minutes=quote.duration_minutes,
         )
+        if requested_offer:
+            slots = [slot for slot in slots if requested_offer.is_current(slot["scheduled_start"])]
         values = sorted({slot["scheduled_start"].astimezone(ZoneInfo(zone)).strftime("%H:%M") for slot in slots})
         return Response([{"value": value, "label": value} for value in values])
         if level == Role.MANAGER and clinic.id not in (clinic_ids or ()):

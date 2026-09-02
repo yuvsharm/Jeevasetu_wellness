@@ -5,6 +5,7 @@ import { QueryClient,QueryClientProvider } from "@tanstack/react-query";
 import ContactPage from "@/app/contact/page";
 import Home from "@/app/page";
 import TherapiesPage from "@/app/therapies/page";
+import { getTherapyMedia } from "@/lib/public-site/therapy-media";
 import { PublicHeader } from "./public-header";
 
 const productionTherapyNames=["Abhyang","Potli Massage","Shirodhara","Basti","Jannu Basti","Kati Basti","Griva Basti","Akshiyarpah (Both Eyes)","Nasya","Deeptishu Massage"];
@@ -42,9 +43,12 @@ describe("public website", () => {
       expect(screen.getByRole("heading",{name})).toBeInTheDocument();
       expect(screen.getByRole("link",{name:`Book ${name}`})).toHaveAttribute("href",`/book-appointment?therapy=therapy-${index+1}`);
       expect(screen.getByRole("link",{name:`View details for ${name}`})).toHaveAttribute("href",expect.stringMatching(/^\/therapies#/));
-      expect(screen.getByAltText(`${name} home wellness therapy`)).toBeInTheDocument();
+      expect(screen.getByAltText(getTherapyMedia(productionTherapies[index].slug,name).alt)).toBeInTheDocument();
     }
     expect(screen.queryByText(/Runtime OTP Primary Therapy/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"Login/Register & request booking"})).toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"JeevaSetu confirms your professional"})).toBeInTheDocument();
+    expect(screen.queryByRole("heading",{name:"Manager confirms therapist"})).not.toBeInTheDocument();
   });
 
   it("composes the premium homepage from real catalog and approved review data",async()=>{
@@ -56,7 +60,20 @@ describe("public website", () => {
     expect(screen.getByRole("heading",{name:"Kati Basti"})).toBeInTheDocument();
     expect(screen.getByRole("heading",{name:"7 Session Plan"})).toBeInTheDocument();
     expect(screen.getByText("Thoughtful home service")).toBeInTheDocument();
-    expect(screen.getAllByRole("link",{name:"Join With Us"})[0]).toHaveAttribute("href","/work-with-us");
+    const bookingLinks=screen.getAllByRole("link",{name:"Book Appointment"});
+    expect(bookingLinks).toHaveLength(1);
+    expect(bookingLinks[0]).toHaveAttribute("href","/customer-access?returnTo=%2Fbook-appointment");
+    expect(screen.getByRole("link",{name:"Explore Therapies"})).toHaveAttribute("href","#therapies");
+    const professionalHeading=screen.getByRole("heading",{name:"Grow your practice with JeevaSetu"});
+    const journeyHeading=screen.getByRole("heading",{name:"From your first choice to a verified home visit"});
+    expect(professionalHeading.compareDocumentPosition(journeyHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("img",{name:"JeevaSetu physiotherapist preparing for a professional home-care visit"})).toBeInTheDocument();
+    expect(screen.getByRole("link",{name:"Apply to Join"})).toHaveAttribute("href","/work-with-us");
+    expect(screen.getByRole("link",{name:"Professional Login"})).toHaveAttribute("href","/login");
+    expect(screen.queryByRole("heading",{name:"Join JeevaSetu as a Professional"})).not.toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"Questions before you book?"})).toBeInTheDocument();
+    expect(screen.getByText("Appointment slots are available during configured service hours.")).toBeInTheDocument();
+    expect(screen.queryByText("Appointment slots are coordinated between 9 AM and 6 PM.")).not.toBeInTheDocument();
   });
 
   it("shows real contact information and a safe enquiry acknowledgement", async () => {

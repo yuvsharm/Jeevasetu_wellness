@@ -105,7 +105,8 @@ export function CustomerRegistration() {
         }),
       });
       setVerificationToken(""); setPassword(""); setConfirmPassword("");
-      router.replace(returnTo); router.refresh();
+      router.replace(`/customer-login?registered=1&returnTo=${encodeURIComponent(returnTo)}`);
+      router.refresh();
     } catch (value) { setError(value instanceof Error ? value.message : "Customer registration could not be completed."); }
     finally { setBusy(false); }
   }

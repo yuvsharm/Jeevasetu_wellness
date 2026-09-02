@@ -41,6 +41,7 @@ class CustomerSlotQuerySerializer(serializers.Serializer):
     requested_therapies = serializers.CharField(required=False, allow_blank=True)
     package = serializers.UUIDField(required=False)
     offer = serializers.UUIDField(required=False)
+    family_member = serializers.UUIDField(required=False)
     date = serializers.DateField()
 
 

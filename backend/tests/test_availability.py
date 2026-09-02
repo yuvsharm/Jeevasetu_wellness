@@ -5,7 +5,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.appointments.models import Appointment, ClinicOperatingHours
+from apps.appointments.models import Appointment, ClinicOperatingHours, CommercialOffer, TherapyOption
 from apps.availability.models import (
     AvailabilityAuditEvent,
     AvailabilityException,
@@ -116,6 +116,103 @@ def test_customer_slots_hide_times_inside_advance_notice(api_client):
     values = {item["value"] for item in response.data}
     assert response.status_code == 200
     assert "09:45" not in values and "10:00" in values
+
+
+def test_invalid_offer_date_is_rejected_for_offer_slot_discovery(api_client):
+    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-expired-offer")
+    target = start_at(days=3)
+    offer = CommercialOffer.objects.create(
+        organization=organization,
+        title="Earlier service week",
+        offer_type=CommercialOffer.OfferType.PERCENTAGE,
+        discount_value=10,
+        valid_until=timezone.now() + timedelta(days=1),
+    )
+    offer.eligible_therapies.set([therapy])
+    api_client.force_authenticate(customer)
+    response = api_client.get(
+        reverse("availability-customer-slots"),
+        {"therapy": therapy.id, "offer": offer.id, "date": target.date()},
+        **headers(organization),
+    )
+    assert response.status_code == 400
+    assert "offer" in response.data
+
+
+def test_offer_slots_respect_exact_valid_until_timestamp(api_client):
+    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-offer-end")
+    target = start_at(days=3)
+    offer = CommercialOffer.objects.create(
+        organization=organization,
+        title="Morning-only offer",
+        offer_type=CommercialOffer.OfferType.PERCENTAGE,
+        discount_value=10,
+        valid_until=start_at(days=3, hour=10),
+    )
+    offer.eligible_therapies.set([therapy])
+    api_client.force_authenticate(customer)
+    response = api_client.get(
+        reverse("availability-customer-slots"),
+        {"therapy": therapy.id, "offer": offer.id, "date": target.date()},
+        **headers(organization),
+    )
+    values = {item["value"] for item in response.data}
+    assert response.status_code == 200
+    assert "09:45" in values
+    assert "10:00" not in values
+
+
+def test_multi_therapy_customer_slots_use_configured_duration_and_trim_only_late_starts(api_client):
+    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-duration")
+    therapy.default_duration_minutes = 60
+    therapy.save(update_fields=("default_duration_minutes",))
+    second = TherapyOption.objects.create(
+        organization=organization,
+        name="Long Nasya",
+        slug="long-nasya",
+        default_duration_minutes=75,
+    )
+    target = start_at(days=3)
+    api_client.force_authenticate(customer)
+    response = api_client.get(
+        reverse("availability-customer-slots"),
+        {"therapy": therapy.id, "requested_therapies": str(second.id), "date": target.date()},
+        **headers(organization),
+    )
+    values = {item["value"] for item in response.data}
+    assert response.status_code == 200
+    assert "17:45" in values and "18:00" not in values
+
+
+def test_offer_addon_slots_use_fifteen_minute_duration(api_client):
+    organization, _, _, _, _, _, customer, *_, therapy = setup_domain("customer-slot-addon-duration")
+    therapy.default_duration_minutes = 60
+    therapy.save(update_fields=("default_duration_minutes",))
+    addon = TherapyOption.objects.create(
+        organization=organization,
+        name="Leg Massage",
+        slug="leg-massage",
+        base_price=0,
+        default_duration_minutes=15,
+        is_publicly_visible=False,
+        is_offer_free_addon=True,
+    )
+    offer = CommercialOffer.objects.create(
+        organization=organization,
+        title="Free Leg Massage",
+        offer_type=CommercialOffer.OfferType.FREE_THERAPY,
+        free_therapy=addon,
+    )
+    offer.eligible_therapies.set([therapy])
+    api_client.force_authenticate(customer)
+    response = api_client.get(
+        reverse("availability-customer-slots"),
+        {"therapy": therapy.id, "offer": offer.id, "date": start_at(days=3).date()},
+        **headers(organization),
+    )
+    values = {item["value"] for item in response.data}
+    assert response.status_code == 200
+    assert "18:45" in values and "19:00" not in values
 
 
 def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):

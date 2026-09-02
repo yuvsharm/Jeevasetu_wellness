@@ -76,11 +76,13 @@ describe("CustomerDashboard", () => {
     renderDashboard([], [], [{
       id: "offer-1", title: "Active Wellness Test Offer", promotional_text: "Save on Kati Basti",
       offer_type: "PERCENTAGE", eligible_therapies: ["therapy-1"], eligible_therapy_names: ["Kati Basti"],
+      minimum_therapy_count: 1,
       discount_value: "10.00", fixed_price: null, free_therapy: null, free_therapy_name: "", free_quantity: 1,
       valid_from: "2026-08-31T00:00:00Z", valid_until: "2026-09-02T00:00:00Z",
     }]);
     expect(await screen.findByText("Active Wellness Test Offer")).toBeInTheDocument();
-    expect(screen.getByText("Save 10.00%")).toBeInTheDocument();
+    expect(screen.getByText("10.00% OFF")).toBeInTheDocument();
+    expect(screen.getByText("Choose any 1 eligible therapy")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Choose offer" })).toHaveAttribute("href", "/book-appointment?offer=offer-1");
     expect(screen.queryByText(/rule_config|minimum_therapy_count/i)).not.toBeInTheDocument();
   });

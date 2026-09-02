@@ -19,6 +19,7 @@ type OfferForm = {
   comboBenefit: ComboBenefit;
   familyBenefit: FamilyBenefit;
   minimumFamilyMembers: number;
+  minimumTherapyCount: number;
   freeTherapy: string;
   validFrom: string;
   validUntil: string;
@@ -27,7 +28,7 @@ type OfferForm = {
 
 const emptyForm = (): OfferForm => ({
   title: "", style: "PERCENTAGE", therapies: [], discount: "", finalComboPrice: "",
-  comboBenefit: "PERCENTAGE", familyBenefit: "PERCENTAGE", minimumFamilyMembers: 2,
+  comboBenefit: "PERCENTAGE", familyBenefit: "PERCENTAGE", minimumFamilyMembers: 2, minimumTherapyCount: 1,
   freeTherapy: "", validFrom: "", validUntil: "", message: "",
 });
 
@@ -40,11 +41,16 @@ const styles: Array<{ value: Style; title: string; help: string }> = [
 ];
 
 const displayDate = (value: string | null) => value
-  ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value))
+  ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" }).format(new Date(value))
   : "No date limit";
 const inputDate = (value: string | null) => value
-  ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+  ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value))
   : "";
+const offerBoundary = (date: string, endExclusive = false) => {
+  const day = new Date(`${date}T00:00:00Z`);
+  if (endExclusive) day.setUTCDate(day.getUTCDate() + 1);
+  return new Date(`${day.toISOString().slice(0, 10)}T00:00:00+05:30`).toISOString();
+};
 const ErrorText = ({ children }: { children?: string }) => children
   ? <span role="alert" className="text-sm font-semibold text-red-700">{children}</span>
   : null;
@@ -66,6 +72,7 @@ export function CommercialManagement() {
   const submitLock = useRef(false);
   const [plan, setPlan] = useState({ name: "", therapy: "", session_count: 7, selling_price: "", description: "" });
   const activeTherapies = useMemo(() => (therapies.data ?? []).filter((therapy) => therapy.is_active), [therapies.data]);
+  const paidTherapies = useMemo(() => activeTherapies.filter((therapy) => !therapy.is_offer_free_addon), [activeTherapies]);
   const therapyById = useMemo(() => new Map(activeTherapies.map((therapy) => [therapy.id, therapy])), [activeTherapies]);
   const selectedNames = form.therapies.map((id) => therapyById.get(id)?.name).filter(Boolean).join(", ");
 
@@ -87,6 +94,7 @@ export function CommercialManagement() {
     const next: FormErrors = {};
     if (!form.title.trim()) next.title = "Please enter an offer name.";
     if (!form.therapies.length) next.therapies = "Please select at least one therapy.";
+    else if (form.minimumTherapyCount < 1 || form.minimumTherapyCount > form.therapies.length) next.therapies = "Minimum eligible therapies cannot exceed the selected therapies.";
     if (form.style === "COMBO" && form.therapies.length < 2) next.therapies = "Please select at least two therapies for a combo.";
     const needsDiscount = form.style === "PERCENTAGE" || form.style === "FIXED"
       || (form.style === "COMBO" && form.comboBenefit === "PERCENTAGE")
@@ -103,8 +111,8 @@ export function CommercialManagement() {
     if (form.style === "COMBO" && form.comboBenefit === "FINAL_PRICE" && !Number(form.finalComboPrice)) next.discount = "Please enter the final combo price in rupees.";
     if ((form.style === "FREE" || (form.style === "FAMILY" && form.familyBenefit === "FREE")) && !form.freeTherapy) next.freeTherapy = "Please select the free therapy.";
     if (form.style === "FAMILY" && form.minimumFamilyMembers < 2) next.familyMembers = "Minimum family members must be at least 2.";
-    if (!form.validFrom) next.validFrom = "Please select the offer start date and time.";
-    if (!form.validUntil) next.validUntil = "Please select the offer end date and time.";
+    if (!form.validFrom) next.validFrom = "Please select the offer start date.";
+    if (!form.validUntil) next.validUntil = "Please select the offer end date.";
     if (form.validFrom && form.validUntil && new Date(form.validUntil) <= new Date(form.validFrom)) next.validUntil = "Offer end date must be after the start date.";
     if (form.validUntil && new Date(form.validUntil) <= new Date()) next.validUntil = "Offer end date must be in the future.";
     setErrors(next);
@@ -130,7 +138,7 @@ export function CommercialManagement() {
           promotional_text: form.message.trim(),
           offer_type: offerType,
           eligible_therapies: form.therapies,
-          minimum_therapy_count: form.style === "COMBO" ? form.therapies.length : 1,
+          minimum_therapy_count: form.style === "COMBO" ? form.therapies.length : form.minimumTherapyCount,
           maximum_therapy_count: form.style === "COMBO" ? form.therapies.length : null,
           discount_value: freeOffer || (form.style === "COMBO" && form.comboBenefit === "FINAL_PRICE") ? "0" : form.discount,
           fixed_price: form.style === "COMBO" && form.comboBenefit === "FINAL_PRICE" ? form.finalComboPrice : null,
@@ -139,8 +147,8 @@ export function CommercialManagement() {
           family_required: form.style === "FAMILY",
           minimum_family_members: form.style === "FAMILY" ? form.minimumFamilyMembers : 1,
           rule_config: { discount_type: fixedDiscount ? "FIXED" : "PERCENTAGE" },
-          valid_from: new Date(form.validFrom).toISOString(),
-          valid_until: new Date(form.validUntil).toISOString(),
+          valid_from: offerBoundary(form.validFrom),
+          valid_until: offerBoundary(form.validUntil, true),
           is_active: true,
           is_publicly_visible: true,
           display_order: 0,
@@ -249,9 +257,10 @@ export function CommercialManagement() {
       comboBenefit: offer.offer_type === "FIXED_BUNDLE" ? "FINAL_PRICE" : "PERCENTAGE",
       familyBenefit: offer.offer_type === "FAMILY_FREE" ? "FREE" : offer.rule_config.discount_type === "FIXED" ? "FIXED" : "PERCENTAGE",
       minimumFamilyMembers: offer.minimum_family_members,
+      minimumTherapyCount: offer.minimum_therapy_count,
       freeTherapy: offer.free_therapy ?? "",
       validFrom: inputDate(offer.valid_from),
-      validUntil: inputDate(offer.valid_until),
+      validUntil: offer.valid_until ? inputDate(new Date(new Date(offer.valid_until).getTime() - 1).toISOString()) : "",
       message: offer.promotional_text,
     });
     window.setTimeout(() => document.getElementById("offer-form")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
@@ -287,7 +296,8 @@ export function CommercialManagement() {
 
       {form.style === "FAMILY" && <fieldset className="rounded-2xl bg-slate-50 p-4"><legend className="font-semibold">Family Benefit</legend><div className="mt-2 flex flex-wrap gap-4">{([["PERCENTAGE", "Percentage discount"], ["FIXED", "Fixed ₹ discount"], ["FREE", "Free therapy"]] as Array<[FamilyBenefit, string]>).map(([value, label]) => <label key={value}><input type="radio" name="family-benefit" checked={form.familyBenefit === value} onChange={() => setForm({ ...form, familyBenefit: value, discount: "", freeTherapy: "" })} /> {label}</label>)}</div><label className="mt-4 grid max-w-xs gap-1 font-semibold">Minimum Family Members<input aria-label="Minimum Family Members" type="number" min="2" value={form.minimumFamilyMembers} onChange={(event) => setForm({ ...form, minimumFamilyMembers: Number(event.target.value) })} className="min-h-11 rounded-xl border px-3 font-normal" /><span className="text-sm font-normal text-slate-600">At least this many registered family members are required.</span><ErrorText>{errors.familyMembers}</ErrorText></label></fieldset>}
 
-      <fieldset><legend className="font-semibold">{form.style === "FREE" || (form.style === "FAMILY" && form.familyBenefit === "FREE") ? "Book These Therapies" : form.style === "COMBO" ? "Select 2 or More Therapies" : "Eligible Therapies"}</legend><p className="mt-1 text-sm text-slate-600">Select the therapies this offer applies to.</p><div className="mt-3 flex flex-wrap gap-2">{activeTherapies.map((therapy) => <label key={therapy.id} className={`rounded-full border px-3 py-2 ${form.therapies.includes(therapy.id) ? "border-emerald-700 bg-emerald-50" : "border-slate-200"}`}><input type="checkbox" checked={form.therapies.includes(therapy.id)} onChange={(event) => toggleTherapy(therapy.id, event.target.checked)} /> {therapy.name}</label>)}</div><ErrorText>{errors.therapies}</ErrorText></fieldset>
+      <fieldset><legend className="font-semibold">{form.style === "FREE" || (form.style === "FAMILY" && form.familyBenefit === "FREE") ? "Book These Therapies" : form.style === "COMBO" ? "Select 2 or More Therapies" : "Eligible Therapies"}</legend><p className="mt-1 text-sm text-slate-600">Select the therapies this offer applies to.</p><div className="mt-3 flex flex-wrap gap-2">{paidTherapies.map((therapy) => <label key={therapy.id} className={`rounded-full border px-3 py-2 ${form.therapies.includes(therapy.id) ? "border-emerald-700 bg-emerald-50" : "border-slate-200"}`}><input type="checkbox" checked={form.therapies.includes(therapy.id)} onChange={(event) => toggleTherapy(therapy.id, event.target.checked)} /> {therapy.name}</label>)}</div><ErrorText>{errors.therapies}</ErrorText></fieldset>
+      {form.style !== "COMBO" && <label className="grid max-w-sm gap-1 font-semibold">Minimum Eligible Therapies<input aria-label="Minimum Eligible Therapies" type="number" min="1" max={Math.max(1, form.therapies.length)} value={form.minimumTherapyCount} onChange={(event) => setForm({ ...form, minimumTherapyCount: Number(event.target.value) })} className="min-h-11 rounded-xl border px-3 font-normal" /><span className="text-sm font-normal text-slate-600">Customers must select at least this many eligible therapies to unlock the offer.</span></label>}
 
       {form.style === "PERCENTAGE" && <label className="grid max-w-sm gap-1 font-semibold">Discount Percentage (%)<input aria-label="Discount Percentage (%)" type="number" min="0.01" max="100" step="0.01" value={form.discount} onChange={(event) => { setErrors((current) => ({ ...current, discount: undefined })); setForm({ ...form, discount: event.target.value }); }} placeholder="10" className="min-h-11 rounded-xl border px-3 font-normal" /><span className="text-sm font-normal text-slate-600">Example: enter 10 for 10% off.</span><ErrorText>{errors.discount}</ErrorText></label>}
       {form.style === "FIXED" && <label className="grid max-w-sm gap-1 font-semibold">Discount Amount (₹)<input aria-label="Discount Amount (₹)" type="number" min="0.01" step="0.01" value={form.discount} onChange={(event) => { setErrors((current) => ({ ...current, discount: undefined })); setForm({ ...form, discount: event.target.value }); }} placeholder="500" className="min-h-11 rounded-xl border px-3 font-normal" /><span className="text-sm font-normal text-slate-600">This rupee amount is deducted from the eligible booking.</span><ErrorText>{errors.discount}</ErrorText></label>}
@@ -297,7 +307,7 @@ export function CommercialManagement() {
       {form.style === "FAMILY" && form.familyBenefit !== "FREE" && <label className="grid max-w-sm gap-1 font-semibold">{form.familyBenefit === "PERCENTAGE" ? "Family Discount (%)" : "Family Discount Amount (₹)"}<input aria-label={form.familyBenefit === "PERCENTAGE" ? "Family Discount (%)" : "Family Discount Amount (₹)"} type="number" min="0.01" max={form.familyBenefit === "PERCENTAGE" ? "100" : undefined} step="0.01" value={form.discount} onChange={(event) => setForm({ ...form, discount: event.target.value })} placeholder={form.familyBenefit === "PERCENTAGE" ? "10" : "500"} className="min-h-11 rounded-xl border px-3 font-normal" /><span className="text-sm font-normal text-slate-600">Applied only when the registered family-member requirement is met.</span><ErrorText>{errors.discount}</ErrorText></label>}
       {(form.style === "FREE" || (form.style === "FAMILY" && form.familyBenefit === "FREE")) && <label className="grid max-w-lg gap-1 font-semibold">Get This Therapy FREE<select aria-label="Get This Therapy FREE" value={form.freeTherapy} onChange={(event) => { setErrors((current) => ({ ...current, freeTherapy: undefined })); setForm({ ...form, freeTherapy: event.target.value }); }} className="min-h-12 rounded-xl border px-3 font-normal"><option value="">Select the free therapy</option>{activeTherapies.map((therapy) => <option key={therapy.id} value={therapy.id}>{therapy.name}</option>)}</select><span className="text-sm font-normal text-slate-600">This therapy is added as the free benefit.</span><ErrorText>{errors.freeTherapy}</ErrorText></label>}
 
-      <fieldset><legend className="font-semibold">Offer Validity</legend><div className="mt-2 grid gap-3 sm:grid-cols-2"><label className="grid gap-1">Offer Start Date/Time<input aria-label="Offer Start Date/Time" type="datetime-local" value={form.validFrom} onChange={(event) => { setErrors((current) => ({ ...current, validFrom: undefined })); setForm({ ...form, validFrom: event.target.value }); }} className="min-h-11 rounded-xl border px-3" /><ErrorText>{errors.validFrom}</ErrorText></label><label className="grid gap-1">Offer End Date/Time<input aria-label="Offer End Date/Time" type="datetime-local" value={form.validUntil} onChange={(event) => { setErrors((current) => ({ ...current, validUntil: undefined })); setForm({ ...form, validUntil: event.target.value }); }} className="min-h-11 rounded-xl border px-3" /><ErrorText>{errors.validUntil}</ErrorText></label></div><p className="mt-2 text-sm text-slate-600">The offer automatically stops after the end date and time.</p></fieldset>
+      <fieldset><legend className="font-semibold">Offer Validity</legend><div className="mt-2 grid gap-3 sm:grid-cols-2"><label className="grid gap-1">Start Date<input aria-label="Start Date" type="date" value={form.validFrom} onChange={(event) => { setErrors((current) => ({ ...current, validFrom: undefined })); setForm({ ...form, validFrom: event.target.value }); }} className="min-h-11 rounded-xl border px-3" /><ErrorText>{errors.validFrom}</ErrorText></label><label className="grid gap-1">End Date<input aria-label="End Date" type="date" value={form.validUntil} onChange={(event) => { setErrors((current) => ({ ...current, validUntil: undefined })); setForm({ ...form, validUntil: event.target.value }); }} className="min-h-11 rounded-xl border px-3" /><ErrorText>{errors.validUntil}</ErrorText></label></div><p className="mt-2 text-sm text-slate-600">The offer remains valid throughout the selected end date in Asia/Kolkata.</p></fieldset>
       <label className="grid gap-1 font-semibold">Offer Message (Optional)<textarea aria-label="Offer Message (Optional)" value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} className="rounded-xl border p-3 font-normal" /><span className="text-sm font-normal text-slate-600">This message will be shown to customers.</span></label>
       <aside className="rounded-2xl bg-emerald-50 p-4" aria-label="Offer preview"><p className="text-xs font-bold uppercase tracking-wider">Offer Preview</p><h3 className="mt-1 text-xl font-bold">{form.title || "Your offer name"}</h3><p>{form.style === "FAMILY" ? `Minimum ${form.minimumFamilyMembers} registered family members · ` : ""}{previewBenefit}</p><p>Therapies: {selectedNames || "Select therapies"}</p><p>Valid: {form.validFrom ? displayDate(new Date(form.validFrom).toISOString()) : "Select start"} – {form.validUntil ? displayDate(new Date(form.validUntil).toISOString()) : "Select end"}</p></aside>
       {errors.form && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-800">{errors.form}</p>}

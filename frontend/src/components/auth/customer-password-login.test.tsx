@@ -4,9 +4,24 @@ import { describe, expect, it, vi } from "vitest";
 import { CustomerPasswordLogin } from "./customer-password-login";
 
 const replace = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace, refresh: vi.fn() }), useSearchParams: () => new URLSearchParams("returnTo=%2Fbook-appointment") }));
+let searchParams = "returnTo=%2Fbook-appointment";
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace, refresh: vi.fn() }), useSearchParams: () => new URLSearchParams(searchParams) }));
 
 describe("customer password login", () => {
+  beforeEach(() => { searchParams = "returnTo=%2Fbook-appointment"; replace.mockReset(); vi.restoreAllMocks(); });
+
+  it("shows the post-registration confirmation on the customer login page", () => {
+    searchParams = "registered=1&returnTo=%2Fcustomer";
+    render(<CustomerPasswordLogin />);
+    expect(screen.getByRole("status")).toHaveTextContent("Account created successfully. Please sign in.");
+  });
+
+  it("shows an expired customer-session message without using staff login", () => {
+    searchParams = "reason=expired";
+    render(<CustomerPasswordLogin />);
+    expect(screen.getByRole("status")).toHaveTextContent("Your customer session has expired");
+  });
+
   it("submits mobile and password without issuing OTP", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
     render(<CustomerPasswordLogin />);

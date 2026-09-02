@@ -42,7 +42,7 @@ class TherapyCommercialSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TherapyOption
-        fields = ("id", "name", "slug", "short_description", "detailed_description", "benefits", "default_duration_minutes", "base_price", "is_active", "is_publicly_visible", "display_order", "can_delete", "protected_references")
+        fields = ("id", "name", "slug", "short_description", "detailed_description", "benefits", "default_duration_minutes", "base_price", "is_active", "is_publicly_visible", "is_offer_free_addon", "display_order", "can_delete", "protected_references")
         read_only_fields = ("id", "can_delete", "protected_references")
 
     def get_can_delete(self, value):
@@ -51,10 +51,16 @@ class TherapyCommercialSerializer(serializers.ModelSerializer):
     def get_protected_references(self, value):
         return value.protected_reference_summary()
 
-    def validate_default_duration_minutes(self, value):
-        if value not in (None, 45):
-            raise serializers.ValidationError("Production scheduling uses exactly 45 minutes per therapy.")
-        return 45
+    def validate(self, attrs):
+        offer_only = attrs.get("is_offer_free_addon", getattr(self.instance, "is_offer_free_addon", False))
+        duration = attrs.get("default_duration_minutes", getattr(self.instance, "default_duration_minutes", None))
+        required_duration = 15 if offer_only else 45
+        if duration not in (None, required_duration):
+            raise serializers.ValidationError({
+                "default_duration_minutes": f"{'Offer-only add-ons use' if offer_only else 'Production scheduling uses exactly'} {required_duration} minutes."
+            })
+        attrs["default_duration_minutes"] = required_duration
+        return attrs
 
 
 class TherapyPackageSerializer(serializers.ModelSerializer):
@@ -125,9 +131,16 @@ class CommercialOfferSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"eligible_therapies": "Select therapies from this organization only."})
         if value.is_active and any(not item.is_active for item in therapies):
             raise serializers.ValidationError({"eligible_therapies": "Reactivate the selected therapies before activating this offer."})
+        if any(item.is_offer_free_addon for item in therapies):
+            raise serializers.ValidationError({"eligible_therapies": "Offer-only free add-ons cannot be selected as paid therapies."})
         free_therapy = attrs.get("free_therapy", getattr(self.instance, "free_therapy", None))
         if free_therapy and free_therapy.organization_id != organization_id:
             raise serializers.ValidationError({"free_therapy": "Select a therapy from this organization only."})
+        free_offer = value.offer_type in (CommercialOffer.OfferType.FREE_THERAPY, CommercialOffer.OfferType.FAMILY_FREE)
+        if value.is_active and free_offer and free_therapy and not free_therapy.is_active:
+            raise serializers.ValidationError({"free_therapy": "Reactivate the free therapy before activating this offer."})
+        if free_offer and free_therapy and str(free_therapy.id) in {str(item.id) for item in therapies}:
+            raise serializers.ValidationError({"free_therapy": "The free therapy must be different from the paid therapies."})
         qualifying_package = attrs.get("qualifying_package", getattr(self.instance, "qualifying_package", None))
         if qualifying_package and qualifying_package.organization_id != organization_id:
             raise serializers.ValidationError({"qualifying_package": "Select a package from this organization only."})

@@ -1,5 +1,6 @@
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -63,6 +64,10 @@ def test_family_and_free_addon_eligibility_and_duration():
         calculate_quote(organization=organization, therapy_ids=[first.id], offer_id=family_offer.id)
     assert calculate_quote(organization=organization, therapy_ids=[first.id], offer_id=family_offer.id, family_member=family).final_amount == "800.00"
     free = add_therapy(organization, "plain-massage", 500)
+    first.default_duration_minutes = 60
+    first.save(update_fields=("default_duration_minutes",))
+    free.default_duration_minutes = 30
+    free.save(update_fields=("default_duration_minutes",))
     addon = CommercialOffer.objects.create(organization=organization, title="Free massage", offer_type=CommercialOffer.OfferType.FREE_THERAPY, discount_value=0, free_therapy=free, free_quantity=1)
     addon.eligible_therapies.set([first])
     quote = calculate_quote(organization=organization, therapy_ids=[first.id], offer_id=addon.id)
@@ -91,6 +96,59 @@ def test_expired_future_private_and_cross_tenant_catalog_security(api_client):
     assert api_client.patch(reverse("commercial-therapy-detail", args=[therapy.id]), {"base_price": "1.00"}, format="json", **headers(foreign[0])).status_code == 404
     api_client.force_authenticate(owner)
     assert api_client.patch(reverse("commercial-therapy-detail", args=[therapy.id]), {"base_price": "-1.00"}, format="json", **headers(organization)).status_code == 400
+
+
+def test_offer_only_free_addons_are_private_unbookable_and_valid_offer_benefits(api_client):
+    organization, _, owner, *_values, paid = setup_domain("offer-only-addons")
+    paid.default_duration_minutes = 60
+    paid.save(update_fields=("default_duration_minutes",))
+    leg = TherapyOption.objects.create(
+        organization=organization, name="Leg Massage", slug="leg-massage", base_price=0,
+        default_duration_minutes=15, is_publicly_visible=False, is_offer_free_addon=True,
+    )
+    head = TherapyOption.objects.create(
+        organization=organization, name="Head Massage", slug="head-massage", base_price=0,
+        default_duration_minutes=15, is_publicly_visible=False, is_offer_free_addon=True,
+    )
+    public = api_client.get(reverse("commercial-public"), **headers(organization))
+    assert {item["name"] for item in public.data["therapies"]}.isdisjoint({"Leg Massage", "Head Massage"})
+    for addon in (leg, head):
+        with pytest.raises(ValidationError):
+            calculate_quote(organization=organization, therapy_ids=[addon.id])
+
+    api_client.force_authenticate(owner)
+    listing = api_client.get(reverse("commercial-therapy-list"), **headers(organization))
+    by_name = {item["name"]: item for item in listing.data}
+    assert by_name["Leg Massage"]["is_offer_free_addon"] is True
+    assert by_name["Head Massage"]["is_offer_free_addon"] is True
+    assert by_name["Leg Massage"]["default_duration_minutes"] == 15
+    assert by_name["Head Massage"]["default_duration_minutes"] == 15
+    for addon, offer_type in ((leg, "FREE_THERAPY"), (head, "FAMILY_FREE")):
+        payload = {
+            "title": f"Free {addon.name}", "offer_type": offer_type,
+            "eligible_therapies": [str(paid.id)], "free_therapy": str(addon.id),
+            "family_required": offer_type == "FAMILY_FREE", "minimum_family_members": 2,
+        }
+        created = api_client.post(reverse("commercial-offer-list"), payload, format="json", **headers(organization))
+        assert created.status_code == 201
+        saved = CommercialOffer.objects.get(pk=created.data["id"])
+        assert saved.free_therapy_id == addon.id
+
+    non_family = CommercialOffer.objects.get(title="Free Leg Massage")
+    quote = calculate_quote(organization=organization, therapy_ids=[paid.id], offer_id=non_family.id)
+    assert quote.final_amount == str(Decimal(paid.base_price).quantize(Decimal("0.01")))
+    assert quote.duration_minutes == 75
+    assert quote.free_benefits == [{"therapy_id": str(leg.id), "therapy_name": "Leg Massage", "quantity": 1, "unit_price": "0.00", "duration_minutes": 15}]
+    assert quote.snapshot()["free_benefits"][0] == quote.free_benefits[0]
+
+    head_offer = CommercialOffer.objects.create(
+        organization=organization, title="Head duration", offer_type="FREE_THERAPY", free_therapy=head,
+    )
+    head_offer.eligible_therapies.set([paid])
+    head_quote = calculate_quote(organization=organization, therapy_ids=[paid.id], offer_id=head_offer.id)
+    assert head_quote.duration_minutes == 75
+    assert head_quote.free_benefits[0]["unit_price"] == "0.00"
+    assert head_quote.free_benefits[0]["duration_minutes"] == 15
 
 
 def test_secure_booking_recalculates_offer_and_preserves_snapshot(api_client):
@@ -302,6 +360,27 @@ def test_offer_uses_service_date_and_safe_delete_preserves_used_offer(api_client
     )
     assert quoted_inside.data["final_amount"] == "900.00"
     assert quoted_outside.data["final_amount"] == "1000.00"
+    explicitly_outside = api_client.post(
+        reverse("commercial-quote"),
+        {"therapy_ids": [str(therapy.id)], "offer_id": str(offer.id), "service_at": outside.isoformat()},
+        format="json", **headers(organization),
+    )
+    assert explicitly_outside.status_code == 400
+    assert "offer" in explicitly_outside.data
+
+    clinic_tz = ZoneInfo("Asia/Kolkata")
+    offer.valid_from = datetime(2026, 9, 1, 0, 0, tzinfo=clinic_tz)
+    offer.valid_until = datetime(2026, 9, 16, 0, 0, tzinfo=clinic_tz)
+    offer.save(update_fields=("valid_from", "valid_until", "updated_at"))
+    final_day = datetime(2026, 9, 15, 23, 59, tzinfo=clinic_tz)
+    exclusive_boundary = datetime(2026, 9, 16, 0, 0, tzinfo=clinic_tz)
+    assert calculate_quote(
+        organization=organization, therapy_ids=[therapy.id], offer_id=offer.id, at=final_day
+    ).final_amount == "900.00"
+    with pytest.raises(ValidationError):
+        calculate_quote(
+            organization=organization, therapy_ids=[therapy.id], offer_id=offer.id, at=exclusive_boundary
+        )
 
     api_client.force_authenticate(owner)
     listing = api_client.get(reverse("commercial-offer-list"), **headers(organization))

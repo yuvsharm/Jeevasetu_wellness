@@ -25,11 +25,12 @@ class TherapyOption(models.Model):
         validators=[MinValueValidator(0)],
     )
     is_publicly_visible = models.BooleanField(default=True)
+    is_offer_free_addon = models.BooleanField(default=False)
     display_order = models.PositiveSmallIntegerField(default=0)
     default_duration_minutes = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
-        validators=[MinValueValidator(30), MaxValueValidator(180)],
+        validators=[MinValueValidator(15), MaxValueValidator(180)],
     )
 
     class Meta:

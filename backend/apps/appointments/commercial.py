@@ -34,6 +34,10 @@ def _money(value):
     return Decimal(value).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
+def _therapy_duration(therapy):
+    return therapy.default_duration_minutes or 45
+
+
 def calculate_quote(*, organization, therapy_ids, package_id=None, offer_id=None, family_member=None, at=None):
     at = at or timezone.now()
     unique_ids = list(dict.fromkeys(str(value) for value in therapy_ids))
@@ -132,12 +136,17 @@ def calculate_quote(*, organization, therapy_ids, package_id=None, offer_id=None
         elif offer.offer_type == CommercialOffer.OfferType.FIXED_BUNDLE:
             final = _money(offer.fixed_price)
         elif offer.offer_type == CommercialOffer.OfferType.FREE_THERAPY:
-            free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": offer.free_quantity})
+            free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": offer.free_quantity, "unit_price": "0.00", "duration_minutes": _therapy_duration(offer.free_therapy)})
         elif offer.offer_type == CommercialOffer.OfferType.FAMILY_FREE:
-            free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": 1})
+            free_benefits.append({"therapy_id": str(offer.free_therapy_id), "therapy_name": offer.free_therapy.name, "quantity": 1, "unit_price": "0.00", "duration_minutes": _therapy_duration(offer.free_therapy)})
 
     discount = max(Decimal("0.00"), _money(regular - final))
-    duration_count = len(therapies) + sum(item["quantity"] for item in free_benefits)
+    duration_minutes = sum(_therapy_duration(item) for item in therapies)
+    if offer and free_benefits:
+        duration_minutes += sum(
+            _therapy_duration(offer.free_therapy) * item["quantity"]
+            for item in free_benefits
+        )
     return CommercialQuote(
         therapy_ids=[str(item.id) for item in therapies],
         therapy_names=[item.name for item in therapies],
@@ -151,5 +160,5 @@ def calculate_quote(*, organization, therapy_ids, package_id=None, offer_id=None
         discount_amount=str(discount),
         final_amount=str(_money(final)),
         free_benefits=free_benefits,
-        duration_minutes=duration_count * 45,
+        duration_minutes=duration_minutes,
     )

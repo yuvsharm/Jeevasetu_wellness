@@ -56,14 +56,15 @@ describe("customer registration", () => {
     expect(JSON.parse(String(verifyCall?.[1]?.body))).toMatchObject({ verification_id: "verification-1", mobile_number: "9876543210", access_token: "header.payload.signature" });
   });
 
-  it("creates the customer with signed proof and resumes the intended booking", async () => {
+  it("creates the customer with signed proof and sends them to customer login", async () => {
     const fetchMock = providerFetch();
     render(<CustomerRegistration />);
     await reachSecureStep();
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "Asha-Strong-Password-2026!" } });
     fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "Asha-Strong-Password-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Account" }));
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/book-appointment?therapy=therapy-1"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/customer-login?registered=1&returnTo=%2Fbook-appointment%3Ftherapy%3Dtherapy-1"));
+    expect(replace).not.toHaveBeenCalledWith(expect.stringMatching(/^\/login/));
     const call = fetchMock.mock.calls.find(([input]) => String(input) === "/api/session/customer-register");
     const body = JSON.parse(String(call?.[1]?.body));
     expect(body).toMatchObject({ booking_verification_token: "server-signed-mobile-proof", mobile_number: "9876543210", email: "asha@example.com", password: "Asha-Strong-Password-2026!", confirm_password: "Asha-Strong-Password-2026!" });

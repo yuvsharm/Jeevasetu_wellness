@@ -30,10 +30,10 @@ export function ProtectedPage({ role, title, children }: { role: Role; title: st
   }, [needsConfirmation, refetchSession, sessionPending]);
   useEffect(() => {
     if (needsConfirmation && !confirmed) return;
-    if (session.error && status === 401) router.replace("/login?reason=expired");
+    if (session.error && status === 401) router.replace(role === "CUSTOMER" ? "/customer-login?reason=expired" : "/login?reason=expired");
     else if (session.error && (status === 403 || status === 404)) router.replace("/unauthorized");
     else if (currentSession && !allowed) router.replace("/unauthorized");
-  }, [allowed, confirmed, currentSession, needsConfirmation, router, session.error, status]);
+  }, [allowed, confirmed, currentSession, needsConfirmation, role, router, session.error, status]);
   if (session.isPending || (needsConfirmation && (!confirmed || session.isFetching))) return <LoadingState />;
   if (session.error) return <main className="mx-auto max-w-xl p-8"><StatusPanel tone="error">We could not load your workspace. <button className="font-bold underline" onClick={() => session.refetch()}>Retry</button></StatusPanel></main>;
   if (!currentSession || !allowed) return <LoadingState label="Confirming access…" />;

@@ -17,7 +17,8 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
       ...init,
       headers: { "Content-Type": "application/json", ...init?.headers },
     });
-  } catch {
+  } catch (error) {
+    if (init?.signal?.aborted) throw error;
     throw new ClientApiError(503, undefined, "The service is unavailable. Check your connection and retry.");
   }
   if (!response.ok) {

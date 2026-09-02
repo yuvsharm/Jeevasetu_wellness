@@ -62,6 +62,19 @@ describe("protected routing", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/unauthorized"));
   });
 
+  it("redirects an expired customer page to customer login", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "expired" }), { status: 401 }));
+    render(wrapper(<ProtectedPage role="CUSTOMER" title="Customer"><p>Customer workspace</p></ProtectedPage>));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/customer-login?reason=expired"));
+    expect(replace).not.toHaveBeenCalledWith("/login?reason=expired");
+  });
+
+  it("keeps expired staff pages on staff login", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "expired" }), { status: 401 }));
+    render(wrapper(<ProtectedPage role="OWNER" title="Owner"><p>Owner workspace</p></ProtectedPage>));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?reason=expired"));
+  });
+
   it("redirects a roleless applicant from dashboard to their application", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(applicantSession()), { status: 200 }));
     render(wrapper(<DashboardRedirect />));

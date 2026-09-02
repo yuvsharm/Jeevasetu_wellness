@@ -6,6 +6,8 @@ import { CommercialManagement } from "@/components/appointments/commercial-manag
 const therapies = [
   { id: "therapy-1", name: "Kati Basti", slug: "kati-basti", short_description: "Focused care", benefits: [], default_duration_minutes: 45, base_price: "1200.00", is_active: true, is_publicly_visible: true, display_order: 1 },
   { id: "therapy-2", name: "Abhyang", slug: "abhyang", short_description: "Full body care", benefits: [], default_duration_minutes: 45, base_price: "1500.00", is_active: true, is_publicly_visible: true, display_order: 2 },
+  { id: "therapy-leg", name: "Leg Massage", slug: "leg-massage", short_description: "Promotional add-on", benefits: [], default_duration_minutes: 15, base_price: "0.00", is_active: true, is_publicly_visible: false, is_offer_free_addon: true, display_order: 900 },
+  { id: "therapy-head", name: "Head Massage", slug: "head-massage", short_description: "Promotional add-on", benefits: [], default_duration_minutes: 15, base_price: "0.00", is_active: true, is_publicly_visible: false, is_offer_free_addon: true, display_order: 901 },
 ];
 const offer = {
   id: "offer-1", title: "September Offer", promotional_text: "", offer_type: "PERCENTAGE",
@@ -67,7 +69,7 @@ describe("CommercialManagement", () => {
     expect(screen.getByLabelText("Discount Percentage (%)")).toBeInTheDocument();
     expect(screen.queryByLabelText("Discount Amount (₹)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Get This Therapy FREE")).not.toBeInTheDocument();
-    expect(screen.queryByText(/minimum therapy count/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Minimum Eligible Therapies")).toBeInTheDocument();
     expect(screen.queryByText(/maximum therapy count/i)).not.toBeInTheDocument();
 
     choose("Fixed ₹ Discount");
@@ -83,14 +85,20 @@ describe("CommercialManagement", () => {
     expect(screen.queryByLabelText("Combo Discount (%)")).not.toBeInTheDocument();
 
     choose("Buy Therapies + Get Therapy Free");
-    expect(screen.getByLabelText("Get This Therapy FREE")).toBeInTheDocument();
+    const buyFreeSelector = screen.getByLabelText("Get This Therapy FREE");
+    expect(within(buyFreeSelector).getByRole("option", { name: "Leg Massage" })).toBeInTheDocument();
+    expect(within(buyFreeSelector).getByRole("option", { name: "Head Massage" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Leg Massage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Head Massage" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Discount Amount (₹)")).not.toBeInTheDocument();
 
     choose("Family Offer");
     expect(screen.getByLabelText("Minimum Family Members")).toBeInTheDocument();
     expect(screen.getByLabelText("Family Discount (%)")).toBeInTheDocument();
     choose("Free therapy");
-    expect(screen.getByLabelText("Get This Therapy FREE")).toBeInTheDocument();
+    const familyFreeSelector = screen.getByLabelText("Get This Therapy FREE");
+    expect(within(familyFreeSelector).getByRole("option", { name: "Leg Massage" })).toBeInTheDocument();
+    expect(within(familyFreeSelector).getByRole("option", { name: "Head Massage" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Family Discount (%)")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close Create Form" }));
     expect(screen.queryByLabelText("Offer Name")).not.toBeInTheDocument();
@@ -104,7 +112,7 @@ describe("CommercialManagement", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Offer" }));
     expect(await screen.findByText("Please select at least one therapy.")).toHaveAttribute("role", "alert");
     expect(screen.getByText("Please enter the discount percentage.")).toHaveAttribute("role", "alert");
-    expect(screen.getByText("Please select the offer start date and time.")).toHaveAttribute("role", "alert");
+    expect(screen.getByText("Please select the offer start date.")).toHaveAttribute("role", "alert");
   });
 
   it("creates an offer, shows progress and reports success", async () => {
@@ -116,8 +124,8 @@ describe("CommercialManagement", () => {
     fireEvent.change(await screen.findByLabelText("Offer Name"), { target: { value: "September Offer" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Kati Basti" }));
     fireEvent.change(screen.getByLabelText("Discount Percentage (%)"), { target: { value: "10" } });
-    fireEvent.change(screen.getByLabelText("Offer Start Date/Time"), { target: { value: "2027-09-01T08:00" } });
-    fireEvent.change(screen.getByLabelText("Offer End Date/Time"), { target: { value: "2027-09-15T23:59" } });
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2027-09-01" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2027-09-15" } });
     const createButton = screen.getByRole("button", { name: "Create Offer" });
     fireEvent.click(createButton);
     fireEvent.click(createButton);
@@ -130,6 +138,12 @@ describe("CommercialManagement", () => {
     expect(screen.getByRole("checkbox", { name: "Kati Basti" })).not.toBeChecked();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/commercial/offers", expect.objectContaining({ method: "POST" })));
     expect(fetchMock.mock.calls.filter(([input, init]) => String(input) === "/api/commercial/offers" && init?.method === "POST")).toHaveLength(1);
+    const createCall = fetchMock.mock.calls.find(([input, init]) => String(input) === "/api/commercial/offers" && init?.method === "POST");
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      valid_from: "2027-08-31T18:30:00.000Z",
+      valid_until: "2027-09-15T18:30:00.000Z",
+      minimum_therapy_count: 1,
+    });
     expect(screen.getAllByText("September Offer")).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "Archived Offers" })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByLabelText("Offer Name")).not.toBeInTheDocument(), { timeout: 3500 });
