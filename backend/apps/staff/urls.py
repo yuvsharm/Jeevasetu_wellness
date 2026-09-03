@@ -7,6 +7,7 @@ from apps.staff.views import (
     StaffDetailView,
     StaffListCreateView,
     StaffOptionsView,
+    StaffMobileAvailabilityView,
     StaffStatusView,
 )
 
@@ -22,4 +23,5 @@ urlpatterns = [
     path("me/", MyStaffProfileView.as_view(), name="staff-me"),
     path("me/availability/", AvailabilityView.as_view(), name="staff-availability"),
     path("options/", StaffOptionsView.as_view(), name="staff-options"),
+    path("mobile-availability/", StaffMobileAvailabilityView.as_view(), name="staff-mobile-availability"),
 ]

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
 import { requestJson } from "@/lib/api/client";
 import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
 
@@ -35,7 +36,6 @@ export function CustomerRegistration() {
   const [otp, setOtp] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [visible, setVisible] = useState({ password: false, confirm: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -91,6 +91,7 @@ export function CustomerRegistration() {
   async function createAccount(event: React.FormEvent) {
     event.preventDefault();
     if (!verificationToken) { setError("Please verify your mobile number again."); invalidateVerification(); return; }
+    if (!isStrongPassword(password)) { setError("Password does not meet all requirements."); return; }
     if (password !== confirmPassword) { setError("Passwords do not match."); return; }
     setBusy(true); setError("");
     try {
@@ -138,8 +139,8 @@ export function CustomerRegistration() {
     </>}
     {stage === "secure" && <form className="space-y-5" onSubmit={createAccount}>
       <p role="status" className="rounded-xl bg-emerald-50 p-3 font-semibold text-emerald-900">Mobile number verified</p>
-      {(["password", "confirm"] as const).map((name) => <label key={name} className="grid gap-2 font-semibold text-slate-800">{name === "password" ? "Password" : "Confirm password"}<span className="flex rounded-xl border border-slate-300 bg-white focus-within:ring-2 focus-within:ring-emerald-600"><input type={visible[name] ? "text" : "password"} autoComplete="new-password" value={name === "password" ? password : confirmPassword} onChange={(event) => name === "password" ? setPassword(event.target.value) : setConfirmPassword(event.target.value)} className="min-h-12 min-w-0 flex-1 rounded-xl px-4 outline-none" required /><button type="button" onClick={() => setVisible((current) => ({ ...current, [name]: !current[name] }))} className="px-4 text-sm font-semibold text-emerald-800" aria-label={visible[name] ? `Hide ${name === "password" ? "password" : "confirmation password"}` : `Show ${name === "password" ? "password" : "confirmation password"}`}>{visible[name] ? "Hide" : "Show"}</button></span></label>)}
-      <button disabled={busy || !password || !confirmPassword} className="button-primary w-full disabled:opacity-50">{busy ? "Creating account…" : "Create Account"}</button>
+      <PasswordCreationFields password={password} confirmPassword={confirmPassword} onPasswordChange={setPassword} onConfirmPasswordChange={setConfirmPassword} />
+      <button disabled={busy || !isStrongPassword(password) || password !== confirmPassword} className="button-primary w-full disabled:opacity-50">{busy ? "Creating account…" : "Create Account"}</button>
       <button type="button" disabled={busy} onClick={() => invalidateVerification()} className="min-h-11 w-full font-semibold text-emerald-800">Back to Step 1</button>
     </form>}
     <p className="text-center text-sm text-slate-600">Already registered? <Link className="font-semibold text-emerald-800" href={`/customer-login?returnTo=${encodeURIComponent(returnTo)}`}>Customer Login</Link></p>

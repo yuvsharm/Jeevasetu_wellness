@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { useForm, type FieldValues, type Path, type UseFormSetError } from "react-hook-form";
+import { useForm, useWatch, type FieldValues, type Path, type UseFormSetError } from "react-hook-form";
 import type { ZodType } from "zod";
 
+import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
 import { StatusPanel } from "@/components/feedback/status-panel";
 import { FormField } from "@/components/forms/form-field";
 import { ClientApiError, requestJson } from "@/lib/api/client";
@@ -106,6 +107,7 @@ export function RegistrationForm() {
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
   const form = useForm<RegistrationInput>({ defaultValues: { first_name: "", last_name: "", mobile_number: "", email: "", password: "", confirm_password: "", consent: false } });
+  const [password = "", confirmation = ""] = useWatch({ control: form.control, name: ["password", "confirm_password"] });
   const submit = form.handleSubmit(async (values) => {
     setMessage("");
     const payload = validate(registrationSchema, values, form.setError);
@@ -129,8 +131,7 @@ export function RegistrationForm() {
       </div>
       <FormField label="Mobile number" type="tel" autoComplete="tel" required hint="Use an international number, for example +919876543210." {...form.register("mobile_number")} error={form.formState.errors.mobile_number?.message} />
       <FormField label="Email" type="email" autoComplete="email" required {...form.register("email")} error={form.formState.errors.email?.message} />
-      <FormField label="Password" type="password" autoComplete="new-password" required hint="Use 12+ characters with upper/lowercase letters and a number." {...form.register("password")} error={form.formState.errors.password?.message} />
-      <FormField label="Confirm password" type="password" autoComplete="new-password" required {...form.register("confirm_password")} error={form.formState.errors.confirm_password?.message} />
+      <PasswordCreationFields password={password} confirmPassword={confirmation} onPasswordChange={(value) => form.setValue("password", value, { shouldValidate: true })} onConfirmPasswordChange={(value) => form.setValue("confirm_password", value, { shouldValidate: true })} passwordError={form.formState.errors.password?.message} confirmError={form.formState.errors.confirm_password?.message} />
       <div>
         <label className="flex min-h-11 items-start gap-3 text-sm text-slate-700">
           <input type="checkbox" className="mt-1 size-5 accent-emerald-700" {...form.register("consent")} />
@@ -138,7 +139,7 @@ export function RegistrationForm() {
         </label>
         {form.formState.errors.consent?.message && <p className="mt-2 text-sm font-medium text-red-700" role="alert">{form.formState.errors.consent.message}</p>}
       </div>
-      <button className={submitClass} disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? "Creating account…" : "Create account"}</button>
+      <button className={submitClass} disabled={form.formState.isSubmitting || !isStrongPassword(password) || password !== confirmation}>{form.formState.isSubmitting ? "Creating account…" : "Create account"}</button>
       <p className="text-center text-sm text-slate-600">Already registered? <Link href={loginHref} className={linkClass}>Sign in</Link></p>
     </form>
   );
@@ -165,6 +166,7 @@ export function ResetPasswordForm() {
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
   const form = useForm<ResetPasswordInput>({ defaultValues: { uid: search.get("uid") ?? "", token: search.get("token") ?? "", new_password: "", confirm_password: "" } });
+  const [password = "", confirmation = ""] = useWatch({ control: form.control, name: ["new_password", "confirm_password"] });
   const submit = form.handleSubmit(async (values) => {
     const payload = validate(resetPasswordSchema, values, form.setError);
     if (!payload) return;
@@ -172,5 +174,5 @@ export function ResetPasswordForm() {
     catch (error) { applyApiError(error, form.setError, setMessage); }
   });
   if (success) return <StatusPanel tone="success">Password reset completed. <Link className={linkClass} href="/login">Sign in with your new password</Link>.</StatusPanel>;
-  return <form onSubmit={submit} className="space-y-5" noValidate>{message && <StatusPanel tone="error">{message}</StatusPanel>}<FormField label="Account reset identifier" {...form.register("uid")} error={form.formState.errors.uid?.message} /><FormField label="Reset token" autoComplete="one-time-code" {...form.register("token")} error={form.formState.errors.token?.message} /><FormField label="New password" type="password" autoComplete="new-password" {...form.register("new_password")} error={form.formState.errors.new_password?.message} /><FormField label="Confirm new password" type="password" autoComplete="new-password" {...form.register("confirm_password")} error={form.formState.errors.confirm_password?.message} /><button className={submitClass} disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? "Resetting…" : "Reset password"}</button></form>;
+  return <form onSubmit={submit} className="space-y-5" noValidate>{message && <StatusPanel tone="error">{message}</StatusPanel>}<FormField label="Account reset identifier" {...form.register("uid")} error={form.formState.errors.uid?.message} /><FormField label="Reset token" autoComplete="one-time-code" {...form.register("token")} error={form.formState.errors.token?.message} /><PasswordCreationFields password={password} confirmPassword={confirmation} onPasswordChange={(value) => form.setValue("new_password", value, { shouldValidate: true })} onConfirmPasswordChange={(value) => form.setValue("confirm_password", value, { shouldValidate: true })} passwordLabel="New password" confirmLabel="Confirm new password" passwordError={form.formState.errors.new_password?.message} confirmError={form.formState.errors.confirm_password?.message}/><button className={submitClass} disabled={form.formState.isSubmitting || !isStrongPassword(password) || password !== confirmation}>{form.formState.isSubmitting ? "Resetting…" : "Reset password"}</button></form>;
 }

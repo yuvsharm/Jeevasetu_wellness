@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
-from apps.accounts.models import Role, RoleAssignment
+from apps.accounts.models import Role, RoleAssignment, User
 from apps.accounts.permissions import IsEnabledAuthenticated, IsOwnerOrManager, IsPhysiotherapist
 from apps.accounts.role_policy import activate_role, actor_role_scope, disable_role
 from apps.accounts.services import issue_password_reset
@@ -215,3 +215,13 @@ class StaffOptionsView(TenantMixin, GenericAPIView):
                 ).data,
             }
         )
+
+
+class StaffMobileAvailabilityView(TenantMixin, GenericAPIView):
+    def post(self, request):
+        mobile = str(request.data.get("mobile", "")).strip()
+        if len(mobile) != 13 or not mobile.startswith("+91") or mobile[3] not in "6789" or not mobile[3:].isdigit():
+            raise ValidationError({"mobile": "Enter mobile number in +91XXXXXXXXXX format."})
+        if User.objects.filter(mobile_number=mobile).exists():
+            raise ValidationError({"mobile": "This mobile number is already registered with JeevaSetu."})
+        return Response({"available": True})

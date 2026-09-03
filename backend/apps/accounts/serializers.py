@@ -183,6 +183,30 @@ class CustomerRegistrationSerializer(serializers.Serializer):
         return attrs
 
 
+class PractitionerRegistrationSerializer(serializers.Serializer):
+    booking_verification_token = serializers.CharField(
+        write_only=True, trim_whitespace=False, max_length=4096
+    )
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    full_name = serializers.CharField(max_length=160)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs.pop("confirm_password"):
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        names = attrs["full_name"].strip().split(maxsplit=1)
+        candidate = User(
+            first_name=names[0],
+            last_name=names[1] if len(names) > 1 else "",
+            email=normalize_email_address(attrs.get("email", "")),
+            mobile_number=f"+91{attrs['mobile_number']}",
+        )
+        password_validation.validate_password(attrs["password"], candidate)
+        attrs["email"] = candidate.email
+        return attrs
+
 class CustomerPasswordLoginSerializer(serializers.Serializer):
     mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
     password = serializers.CharField(write_only=True, trim_whitespace=False)

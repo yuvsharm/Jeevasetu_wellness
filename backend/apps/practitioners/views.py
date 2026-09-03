@@ -1,6 +1,7 @@
 import mimetypes
 from pathlib import Path
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Avg, Count, Q
 from django.http import FileResponse
 from django.utils import timezone
@@ -448,6 +449,9 @@ class PublicPractitionerListView(generics.ListAPIView):
                 is_publicly_visible=True,
                 user__is_active=True,
                 user__is_enabled=True,
+                user__role_assignments__organization=organization,
+                user__role_assignments__role="PHYSIOTHERAPIST",
+                user__role_assignments__is_active=True,
             )
             .annotate(
                 average_rating=Avg(
@@ -464,8 +468,12 @@ class PublicPractitionerListView(generics.ListAPIView):
                     distinct=True,
                 ),
             )
-            .select_related("user", "source_application")
-            .prefetch_related("source_application__competencies__therapy")
+            .select_related("user", "source_application", "staff_profile")
+            .prefetch_related(
+                "source_application__competencies__therapy",
+                "staff_profile__therapy_competencies",
+            )
+            .distinct()
         )
 
 
@@ -483,12 +491,18 @@ class PublicPractitionerPhotoView(generics.GenericAPIView):
 
     def get(self, request, pk):
         profile = PublicPractitionerListView.get_queryset(self).filter(pk=pk).first()
-        if profile is None or not profile.source_application.profile_photo:
+        if profile is None:
             raise NotFound("Photo is unavailable.")
-        profile.source_application.profile_photo.open("rb")
+        try:
+            photo = profile.source_application.profile_photo
+        except ObjectDoesNotExist:
+            photo = profile.staff_profile.profile_photo if profile.staff_profile_id else None
+        if not photo:
+            raise NotFound("Photo is unavailable.")
+        photo.open("rb")
         return FileResponse(
-            profile.source_application.profile_photo,
+            photo,
             content_type=profile_photo_content_type(
-                profile.source_application.profile_photo.name
+                photo.name
             ),
         )

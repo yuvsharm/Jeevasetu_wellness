@@ -2,10 +2,11 @@ import { z } from "zod";
 
 const strongPassword = z
   .string()
-  .min(12, "Use at least 12 characters.")
+  .min(8, "Use at least 8 characters.")
   .regex(/[a-z]/, "Include a lowercase letter.")
   .regex(/[A-Z]/, "Include an uppercase letter.")
-  .regex(/[0-9]/, "Include a number.");
+  .regex(/[0-9]/, "Include a number.")
+  .regex(/[^A-Za-z0-9]/, "Include a special character.");
 
 export const loginSchema = z.object({
   identifier: z.string().trim().min(1, "Enter your email or mobile number."),

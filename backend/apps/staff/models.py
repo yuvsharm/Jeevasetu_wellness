@@ -69,19 +69,23 @@ class StaffProfile(models.Model):
     )
     profile_photo = models.FileField(upload_to="staff/profile-photos/%Y/%m/", blank=True)
     gender = models.CharField(max_length=24, choices=Gender.choices)
-    date_of_birth = models.DateField()
+    date_of_birth = models.DateField(null=True, blank=True)
     qualification = models.CharField(max_length=255)
     registration_number = models.CharField(max_length=120, blank=True)
     experience_years = models.PositiveSmallIntegerField(validators=[MaxValueValidator(80)])
+    experience_months = models.PositiveSmallIntegerField(default=0, validators=[MaxValueValidator(11)])
     specializations = models.ManyToManyField(
         Specialization, blank=True, related_name="staff_profiles"
+    )
+    therapy_competencies = models.ManyToManyField(
+        "appointments.TherapyOption", blank=True, related_name="competent_staff_profiles"
     )
     languages_known = models.JSONField(default=list)
     alternate_mobile = models.CharField(
         max_length=10, blank=True, validators=[RegexValidator(r"^[6-9]\d{9}$")]
     )
     emergency_contact = models.CharField(
-        max_length=10, validators=[RegexValidator(r"^[6-9]\d{9}$")]
+        max_length=10, blank=True, validators=[RegexValidator(r"^[6-9]\d{9}$")]
     )
     current_address = models.CharField(max_length=500)
     city = models.CharField(max_length=120)

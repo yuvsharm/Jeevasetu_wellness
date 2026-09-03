@@ -91,7 +91,7 @@ describe("protected routing", () => {
   it("returns a truly expired applicant session to login with the application return URL", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "expired" }), { status: 401 }));
     render(wrapper(<ApplicantPage><p>Application</p></ApplicantPage>));
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?reason=expired&returnTo=%2Fpractitioner-application"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/therapist-login?reason=expired&returnTo=%2Fpractitioner-application"));
   });
 
   it("denies an applicant without an operational role from protected dashboards", async () => {

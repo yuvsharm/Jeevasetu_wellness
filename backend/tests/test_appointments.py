@@ -1,9 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, time, timedelta
 from unittest.mock import patch
 
 import pytest
+from django.db import close_old_connections, connection, connections
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.accounts.models import Role, RoleAssignment, User
 from apps.appointments.models import AppointmentRequest, BookingPhoneVerification, ClinicOperatingHours, TherapyOption
@@ -147,6 +150,82 @@ def test_authenticated_booking_requires_customer_not_therapist_availability_or_s
     assert set(request_value.requested_therapies.values_list("id", flat=True)) == {secondary.id}
     assert BookingPhoneVerification.objects.count() == 0
     assert api_client.post(url, data, format="json", **headers).status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_customer_requests_allow_distinct_customers_and_deduplicate_retries():
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL concurrency verification runs separately.")
+    organization, first_customer, therapy = setup_identity(Role.CUSTOMER)
+    clinic = Clinic.objects.get(organization=organization)
+    second_customer = User.objects.create_user(
+        username="customer-concurrent-second",
+        email="customer-concurrent-second@example.com",
+        mobile_number="+919876543211",
+        password="Safe-test-password-1",
+    )
+    membership = OrganizationMembership.objects.create(
+        user=second_customer, organization=organization
+    )
+    RoleAssignment.objects.create(
+        user=second_customer,
+        organization=organization,
+        organization_membership=membership,
+        role=Role.CUSTOMER,
+    )
+    second_profile = PatientProfile.objects.create(
+        organization=organization,
+        user=second_customer,
+        clinic=clinic,
+        full_name="TEST Concurrent Customer",
+        mobile_number="9876543211",
+        gender="FEMALE",
+        age=35,
+        emergency_contact_name="TEST Contact",
+        emergency_contact_relationship="Friend",
+        emergency_contact_mobile="9876543212",
+    )
+    PatientAddress.objects.create(
+        patient=second_profile,
+        address_line_1="TEST Concurrent Address",
+        city="Meerut",
+        region="Uttar Pradesh",
+        pin_code="250004",
+        is_primary=True,
+    )
+    request_data = authenticated_payload(therapy)
+
+    def submit(customer):
+        close_old_connections()
+        client = APIClient()
+        client.force_authenticate(customer)
+        try:
+            response = client.post(
+                reverse("quick-appointment-create"),
+                request_data,
+                format="json",
+                **tenant(organization.slug),
+            )
+            return response.status_code
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        distinct_results = list(executor.map(submit, (first_customer, second_customer)))
+    assert sorted(distinct_results) == [201, 201]
+    assert AppointmentRequest.objects.filter(organization=organization).count() == 2
+
+    AppointmentRequest.objects.filter(organization=organization).update(
+        status=AppointmentRequest.Status.CANCELLED
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        retry_results = list(executor.map(submit, (first_customer, first_customer)))
+    assert sorted(retry_results) == [201, 400]
+    assert AppointmentRequest.objects.filter(
+        organization=organization,
+        creator=first_customer,
+        status=AppointmentRequest.Status.PENDING,
+    ).count() == 1
 
 
 def test_authenticated_booking_rejects_invalid_time_without_otp(api_client):

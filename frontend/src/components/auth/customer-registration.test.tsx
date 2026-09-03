@@ -82,10 +82,10 @@ describe("customer registration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show password" }));
     expect(password).toHaveAttribute("type", "text");
     expect(confirmation).toHaveAttribute("type", "password");
-    fireEvent.change(password, { target: { value: "first-password" } });
-    fireEvent.change(confirmation, { target: { value: "other-password" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create Account" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Passwords do not match.");
+    fireEvent.change(password, { target: { value: "Strong1!" } });
+    fireEvent.change(confirmation, { target: { value: "Other2!x" } });
+    expect(screen.getByText("✕ Passwords do not match")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Account" })).toBeDisabled();
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/session/customer-register")).toBe(false);
   });
 

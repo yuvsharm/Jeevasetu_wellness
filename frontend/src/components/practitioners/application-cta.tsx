@@ -9,12 +9,14 @@ const labels: Record<string, string> = { DRAFT:"Continue application", SUBMITTED
 
 export function ApplicationCta() {
   const [application, setApplication] = useState<PractitionerApplication | null>(null);
+  const [signedIn, setSignedIn] = useState(false);
   useEffect(() => {
     fetch("/api/practitioners/me", { cache:"no-store" })
-      .then(response => response.ok ? response.json() : [])
+      .then(response => { setSignedIn(response.ok); return response.ok ? response.json() : []; })
       .then((items: PractitionerApplication[]) => setApplication(items.find(item => !["REJECTED","WITHDRAWN"].includes(item.status)) ?? null))
       .catch(() => setApplication(null));
   }, []);
   const approved = application?.status === "APPROVED";
-  return <Link href={approved?"/physiotherapist":"/practitioner-application"} className="button-gold mt-7">{approved?"Go to practitioner dashboard":application?(labels[application.status]??"View application"):"Start application"}</Link>;
+  const href = approved ? "/physiotherapist" : signedIn ? "/practitioner-application" : "/therapist-register";
+  return <Link href={href} className="button-gold mt-7">{approved?"Go to practitioner dashboard":application?(labels[application.status]??"View application"):"Start application"}</Link>;
 }

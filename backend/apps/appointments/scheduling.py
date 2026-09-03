@@ -95,9 +95,9 @@ def ensure_request_practitioner_eligible(*, source, physiotherapist, start, end)
             *source.requested_therapies.values_list("id", flat=True),
         }
         verified_ids = set(
-            profile.source_application.competencies.filter(
-                therapy_id__in=required_ids, verification_status="VERIFIED"
-            ).values_list("therapy_id", flat=True)
+            physiotherapist.therapy_competencies.filter(id__in=required_ids).values_list(
+                "id", flat=True
+            )
         )
         if not required_ids.issubset(verified_ids):
             raise ValidationError("The selected Physiotherapist is missing a required therapy competency.")

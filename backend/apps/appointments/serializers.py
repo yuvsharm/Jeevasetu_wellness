@@ -273,15 +273,27 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
 
     def validate_therapy(self, value):
         organization = self.context["request"].organization
-        if not value.is_active or value.organization_id != organization.id:
-            raise serializers.ValidationError("Select an active therapy.")
+        if (
+            not value.is_active
+            or not value.is_publicly_visible
+            or value.is_offer_free_addon
+            or value.organization_id != organization.id
+        ):
+            raise serializers.ValidationError("Select an available bookable therapy.")
         return value
 
     def validate_requested_therapies(self, value):
         organization = self.context["request"].organization
         for therapy in value:
-            if not therapy.is_active or therapy.organization_id != organization.id:
-                raise serializers.ValidationError("Select only active therapies in this organization.")
+            if (
+                not therapy.is_active
+                or not therapy.is_publicly_visible
+                or therapy.is_offer_free_addon
+                or therapy.organization_id != organization.id
+            ):
+                raise serializers.ValidationError(
+                    "Select only available bookable therapies in this organization."
+                )
         if len(value) > 8:
             raise serializers.ValidationError("Select up to eight therapy preferences.")
         return list(dict.fromkeys(value))
@@ -1006,14 +1018,23 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             )
         therapy = attrs["therapy"]
         requested = list(dict.fromkeys(attrs.get("requested_therapies", [])))
-        if therapy.organization_id != organization.id or not therapy.is_active:
+        if (
+            therapy.organization_id != organization.id
+            or not therapy.is_active
+            or not therapy.is_publicly_visible
+            or therapy.is_offer_free_addon
+        ):
             raise serializers.ValidationError({"therapy": "The selected therapy is unavailable."})
         requested = [value for value in requested if value.id != therapy.id]
         if len(requested) > 7 or any(
-            value.organization_id != organization.id or not value.is_active for value in requested
+            value.organization_id != organization.id
+            or not value.is_active
+            or not value.is_publicly_visible
+            or value.is_offer_free_addon
+            for value in requested
         ):
             raise serializers.ValidationError(
-                {"requested_therapies": "Select up to eight active therapies in this organization."}
+                {"requested_therapies": "Select up to eight available bookable therapies in this organization."}
             )
         attrs["requested_therapies"] = requested
         family = attrs.get("family_member")

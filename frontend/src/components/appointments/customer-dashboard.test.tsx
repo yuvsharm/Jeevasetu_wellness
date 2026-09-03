@@ -42,7 +42,8 @@ describe("CustomerDashboard", () => {
     expect(await screen.findByRole("heading", { name: "Pending requests" })).toBeInTheDocument();
     expect(screen.getByText("Test patient")).toBeInTheDocument();
     expect(screen.getByText("Request Received")).toBeInTheDocument();
-    expect(screen.getByText(/Requested on:/)).toBeInTheDocument();
+    expect(screen.getByText(/Booking Submitted At:/)).toBeInTheDocument();
+    expect(screen.getByText(/Booking reference: request-1/)).toBeInTheDocument();
   });
 
   it("does not present a converted request as a second active booking", async () => {
@@ -56,7 +57,8 @@ describe("CustomerDashboard", () => {
     }]);
     expect(await screen.findByText("Appointment appointment-1")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Pending requests" })).not.toBeInTheDocument();
-    expect(screen.getByText("Requested")).toBeInTheDocument();
+    expect(screen.getByText("Booking Submitted At")).toBeInTheDocument();
+    expect(screen.getByText("Requested Visit")).toBeInTheDocument();
   });
 
   it("shows visit verification only inside an eligible active appointment", async () => {

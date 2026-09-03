@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
 import { requestJson } from "@/lib/api/client";
 import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
 
@@ -20,7 +21,6 @@ export function CustomerPasswordReset() {
   const [accessToken, setAccessToken] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [show, setShow] = useState({ password: false, confirm: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,6 +46,7 @@ export function CustomerPasswordReset() {
 
   async function reset(event: React.FormEvent) {
     event.preventDefault();
+    if (!isStrongPassword(password)) { setError("Password does not meet all requirements."); return; }
     if (password !== confirm) { setError("Passwords do not match."); return; }
     setBusy(true); setError("");
     try {
@@ -60,6 +61,6 @@ export function CustomerPasswordReset() {
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {stage === "mobile" && <><label className="grid gap-2 font-semibold text-slate-800">Mobile number<input inputMode="numeric" autoComplete="tel" maxLength={10} value={mobile} onChange={(event) => setMobile(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4" required /></label><button disabled={busy || mobile.length !== 10} onClick={send} className="button-primary w-full disabled:opacity-50">{busy ? "Sending…" : "Send OTP"}</button></>}
     {stage === "otp" && <><label className="grid gap-2 font-semibold text-slate-800">One-time password<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4 tracking-[0.4em]" /></label><button disabled={busy || otp.length !== 6} onClick={verify} className="button-primary w-full disabled:opacity-50">{busy ? "Verifying…" : "Verify mobile"}</button><button disabled={busy} onClick={send} className="button-secondary w-full">Resend OTP</button></>}
-    {stage === "password" && <form className="space-y-5" onSubmit={reset}>{(["password", "confirm"] as const).map((name) => <label key={name} className="grid gap-2 font-semibold text-slate-800">{name === "password" ? "New password" : "Confirm new password"}<span className="flex rounded-xl border border-slate-300"><input type={show[name] ? "text" : "password"} autoComplete="new-password" value={name === "password" ? password : confirm} onChange={(event) => name === "password" ? setPassword(event.target.value) : setConfirm(event.target.value)} className="min-h-12 min-w-0 flex-1 rounded-xl px-4 outline-none" required /><button type="button" onClick={() => setShow((current) => ({ ...current, [name]: !current[name] }))} className="px-4 text-sm font-semibold text-emerald-800" aria-label={show[name] ? "Hide password" : "Show password"}>{show[name] ? "Hide" : "Show"}</button></span></label>)}<button disabled={busy || !password || !confirm} className="button-primary w-full disabled:opacity-50">{busy ? "Resetting…" : "Reset password"}</button></form>}
+    {stage === "password" && <form className="space-y-5" onSubmit={reset}><PasswordCreationFields password={password} confirmPassword={confirm} onPasswordChange={setPassword} onConfirmPasswordChange={setConfirm} passwordLabel="New password" confirmLabel="Confirm new password"/><button disabled={busy || !isStrongPassword(password) || password !== confirm} className="button-primary w-full disabled:opacity-50">{busy ? "Resetting…" : "Reset password"}</button></form>}
   </div>;
 }

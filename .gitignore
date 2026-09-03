@@ -25,3 +25,7 @@ Thumbs.db
 staticfiles/
 media/
 
+
+frontend/.pnpm-store/
+
+frontend/.pnpm-store/

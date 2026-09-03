@@ -876,7 +876,21 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
         candidates = StaffProfile.objects.filter(
             organization=request.organization, clinic=patient.clinic,
             staff_type=Role.PHYSIOTHERAPIST,
-        ).select_related("user", "practitioner_profile__source_application")
+        ).select_related("user", "practitioner_profile__source_application").annotate(
+            approved_rating=Avg(
+                "appointmentrating__stars",
+                filter=Q(
+                    appointmentrating__moderation_status=AppointmentRating.ModerationStatus.APPROVED
+                ),
+            ),
+            approved_review_count=Count(
+                "appointmentrating",
+                filter=Q(
+                    appointmentrating__moderation_status=AppointmentRating.ModerationStatus.APPROVED
+                ),
+                distinct=True,
+            ),
+        )
         result = []
         for profile in candidates:
             eligibility_reason = "Available for this requested time"
@@ -896,7 +910,8 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
                 "specialization": (
                     practitioner.qualification_specialization if practitioner else ""
                 ),
-                "rating": None, "review_count": 0,
+                "rating": profile.approved_rating,
+                "review_count": profile.approved_review_count,
                 "has_photo": bool(profile.profile_photo),
                 "eligible": eligible,
                 "eligibility_reason": eligibility_reason,

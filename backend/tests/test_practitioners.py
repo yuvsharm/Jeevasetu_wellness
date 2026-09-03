@@ -256,7 +256,7 @@ def test_oversized_document_is_rejected(api_client, domain):
         {
             "kind": "GOVERNMENT_ID",
             "file": SimpleUploadedFile(
-                "large.pdf", b"%PDF-" + b"x" * (8 * 1024 * 1024), content_type="application/pdf"
+                    "large.pdf", b"%PDF-" + b"x" * (25 * 1024 * 1024), content_type="application/pdf"
             ),
         },
         format="multipart",

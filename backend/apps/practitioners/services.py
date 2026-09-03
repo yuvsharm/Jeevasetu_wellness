@@ -234,6 +234,7 @@ def approve_application(application, *, actor):
                 "qualification": locked.get_highest_qualification_display(),
                 "registration_number": locked.registration_number,
                 "experience_years": locked.experience_years,
+                "experience_months": locked.experience_months,
                 "languages_known": locked.languages,
                 "alternate_mobile": (
                     locked.alternate_mobile[-10:] if locked.alternate_mobile else ""
@@ -276,6 +277,12 @@ def approve_application(application, *, actor):
             "approved_at": timezone.now(),
         },
     )
+    if staff_profile is not None:
+        staff_profile.therapy_competencies.set(
+            locked.competencies.filter(verification_status="VERIFIED").values_list(
+                "therapy_id", flat=True
+            )
+        )
     locked.status = PractitionerApplication.Status.APPROVED
     locked.reviewed_by = actor
     locked.reviewed_at = timezone.now()

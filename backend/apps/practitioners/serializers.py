@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -16,7 +16,7 @@ from apps.practitioners.services import upload_checksum
 ALLOWED_UPLOADS = {
     "application/pdf": {".pdf"},
 }
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 class CompetencySerializer(serializers.ModelSerializer):
@@ -57,7 +57,7 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
         suffix = Path(value.name).suffix.lower()
         content_type = getattr(value, "content_type", "")
         if value.size > MAX_UPLOAD_BYTES:
-            raise serializers.ValidationError("Files must not exceed 8 MB.")
+            raise serializers.ValidationError("Files must not exceed 25 MB.")
         if content_type not in ALLOWED_UPLOADS or suffix not in ALLOWED_UPLOADS[content_type]:
             raise serializers.ValidationError("Upload a PDF file.")
         header = value.read(8)
@@ -221,16 +221,13 @@ class OpenToWorkSerializer(serializers.Serializer):
 
 class PublicPractitionerSerializer(serializers.ModelSerializer):
     display_name = serializers.CharField(source="user.get_full_name", read_only=True)
-    highest_qualification = serializers.CharField(
-        source="source_application.get_highest_qualification_display", read_only=True
-    )
-    experience_years = serializers.IntegerField(
-        source="source_application.experience_years", read_only=True
-    )
-    languages = serializers.JSONField(source="source_application.languages", read_only=True)
-    gender = serializers.CharField(source="source_application.get_gender_display", read_only=True)
-    bio = serializers.CharField(source="source_application.bio", read_only=True)
-    service_area = serializers.CharField(source="source_application.city", read_only=True)
+    highest_qualification = serializers.SerializerMethodField()
+    experience_years = serializers.SerializerMethodField()
+    experience_months = serializers.SerializerMethodField()
+    languages = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
+    service_area = serializers.SerializerMethodField()
     verified_services = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
     average_rating = serializers.FloatField(read_only=True, allow_null=True)
@@ -245,6 +242,7 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
             "highest_qualification",
             "qualification_specialization",
             "experience_years",
+            "experience_months",
             "gender",
             "languages",
             "bio",
@@ -256,11 +254,47 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
         )
 
     def get_verified_services(self, value) -> list[str]:
-        return list(
-            value.source_application.competencies.filter(
-                verification_status="VERIFIED"
-            ).values_list("therapy__name", flat=True)
-        )
+        if value.staff_profile_id:
+            return list(
+                value.staff_profile.therapy_competencies.filter(is_active=True).values_list(
+                    "name", flat=True
+                )
+            )
+        return []
+
+    def _application(self, value):
+        try:
+            return value.source_application
+        except ObjectDoesNotExist:
+            return None
+
+    def get_highest_qualification(self, value) -> str:
+        application = self._application(value)
+        return application.get_highest_qualification_display() if application else value.staff_profile.qualification
+
+    def get_experience_years(self, value) -> int:
+        application = self._application(value)
+        return application.experience_years if application else value.staff_profile.experience_years
+
+    def get_experience_months(self, value) -> int:
+        application = self._application(value)
+        return application.experience_months if application else value.staff_profile.experience_months
+
+    def get_languages(self, value) -> list[str]:
+        application = self._application(value)
+        return application.languages if application else value.staff_profile.languages_known
+
+    def get_gender(self, value) -> str:
+        application = self._application(value)
+        return application.get_gender_display() if application else value.staff_profile.get_gender_display()
+
+    def get_bio(self, value) -> str:
+        application = self._application(value)
+        return application.bio if application else value.staff_profile.bio
+
+    def get_service_area(self, value) -> str:
+        application = self._application(value)
+        return application.city if application else value.staff_profile.city
 
     def get_photo_url(self, value) -> str:
         request = self.context.get("request")

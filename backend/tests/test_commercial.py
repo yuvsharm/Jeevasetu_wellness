@@ -151,6 +151,49 @@ def test_offer_only_free_addons_are_private_unbookable_and_valid_offer_benefits(
     assert head_quote.free_benefits[0]["duration_minutes"] == 15
 
 
+def test_customer_cannot_directly_book_private_or_offer_only_therapies(api_client):
+    organization, customer, paid = setup_identity("CUSTOMER")
+    private = TherapyOption.objects.create(
+        organization=organization,
+        name="Internal Therapy",
+        slug="internal-therapy",
+        is_publicly_visible=False,
+    )
+    addon = TherapyOption.objects.create(
+        organization=organization,
+        name="Leg Massage",
+        slug="leg-massage",
+        base_price=0,
+        default_duration_minutes=15,
+        is_publicly_visible=False,
+        is_offer_free_addon=True,
+    )
+    api_client.force_authenticate(customer)
+    url = reverse("quick-appointment-create")
+    request_headers = tenant(organization.slug)
+
+    for unavailable in (private, addon):
+        primary = api_client.post(
+            url,
+            authenticated_payload(unavailable),
+            format="json",
+            **request_headers,
+        )
+        assert primary.status_code == 400
+        assert "therapy" in primary.data
+
+        additional = api_client.post(
+            url,
+            authenticated_payload(paid, requested_therapies=[str(unavailable.id)]),
+            format="json",
+            **request_headers,
+        )
+        assert additional.status_code == 400
+        assert "requested_therapies" in additional.data
+
+    assert AppointmentRequest.objects.count() == 0
+
+
 def test_secure_booking_recalculates_offer_and_preserves_snapshot(api_client):
     organization, customer, first = setup_identity("CUSTOMER")
     first.base_price = 1000

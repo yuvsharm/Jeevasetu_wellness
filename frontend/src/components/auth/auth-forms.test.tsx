@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, vi } from "vitest";
 
@@ -64,9 +64,21 @@ describe("authentication forms", () => {
 
   it("validates registration consent and password confirmation", async () => {
     render(<RegistrationForm />);
+    await userEvent.type(screen.getByLabelText(/^password$/i), "Strong1!");
+    await userEvent.type(screen.getByLabelText(/confirm password/i), "Strong1!");
     await userEvent.click(screen.getByRole("button", { name: /create account/i }));
     expect(await screen.findByText(/accept the terms and privacy/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/first name/i)).toBeRequired();
+  });
+
+  it("shows live password rules and blocks clipboard use in confirmation", () => {
+    render(<RegistrationForm />);
+    const password = screen.getByLabelText(/^password$/i);
+    const confirmation = screen.getByLabelText(/confirm password/i);
+    expect(fireEvent.paste(password)).toBe(true);
+    expect(fireEvent.paste(confirmation)).toBe(false);
+    expect(screen.getByText(/please type the password again manually/i)).toBeInTheDocument();
+    expect(screen.getByText(/one special character/i)).toBeInTheDocument();
   });
 
   it("always renders the generic password-reset response", async () => {

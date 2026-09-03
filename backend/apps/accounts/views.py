@@ -26,6 +26,7 @@ from apps.accounts.serializers import (
     CustomerRegistrationSerializer,
     CustomerPasswordLoginSerializer,
     CustomerPasswordResetSerializer,
+    PractitionerRegistrationSerializer,
     LogoutSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -396,6 +397,98 @@ class CustomerPasswordResetView(APIView):
             AuthenticationAuditEvent.Outcome.SUCCESS, user=user,
         )
         return Response({"detail": "Password reset completed. Sign in with your new password."})
+
+
+class PractitionerRegistrationView(APIView):
+    """Create a practitioner applicant account or activate an Owner-created therapist."""
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+    throttle_classes = (CustomerRegistrationRateThrottle,)
+    activation_only = False
+
+    @transaction.atomic
+    def post(self, request):
+        organization = getattr(request, "organization", None)
+        if organization is None:
+            return Response({"detail": "Organization context is unavailable."}, status=404)
+        serializer = PractitionerRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            verification = resolve_booking_verification(
+                organization=organization,
+                mobile_number=data["mobile_number"],
+                token=data["booking_verification_token"],
+                lock=True,
+            )
+        except Exception as error:
+            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+
+        mobile = f"+91{data['mobile_number']}"
+        user = User.objects.select_for_update().filter(mobile_number=mobile).first()
+        activated = False
+        if user is not None:
+            owner_created = (
+                not user.has_usable_password()
+                and user.is_active
+                and user.is_enabled
+                and user.staff_profiles.filter(
+                    organization=organization, staff_type=Role.PHYSIOTHERAPIST
+                ).exists()
+                and user.practitioner_profiles.filter(
+                    organization=organization, is_approved=True
+                ).exists()
+                and user.role_assignments.filter(
+                    organization=organization,
+                    role=Role.PHYSIOTHERAPIST,
+                ).exists()
+                and not user.role_assignments.filter(is_active=True).exclude(
+                    role=Role.PHYSIOTHERAPIST
+                ).exists()
+            )
+            if not owner_created:
+                raise ValidationError({
+                    "mobile_number": "This mobile number is already registered with JeevaSetu. Please sign in to continue."
+                })
+            activated = True
+        else:
+            if self.activation_only:
+                raise ValidationError({
+                    "mobile_number": "No activation-pending therapist account was found. Apply to join JeevaSetu instead."
+                })
+            if data.get("email") and User.objects.filter(email__iexact=data["email"]).exists():
+                raise ValidationError({"email": "This email is already registered with JeevaSetu."})
+            names = data["full_name"].strip().split(maxsplit=1)
+            user = User(
+                username=data.get("email") or mobile,
+                first_name=names[0],
+                last_name=names[1] if len(names) > 1 else "",
+                email=data.get("email", ""),
+                mobile_number=mobile,
+            )
+        user.set_password(data["password"])
+        user.full_clean()
+        user.save()
+        OrganizationMembership.objects.get_or_create(user=user, organization=organization)
+        verification.consumed_at = timezone.now()
+        verification.save(update_fields=("consumed_at",))
+        record_auth_event(
+            request,
+            AuthenticationAuditEvent.Event.PASSWORD_RESET_COMPLETE if activated else AuthenticationAuditEvent.Event.REGISTRATION,
+            AuthenticationAuditEvent.Outcome.SUCCESS,
+            user=user,
+        )
+        return Response(
+            {"detail": "Account activated securely." if activated else "Practitioner account created.", "activated": activated},
+            status=status.HTTP_200_OK if activated else status.HTTP_201_CREATED,
+        )
+
+
+class PractitionerActivationView(PractitionerRegistrationView):
+    """Activate an existing Owner-created practitioner; never creates an identity."""
+
+    activation_only = True
 
 
 class RefreshView(APIView):
