@@ -92,10 +92,11 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, trim_whitespace=False)
 
     def find_user(self):
+        from apps.accounts.validators import normalize_login_mobile
         identifier = self.validated_data["identifier"].strip()
         query = Q(email__iexact=normalize_email_address(identifier))
         try:
-            query |= Q(mobile_number=normalize_mobile_number(identifier))
+            query |= Q(mobile_number=normalize_login_mobile(identifier))
         except Exception:
             pass
         return User.objects.filter(query).first()
@@ -143,6 +144,14 @@ class CustomerRegistrationSerializer(serializers.Serializer):
     guardian_name = serializers.CharField(max_length=160, required=False, allow_blank=True)
     guardian_relationship = serializers.CharField(max_length=80, required=False, allow_blank=True)
     guardian_mobile = serializers.RegexField(r"^[6-9]\d{9}$", required=False, allow_blank=True)
+    profile_photo = serializers.ImageField(required=False, allow_null=True)
+
+    def validate_profile_photo(self, value):
+        if value.content_type not in ("image/jpeg", "image/png", "image/webp"):
+            raise serializers.ValidationError("Upload a JPG, PNG, or WebP photograph.")
+        if value.size > 2 * 1024 * 1024:
+            raise serializers.ValidationError("Profile photographs must not exceed 2 MB.")
+        return value
 
     def validate(self, attrs):
         if not attrs.get("date_of_birth") and attrs.get("age") is None:
@@ -184,6 +193,12 @@ class CustomerRegistrationSerializer(serializers.Serializer):
 
 
 class PractitionerRegistrationSerializer(serializers.Serializer):
+    date_of_birth = serializers.DateField(required=False)
+
+    def validate_date_of_birth(self, value):
+        from apps.practitioners.dob import validate_dob, identity_today
+        return validate_dob(value, identity_today(organization=self.context.get("organization")))
+
     booking_verification_token = serializers.CharField(
         write_only=True, trim_whitespace=False, max_length=4096
     )
@@ -213,8 +228,16 @@ class CustomerPasswordLoginSerializer(serializers.Serializer):
 
 
 class CustomerPasswordResetSerializer(serializers.Serializer):
+    booking_verification_token = serializers.CharField(required=False, write_only=True, trim_whitespace=False, max_length=4096)
     verification_id = serializers.UUIDField()
-    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    mobile_number = serializers.CharField()
+
+    def validate_mobile_number(self, value):
+        from apps.accounts.validators import normalize_indian_mobile
+        try:
+            return normalize_indian_mobile(value)[3:]
+        except Exception as error:
+            raise serializers.ValidationError("Enter a valid 10-digit Indian mobile number.") from error
     otp = serializers.RegexField(r"^\d{6}$", required=False, write_only=True)
     access_token = serializers.CharField(required=False, write_only=True, trim_whitespace=False, max_length=4096)
     new_password = serializers.CharField(write_only=True, trim_whitespace=False)
@@ -222,7 +245,7 @@ class CustomerPasswordResetSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         required = "access_token" if settings.MSG91_ENABLED else "otp"
-        if not attrs.get(required):
+        if not attrs.get(required) and not attrs.get("booking_verification_token"):
             raise serializers.ValidationError({required: "This field is required for mobile verification."})
         if attrs["new_password"] != attrs.pop("confirm_password"):
             raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
@@ -292,6 +315,9 @@ class ProfileUpdateSerializer(IdentityValidationMixin, serializers.ModelSerializ
         fields = ("first_name", "last_name", "email", "mobile_number", "profile_image")
 
     def validate(self, attrs):
+        if ("mobile_number" in attrs and attrs["mobile_number"] != self.instance.mobile_number
+                and self.instance.role_assignments.filter(role="PHYSIOTHERAPIST", is_active=True).exists()):
+            raise serializers.ValidationError({"mobile_number": "Use Change Mobile with OTP verification."})
         email = attrs.get("email", self.instance.email)
         mobile = attrs.get("mobile_number", self.instance.mobile_number)
         if not email and not mobile:

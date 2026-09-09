@@ -1,5 +1,7 @@
 "use client";
 
+import {MyPractitionerProfile} from "@/components/practitioners/my-profile";
+import {CustomerProfilePage} from "@/components/profile/customer-profile";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -24,6 +26,8 @@ export function ProfilePage() {
   if (!session.data) return <main className="p-8"><StatusPanel tone="error">Your profile is unavailable.</StatusPanel></main>;
   const role = primaryRole(session.data.access.roles);
   if (!role) return <main className="p-8"><StatusPanel tone="error">No active role is available.</StatusPanel></main>;
+  if(role==="PHYSIOTHERAPIST")return <AppShell session={session.data} role={role} title="My Profile"><MyPractitionerProfile/></AppShell>;
+  if(role==="CUSTOMER")return <AppShell session={session.data} role={role} title="My Profile"><CustomerProfilePage/></AppShell>;
   const submit = form.handleSubmit(async (values) => {
     setMessage(""); setSaved(false);
     const parsed = profileSchema.safeParse(values);

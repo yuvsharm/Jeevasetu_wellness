@@ -88,19 +88,22 @@ def ensure_request_practitioner_eligible(*, source, physiotherapist, start, end)
     ):
         raise ValidationError("The selected Physiotherapist is unavailable.")
     ensure_practitioner_operationally_eligible(physiotherapist)
-    profile = getattr(physiotherapist, "practitioner_profile", None)
-    if profile is not None:
-        required_ids = {
-            source.therapy_id,
-            *source.requested_therapies.values_list("id", flat=True),
-        }
-        verified_ids = set(
-            physiotherapist.therapy_competencies.filter(id__in=required_ids).values_list(
-                "id", flat=True
-            )
+    required_ids = {
+        source.therapy_id,
+        *source.requested_therapies.values_list("id", flat=True),
+    }
+    current_ids = set(
+        physiotherapist.therapy_competencies.filter(id__in=required_ids).values_list(
+            "id", flat=True
         )
-        if not required_ids.issubset(verified_ids):
-            raise ValidationError("The selected Physiotherapist is missing a required therapy competency.")
+    )
+    missing_ids = required_ids - current_ids
+    if missing_ids:
+        from apps.appointments.models import TherapyOption
+        missing = ", ".join(
+            TherapyOption.objects.filter(id__in=missing_ids).order_by("name").values_list("name", flat=True)
+        )
+        raise ValidationError(f"Therapist does not currently offer {missing}.")
     service_areas = list(physiotherapist.service_areas.filter(is_active=True))
     if service_areas and not any(source.pin_code in area.pin_codes for area in service_areas):
         raise ValidationError("The selected Physiotherapist does not serve this area.")
@@ -121,10 +124,10 @@ def decide_appointment_request(
     source = AppointmentRequest.objects.select_for_update(of=("self",)).select_related(
         "organization", "creator", "therapy", "family_member", "selected_package", "selected_offer"
     ).get(pk=source.pk)
-    if source.status != AppointmentRequest.Status.PENDING:
-        raise ValidationError("This appointment request has already been decided.")
     previous_status = source.status
     if action == "REJECT":
+        if source.status != AppointmentRequest.Status.PENDING:
+            raise ValidationError("Only a pending appointment request can be rejected.")
         source.status = AppointmentRequest.Status.REJECTED
         source.rejection_category = rejection_category
         source.rejection_customer_reason = customer_reason.strip()
@@ -141,6 +144,33 @@ def decide_appointment_request(
             internal_note=internal_note.strip(),
         )
         return source, None
+
+    if action == "ACCEPT":
+        if source.status != AppointmentRequest.Status.PENDING:
+            raise ValidationError("This appointment request has already been accepted.")
+        source.status = AppointmentRequest.Status.APPROVED
+        source.save(update_fields=("status", "updated_at"))
+        AppointmentRequestAuditEvent.objects.create(
+            appointment_request=source,
+            organization=source.organization,
+            actor=actor,
+            event=AppointmentRequestAuditEvent.Event.ACCEPTED,
+            previous_status=previous_status,
+            new_status=source.status,
+        )
+        return source, None
+
+    if action not in ("ASSIGN", "ACCEPT_ASSIGN"):
+        raise ValidationError("Select a supported appointment request action.")
+    if action == "ACCEPT_ASSIGN" and source.status == AppointmentRequest.Status.PENDING:
+        source.status = AppointmentRequest.Status.APPROVED
+        source.save(update_fields=("status", "updated_at"))
+    elif source.status != AppointmentRequest.Status.APPROVED:
+        raise ValidationError("Accept this appointment request before assigning a therapist.")
+    try:
+        return source, source.operational_appointment
+    except Appointment.DoesNotExist:
+        pass
 
     if source.creator_id is None:
         raise ValidationError("A customer profile is required before this request can be assigned.")

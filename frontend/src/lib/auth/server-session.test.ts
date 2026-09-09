@@ -189,4 +189,16 @@ describe("server session", () => {
       fieldErrors: undefined,
     }));
   });
+
+  it("preserves safe password reset validation details from Django", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ new_password: ["This password is too common."] }), { status: 400 }),
+    );
+    const { customerPasswordReset } = await import("./server-session");
+    await expect(customerPasswordReset({})).rejects.toEqual(expect.objectContaining({
+      status: 400,
+      detail: "This password is too common.",
+      fieldErrors: { new_password: "This password is too common." },
+    }));
+  });
 });

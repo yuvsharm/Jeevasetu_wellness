@@ -215,7 +215,7 @@ def test_offer_addon_slots_use_fifteen_minute_duration(api_client):
     assert "18:45" in values and "19:00" not in values
 
 
-def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):
+def test_physiotherapist_schedule_is_approved_immediately_without_manager_workflow(api_client):
     values = setup_domain("availability-approval")
     organization, _, _, manager, physio_user, physio, *_ = values
     AvailabilityRule.objects.filter(physiotherapist=physio).delete()
@@ -232,15 +232,18 @@ def test_physiotherapist_submits_own_rule_pending_manager_approves(api_client):
         **headers(organization),
     )
     api_client.force_authenticate(manager)
-    approved = api_client.post(
+    redundant_review = api_client.post(
         reverse("availability-rule-review", args=[submitted.data["id"]]),
         {"approve": True, "reason": "Roster approved"},
         format="json",
         **headers(organization),
     )
-    assert submitted.status_code == 201 and submitted.data["approval_status"] == "PENDING"
-    assert approved.status_code == 200 and approved.data["is_active"]
-    assert AvailabilityAuditEvent.objects.filter(rule_id=submitted.data["id"]).count() == 2
+    assert submitted.status_code == 201 and submitted.data["approval_status"] == "APPROVED"
+    assert submitted.data["is_active"] is True
+    assert redundant_review.status_code == 400
+    assert set(
+        AvailabilityAuditEvent.objects.filter(rule_id=submitted.data["id"]).values_list("action", flat=True)
+    ) == {"APPROVED", "SUBMITTED", "APPROVAL_BLOCKED"}
 
 
 def test_owner_rule_creation_without_clinic_hours_fails_cleanly_and_rolls_back(api_client):
@@ -289,8 +292,8 @@ def test_physiotherapist_sees_only_own_request_history(api_client):
         **headers(organization),
     )
     assert response.status_code == 200 and response.data["count"] == 1
-    assert foreign.status_code == 201
-    assert AvailabilityRule.objects.get(pk=foreign.data["id"]).physiotherapist == physio
+    assert foreign.status_code == 400
+    assert not AvailabilityRule.objects.filter(physiotherapist=other_physio, organization=organization).exists()
 
 
 def test_leave_conflicting_with_active_appointment_cannot_be_approved(api_client):
@@ -356,6 +359,7 @@ def test_operations_slot_discovery_uses_fifteen_minute_intervals_and_blocks_book
     values = setup_domain("availability-slots")
     organization, clinic, owner, _, _, physio, _, patient, address, therapy = values
     target = start_at(days=3, hour=10)
+    physio.therapy_competencies.add(therapy)
     api_client.force_authenticate(owner)
     api_client.post(
         reverse("schedule-list"),
@@ -380,7 +384,7 @@ def test_operations_slot_discovery_uses_fifteen_minute_intervals_and_blocks_book
     assert target not in starts
 
 
-def test_application_backed_slots_require_verified_therapy_competency(api_client):
+def test_application_backed_slots_require_current_therapy_membership(api_client):
     organization, clinic, owner, _, physio_user, physio, *_, therapy = setup_domain("availability-competency")
     application = PractitionerApplication.objects.create(
         applicant=physio_user,
@@ -408,8 +412,10 @@ def test_application_backed_slots_require_verified_therapy_competency(api_client
     PractitionerCompetency.objects.create(
         application=application,
         therapy=therapy,
-        verification_status=PractitionerCompetency.Verification.VERIFIED,
+        verification_status=PractitionerCompetency.Verification.PENDING,
     )
+    assert api_client.get(reverse("availability-slots"), params, **headers(organization)).data == []
+    physio.therapy_competencies.add(therapy)
     assert api_client.get(reverse("availability-slots"), params, **headers(organization)).data
 
 
@@ -436,3 +442,54 @@ def test_customer_and_unrelated_staff_cannot_access_internal_availability(api_cl
     api_client.force_authenticate(physio_user)
     audit = api_client.get(reverse("availability-audit"), **headers(organization))
     assert slots.status_code == 403 and rules.status_code == 403 and audit.status_code == 403
+
+
+@pytest.mark.parametrize("zone,start_utc,end_utc", [("Asia/Kolkata", "2026-09-14T18:30:00+00:00", "2026-09-16T18:30:00+00:00"), ("America/New_York", "2026-09-15T04:00:00+00:00", "2026-09-17T04:00:00+00:00")])
+def test_owner_date_only_leave_and_directory(api_client, zone, start_utc, end_utc):
+    organization, clinic, owner, _, _, physio, *_ = setup_domain("date-leave")
+    clinic.timezone = zone
+    clinic.save(update_fields=["timezone"])
+    api_client.force_authenticate(owner)
+    response = api_client.post(reverse("availability-exception-list"), {
+        "clinic": str(clinic.pk), "physiotherapist": str(physio.pk), "kind": "UNAVAILABLE",
+        "from_date": "2026-09-15", "to_date": "2026-09-16", "reason": "Leave",
+    }, format="json", **headers(organization))
+    assert response.status_code == 201, response.data
+    leave = AvailabilityException.objects.get(pk=response.data["id"])
+    assert leave.starts_at == datetime.fromisoformat(start_utc)
+    assert leave.ends_at == datetime.fromisoformat(end_utc)
+    from apps.availability.services import ensure_physiotherapist_available
+    from django.core.exceptions import ValidationError
+    with pytest.raises(ValidationError, match="unavailable"):
+        ensure_physiotherapist_available(physiotherapist=physio, clinic=clinic,
+            start=leave.starts_at + timedelta(hours=10), end=leave.starts_at + timedelta(hours=11))
+    with patch("apps.staff.serializers.timezone.now", return_value=datetime(2026, 9, 5, tzinfo=UTC)):
+        detail = api_client.get(reverse("staff-detail", args=[physio.pk]), **headers(organization))
+    assert detail.data["upcoming_leave"] == [{"id": str(leave.pk), "from_date": "2026-09-15", "to_date": "2026-09-16"}]
+
+
+def test_owner_closed_day_clean_error_boundaries_and_off_on(api_client):
+    organization, clinic, owner, _, _, physio, *_ = setup_domain("inline-hours")
+    AvailabilityRule.objects.filter(physiotherapist=physio).delete()
+    hours = clinic.appointment_operating_hours
+    hours.daily_schedule = {"0": {"is_open": False}}
+    hours.save()
+    api_client.force_authenticate(owner)
+    payload = {"clinic": str(clinic.pk), "physiotherapist": str(physio.pk), "weekday": 0,
+               "starts_at": "10:00", "ends_at": "19:00", "effective_from": "2026-09-01"}
+    url = reverse("availability-rule-list")
+    closed = api_client.post(url, payload, format="json", **headers(organization))
+    assert closed.status_code == 400
+    assert closed.data == ["Clinic is closed on Monday."]
+    hours.daily_schedule = {"0": {"is_open": True, "opens_at": "10:00", "closes_at": "19:00"}}
+    hours.save()
+    invalid = api_client.post(url, {**payload, "starts_at": "09:59"}, format="json", **headers(organization))
+    assert invalid.status_code == 400
+    assert invalid.data == ["Therapist hours must remain within clinic operating hours."]
+    valid = api_client.post(url, payload, format="json", **headers(organization))
+    assert valid.status_code == 201, valid.data
+    off = api_client.post(reverse("availability-rule-deactivate", args=[valid.data["id"]]), {"reason": "Off"}, format="json", **headers(organization))
+    assert off.status_code == 200
+    assert not AvailabilityRule.objects.get(pk=valid.data["id"]).is_active
+    restored = api_client.post(url, payload, format="json", **headers(organization))
+    assert restored.status_code == 201 and restored.data["is_active"]

@@ -35,3 +35,18 @@ def normalize_mobile_number(value):
     if MOBILE_PATTERN.fullmatch(normalized) is None:
         raise ValidationError("Enter a valid E.164 mobile number, including country code.")
     return normalized
+
+
+def normalize_login_mobile(value):
+    """Accept domestic Indian login input without changing stored identity rules."""
+    value = value.strip()
+    if re.fullmatch(r"[6-9]\d{9}", value):
+        value = f"+91{value}"
+    return normalize_mobile_number(value)
+
+
+def normalize_indian_mobile(value):
+    canonical = normalize_login_mobile(value)
+    if re.fullmatch(r"\+91[6-9]\d{9}", canonical) is None:
+        raise ValidationError("Enter a valid 10-digit Indian mobile number.")
+    return canonical

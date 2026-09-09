@@ -2,7 +2,6 @@ import { ProtectedPage } from "@/components/auth/protected-page";
 import { OwnerRequests } from "@/components/appointments/owner-requests";
 import { ScheduleOperations } from "@/components/appointments/operational-schedule";
 import { OperationsVisitVerificationPanel } from "@/components/appointments/visit-verification-panels";
-import { AvailabilityOperations } from "@/components/availability/availability-management";
 import { OperatingHoursManagement } from "@/components/availability/operating-hours-management";
 import { PatientDirectory } from "@/components/patients/patient-management";
 import { StaffDirectory } from "@/components/staff/staff-management";
@@ -27,7 +26,6 @@ export default function OwnerPage() {
     <div id="payments" tabIndex={-1} className={sectionClass}><PaymentOperations /></div>
     <OperatingHoursManagement />
     <div id="staff-management" tabIndex={-1} className={sectionClass}><StaffDirectory allowManagers /></div>
-    <AvailabilityOperations />
     <div id="patients" tabIndex={-1} className={sectionClass}><PatientDirectory /></div>
   </ProtectedPage>;
 }

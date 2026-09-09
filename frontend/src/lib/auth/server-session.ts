@@ -78,12 +78,22 @@ async function parseError(response: Response): Promise<SessionError> {
     );
   }
   const fields: Record<string, string> = {};
+  let responseDetail = "";
   if (body && typeof body === "object") {
+    const suppliedDetail = (body as Record<string, unknown>).detail;
+    responseDetail = Array.isArray(suppliedDetail)
+      ? suppliedDetail.filter((value): value is string => typeof value === "string").join(" ")
+      : typeof suppliedDetail === "string" ? suppliedDetail : "";
     for (const [key, value] of Object.entries(body)) {
       if (key !== "detail") fields[key] = Array.isArray(value) ? String(value[0]) : String(value);
     }
   }
-  return new SessionError(response.status, "Please review the highlighted information.", fields);
+  const actionable = Object.values(fields).find(Boolean);
+  return new SessionError(
+    response.status,
+    responseDetail || actionable || "Please review the highlighted information.",
+    Object.keys(fields).length ? fields : undefined,
+  );
 }
 
 async function djangoFetch(path: string, init: RequestInit = {}, access?: string) {
@@ -92,7 +102,7 @@ async function djangoFetch(path: string, init: RequestInit = {}, access?: string
       ...init,
       cache: "no-store",
       headers: {
-        "Content-Type": "application/json",
+        ...(!(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
         ...(ORGANIZATION_SLUG ? { "X-Organization-Slug": ORGANIZATION_SLUG } : {}),
         ...(access ? { Authorization: `Bearer ${access}` } : {}),
         ...init.headers,
@@ -135,7 +145,7 @@ export async function customerRegister(payload: unknown) {
   let tokens: TokenPair;
   try {
     tokens = await checkedJson<TokenPair>(
-      await djangoFetch("/auth/customer-register/", { method: "POST", body: JSON.stringify(payload) }),
+      await djangoFetch("/auth/customer-register/", { method: "POST", body: payload instanceof FormData ? payload : JSON.stringify(payload) }),
     );
   } catch (error) {
     if (error instanceof SessionError && error.status === 429) {

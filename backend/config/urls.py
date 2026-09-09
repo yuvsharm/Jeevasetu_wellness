@@ -11,6 +11,7 @@ from config.health import (
 )
 
 urlpatterns = [
+    path("api/v1/learning/", include("apps.practitioners.learning_urls")),
     path("admin/", admin.site.urls),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/access/", include("apps.accounts.access_urls")),

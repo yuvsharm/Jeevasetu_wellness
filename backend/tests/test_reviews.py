@@ -81,3 +81,20 @@ def test_cross_tenant_review_and_review_visibility_are_denied(api_client):
     assert api_client.post(reverse("reviews-moderate", args=[review.id]), {"moderation_status": "APPROVED"}, format="json", **headers(foreign_org)).status_code == 404
     api_client.force_authenticate(foreign_physio)
     assert api_client.get(reverse("reviews-practitioner-mine"), **headers(foreign_org)).data["review_count"] == 0
+
+
+def test_public_practitioner_rating_only_completed_approved_services(api_client):
+    from apps.practitioners.models import PractitionerProfile
+    values=setup_domain("public-card-rating")
+    organization,clinic,_,_,user,staff,*_=values
+    appointment,rating=submit_review(api_client,values,stars=4)
+    PractitionerProfile.objects.create(user=user,organization=organization,clinic=clinic,staff_profile=staff,
+        is_approved=True,is_publicly_visible=True,is_open_to_work=True,category="PHYSIOTHERAPIST",approved_at=timezone.now())
+    api_client.force_authenticate(None)
+    url=reverse("practitioner-public-list")
+    assert api_client.get(url,**headers(organization)).data[0]["review_count"]==0
+    rating.moderation_status="APPROVED";rating.save()
+    result=api_client.get(url,**headers(organization)).data[0]
+    assert result["review_count"]==1 and result["average_rating"]==4.0
+    appointment.status="CANCELLED";appointment.save(update_fields=["status"])
+    assert api_client.get(url,**headers(organization)).data[0]["review_count"]==0

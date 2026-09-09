@@ -1,3 +1,4 @@
+from django.utils import timezone
 from datetime import datetime
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -259,7 +260,7 @@ class OperationsCollection(OperationsMixin, generics.ListCreateAPIView):
             )
             value = review_availability(value, actor=self.request.user, approve=True)
         except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(error.messages) from error
         serializer.instance = value
 
 
@@ -299,7 +300,7 @@ class RuleDetailView(OperationsObjectMixin, generics.RetrieveUpdateAPIView):
         try:
             validate_rule(value)
         except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(error.messages) from error
         value = serializer.save()
         record_event(value, actor=self.request.user, action=AvailabilityAuditEvent.Action.EDITED)
 
@@ -320,7 +321,7 @@ class ExceptionDetailView(OperationsObjectMixin, generics.RetrieveUpdateAPIView)
         try:
             validate_for_approval(value) if value.is_active else validate_exception(value)
         except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(error.messages) from error
         value = serializer.save()
         record_event(value, actor=self.request.user, action=AvailabilityAuditEvent.Action.EDITED)
 
@@ -340,7 +341,7 @@ class ReviewView(OperationsObjectMixin, GenericAPIView):
                 reason=serializer.validated_data.get("reason", ""),
             )
         except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(error.messages) from error
         output = RuleSerializer if isinstance(value, AvailabilityRule) else ExceptionSerializer
         return Response(output(value).data)
 
@@ -400,6 +401,10 @@ class SelfCollection(generics.ListCreateAPIView):
             organization=self.request.organization, physiotherapist=self.profile()
         ).select_related("clinic", "physiotherapist__user")
 
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), "clinic": self.profile().clinic}
+
+    @transaction.atomic
     def perform_create(self, serializer):
         profile = self.profile()
         if serializer.validated_data.get("physiotherapist", profile) != profile:
@@ -417,11 +422,18 @@ class SelfCollection(generics.ListCreateAPIView):
                 if key not in ("clinic", "physiotherapist")
             },
         )
+        if isinstance(value, AvailabilityException):
+            zone = ZoneInfo(profile.clinic.timezone or "Asia/Kolkata")
+            today = timezone.now().astimezone(zone).date()
+            if value.kind != "UNAVAILABLE" or value.starts_at.astimezone(zone).date() <= today:
+                raise ValidationError("Time off must begin on a future clinic-local date.")
+        StaffProfile.objects.select_for_update().get(pk=profile.pk)
         try:
             value.full_clean()
             value.save()
+            value = review_availability(value, actor=self.request.user, approve=True)
         except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
+            raise ValidationError(error.messages) from error
         record_event(value, actor=self.request.user, action=AvailabilityAuditEvent.Action.SUBMITTED)
         serializer.instance = value
 
@@ -478,3 +490,59 @@ class AuditView(OperationsMixin, generics.ListAPIView):
         return self.scope(
             AvailabilityAuditEvent.objects.select_related("actor", "physiotherapist__user")
         )
+
+
+class SelfRuleDetailView(SelfRuleView):
+    @transaction.atomic
+    def patch(self, request, pk):
+        profile = self.profile()
+        StaffProfile.objects.select_for_update().get(pk=profile.pk)
+        value = self.get_queryset().select_for_update().filter(pk=pk).first()
+        if value is None:
+            raise NotFound("Your schedule entry is unavailable.")
+        if set(request.data) - {"starts_at", "ends_at"}:
+            raise ValidationError("Only working hours can be edited here.")
+        serializer = self.get_serializer(value, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        for key, item in serializer.validated_data.items():
+            setattr(value, key, item)
+        try:
+            validate_rule(value)
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
+        value.save()
+        record_event(value, actor=request.user, action=AvailabilityAuditEvent.Action.EDITED)
+        return Response(self.get_serializer(value).data)
+
+    def post(self, request, pk):
+        value = self.get_queryset().filter(pk=pk).first()
+        if value is None:
+            raise NotFound("Your schedule entry is unavailable.")
+        value.is_active = False
+        value.save(update_fields=["is_active", "updated_at"])
+        record_event(
+            value,
+            actor=request.user,
+            action=AvailabilityAuditEvent.Action.DEACTIVATED,
+            reason="Set off by therapist",
+        )
+        return Response(self.get_serializer(value).data)
+
+
+class SelfExceptionDetailView(SelfExceptionView):
+    def post(self, request, pk):
+        value = self.get_queryset().filter(pk=pk).first()
+        if value is None:
+            raise NotFound("Your time off is unavailable.")
+        zone = ZoneInfo(value.clinic.timezone or "Asia/Kolkata")
+        if value.starts_at.astimezone(zone).date() <= timezone.now().astimezone(zone).date():
+            raise ValidationError("Only future time off can be cancelled.")
+        value.is_active = False
+        value.save(update_fields=["is_active", "updated_at"])
+        record_event(
+            value,
+            actor=request.user,
+            action=AvailabilityAuditEvent.Action.DEACTIVATED,
+            reason="Time off cancelled by therapist",
+        )
+        return Response(self.get_serializer(value).data)

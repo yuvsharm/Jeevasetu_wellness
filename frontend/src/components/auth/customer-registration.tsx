@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
 import { requestJson } from "@/lib/api/client";
@@ -38,6 +38,21 @@ export function CustomerRegistration() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [photo,setPhoto]=useState<File|null>(null);
+  const [photoPreview,setPhotoPreview]=useState("");
+
+  useEffect(()=>{
+    if(!photo||typeof URL.createObjectURL!=="function"){setPhotoPreview("");return;}
+    const value=URL.createObjectURL(photo);setPhotoPreview(value);
+    return()=>URL.revokeObjectURL(value);
+  },[photo]);
+
+  function choosePhoto(file:File|null){
+    if(!file){setPhoto(null);return;}
+    if(!["image/jpeg","image/png","image/webp"].includes(file.type)){setError("Upload a JPG, PNG, or WebP photograph.");return;}
+    if(file.size>2*1024*1024){setError("Profile photographs must not exceed 2 MB.");return;}
+    setError("");setPhoto(file);
+  }
 
   function invalidateVerification(nextStage: Stage = "details") {
     setVerificationId(""); setVerificationToken(""); setOtp(""); setPassword("");
@@ -95,15 +110,17 @@ export function CustomerRegistration() {
     if (password !== confirmPassword) { setError("Passwords do not match."); return; }
     setBusy(true); setError("");
     try {
+      const payload={
+        booking_verification_token: verificationToken, mobile_number: details.mobile_number,
+        full_name: details.full_name, email: details.email, password, confirm_password: confirmPassword,
+        age: Number(details.age), gender: details.gender,
+        address: { address_line_1: details.address_line_1, address_line_2: details.address_line_2,
+          landmark: details.landmark, city: details.city, region: details.region, pin_code: details.pin_code },
+      };
+      const body=new FormData();body.append("payload",JSON.stringify(payload));if(photo)body.append("profile_photo",photo);
       await requestJson("/api/session/customer-register", {
         method: "POST",
-        body: JSON.stringify({
-          booking_verification_token: verificationToken, mobile_number: details.mobile_number,
-          full_name: details.full_name, email: details.email, password, confirm_password: confirmPassword,
-          age: Number(details.age), gender: details.gender,
-          address: { address_line_1: details.address_line_1, address_line_2: details.address_line_2,
-            landmark: details.landmark, city: details.city, region: details.region, pin_code: details.pin_code },
-        }),
+        body,
       });
       setVerificationToken(""); setPassword(""); setConfirmPassword("");
       router.replace(`/customer-login?registered=1&returnTo=${encodeURIComponent(returnTo)}`);
@@ -123,6 +140,7 @@ export function CustomerRegistration() {
     </ol>
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {stage === "details" && <>
+      <div className="rounded-2xl border border-slate-200 p-4"><p className="font-semibold text-slate-800">Profile photo <span className="font-normal text-slate-500">(optional)</span></p><div className="mt-3 flex flex-wrap items-center gap-4">{photoPreview?<img src={photoPreview} alt="Selected profile preview" className="size-24 rounded-full object-cover"/>:<span className="flex size-24 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-800" aria-label="Profile initials">{details.full_name.trim().charAt(0).toUpperCase()||"C"}</span>}<div className="grid gap-2"><label className="button-secondary cursor-pointer">{photo?"Replace photo":"Choose photo"}<input aria-label="Profile photo" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={e=>choosePhoto(e.target.files?.[0]??null)}/></label>{photo&&<button type="button" className="text-left font-semibold text-red-700" onClick={()=>setPhoto(null)}>Remove selected photo</button>}<p className="text-xs text-slate-500">JPG, PNG or WebP, up to 2 MB. You can skip this.</p></div></div></div>
       {input("full_name", "Full name")}
       <div className="grid gap-5 sm:grid-cols-2">{input("age", "Age", { type: "number" })}<label className="grid gap-2 font-semibold text-slate-800">Gender<select value={details.gender} onChange={(event) => update("gender", event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" required><option value="">Select gender</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option><option value="PREFER_NOT_TO_SAY">Prefer not to say</option></select></label></div>
       {input("mobile_number", "Mobile number", { type: "tel", maxLength: 10 })}{input("email", "Email (optional)", { type: "email" })}

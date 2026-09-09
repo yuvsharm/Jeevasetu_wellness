@@ -7,10 +7,12 @@ const future = (labels: string[]): NavigationItem[] => labels.map((label) => ({ 
 
 export const roleNavigation: Record<Role, NavigationItem[]> = {
   OWNER: [
+    {label:"Learning Content",href:"/owner/learning"},
+    {label:"Credential Reviews",href:"/owner/credentials"},
     { label: "Business Analytics", href: `${roleDestinations.OWNER}#business-analytics` },
     { label: "Appointment Requests", href: `${roleDestinations.OWNER}#appointment-requests` },
     { label: "Appointment Schedule", href: `${roleDestinations.OWNER}#appointment-schedule` },
-    { label: "Managers & Physiotherapists", href: `${roleDestinations.OWNER}#staff-management` },
+    { label: "Physiotherapists", href: `${roleDestinations.OWNER}#staff-management` },
     { label: "Patients", href: `${roleDestinations.OWNER}#patients` },
     { label: "Operating Hours", href: `${roleDestinations.OWNER}#operating-hours` },
     { label: "Therapy Management", href: `${roleDestinations.OWNER}#therapy-management` },
@@ -31,16 +33,16 @@ export const roleNavigation: Record<Role, NavigationItem[]> = {
     { label: "Profile", href: "/profile" },
   ],
   PHYSIOTHERAPIST: [
-    { label: "Dashboard", href: roleDestinations.PHYSIOTHERAPIST },
-    { label: "My Appointments", href: roleDestinations.PHYSIOTHERAPIST },
-    ...future(["Today's Visits", "Assigned Patients", "Navigation", "Session Notes", "Attendance", "Availability", "Notifications"]),
-    { label: "Profile", href: "/profile" },
+    {label:"Dashboard",href:"/physiotherapist"},
+    {label:"My Appointments",href:"/physiotherapist/appointments"},
+    {label:"My Profile",href:"/profile"},
+    {label:"My Schedule / Time Off",href:"/physiotherapist/schedule"},
+    {label:"Learning Centre",href:"/physiotherapist/learning"},
   ],
   CUSTOMER: [
     { label: "My Appointments", href: roleDestinations.CUSTOMER },
     { label: "Book Service", href: "/book-appointment" },
     { label: "Offers & Packages", href: "/customer/offers" },
-    ...future(["My Family", "Treatment Progress", "Payments & Invoices", "Notifications", "Support"]),
     { label: "Profile", href: "/profile" },
   ],
 };

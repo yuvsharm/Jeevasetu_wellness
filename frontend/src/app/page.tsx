@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 
+import {PractitionerCarousel} from "@/components/practitioners/public-directory";
 import { PublicReviews } from "@/components/appointments/review-panels";
 import { CommercialOffers,TherapyGrid } from "@/components/public/therapy-grid";
 import { PublicShell } from "@/components/public/public-shell";
@@ -27,6 +28,8 @@ export default function Home(){return <PublicShell><main>
   <Reveal><section id="how-it-works" className="section scroll-mt-24 pt-32"><div className="site-container"><SectionHeading eyebrow="How it works" title="From your first choice to a verified home visit" copy="A straightforward journey from choosing care to completing a verified home service." center/><ol className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{journeySteps.map((step)=><li key={step.number} className="process-card overflow-hidden !p-0"><div className="relative aspect-video overflow-hidden bg-[#e9efe8]"><Image src={step.image} alt={step.imageAlt} fill className="object-cover transition duration-500 hover:scale-[1.03]" sizes="(max-width: 639px) 100vw, (max-width: 1023px) 50vw, 33vw"/></div><div className="p-5"><span className="process-number">{step.number}</span><h3 className="mt-4 font-serif text-2xl text-[#103c27]">{step.title}</h3><p className="mt-2 text-sm leading-6 text-[#5b6c63]">{step.description}</p></div></li>)}</ol></div></section></Reveal>
 
   <Reveal><section id="therapies" className="section scroll-mt-24 bg-[#f7f3e9]"><div className="site-container"><SectionHeading eyebrow="All 10 therapies" title="Clear choices for care at home" copy="Compare every current JeevaSetu therapy, then book your choice without selecting it again."/><div className="mt-10"><TherapyGrid compact/></div></div></section></Reveal>
+
+  <Reveal><section id="available-therapists" className="section min-w-0 overflow-hidden"><div className="site-container min-w-0"><PractitionerCarousel/></div></section></Reveal>
 
   <Reveal><section className="section"><div className="site-container"><div className="flex flex-wrap items-end justify-between gap-5"><SectionHeading eyebrow="Plans & offers" title="Choose the option that fits your care journey" copy="Only currently active, publicly available plans and offers appear here—never fabricated promotions."/><Link href="/packages" className="button-secondary">See plans &amp; offers</Link></div><div className="mt-10"><CommercialOffers limit={6}/></div></div></section></Reveal>
 

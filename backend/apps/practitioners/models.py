@@ -91,6 +91,11 @@ class PractitionerApplication(models.Model):
     bio = models.TextField(max_length=1500, blank=True)
     languages = models.JSONField(default=list, blank=True)
     availability_notes = models.CharField(max_length=500, blank=True)
+    qualification_title = models.CharField(max_length=255, blank=True)
+    service_areas = models.ManyToManyField("staff.ServiceArea", blank=True, related_name="practitioner_applications")
+    working_days = models.JSONField(default=list, blank=True)
+    working_hours_start = models.TimeField(null=True, blank=True)
+    working_hours_end = models.TimeField(null=True, blank=True)
     last_completed_step = models.PositiveSmallIntegerField(default=0)
     correction_reason = models.CharField(max_length=500, blank=True)
     rejection_reason = models.CharField(max_length=500, blank=True)
@@ -155,7 +160,7 @@ class PractitionerApplication(models.Model):
             and self.highest_qualification != self.Qualification.WELLNESS_CERTIFICATION
         ):
             errors["highest_qualification"] = "Use a wellness qualification or certification."
-        if self.highest_qualification == self.Qualification.MPT and not self.specialization.strip():
+        if not self.qualification_title and self.highest_qualification == self.Qualification.MPT and not self.specialization.strip():
             errors["specialization"] = "MPT specialization is required."
         if errors:
             raise ValidationError(errors)
@@ -169,7 +174,12 @@ class PractitionerCompetency(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application = models.ForeignKey(
-        PractitionerApplication, on_delete=models.PROTECT, related_name="competencies"
+        PractitionerApplication, on_delete=models.PROTECT, related_name="competencies",
+        null=True, blank=True,
+    )
+    profile = models.ForeignKey(
+        "PractitionerProfile", on_delete=models.PROTECT,
+        related_name="competency_requests", null=True, blank=True,
     )
     therapy = models.ForeignKey(
         "appointments.TherapyOption",
@@ -189,16 +199,27 @@ class PractitionerCompetency(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
     )
     verified_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=("application", "therapy"), name="pract_app_therapy_uniq"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=("profile", "therapy"), name="pract_profile_therapy_uniq"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(application__isnull=False, profile__isnull=True)
+                    | models.Q(application__isnull=True, profile__isnull=False)
+                ),
+                name="pract_competency_single_parent",
+            ),
         ]
 
     def __str__(self):
-        return f"{self.application_id}:{self.therapy_id}"
+        return f"{self.application_id or self.profile_id}:{self.therapy_id}"
 
 
 class PractitionerDocument(models.Model):
@@ -219,8 +240,10 @@ class PractitionerDocument(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application = models.ForeignKey(
-        PractitionerApplication, on_delete=models.PROTECT, related_name="documents"
+        PractitionerApplication, on_delete=models.PROTECT, related_name="documents", null=True, blank=True
     )
+    profile = models.ForeignKey("PractitionerProfile", on_delete=models.PROTECT,
+                               related_name="credential_documents", null=True, blank=True)
     kind = models.CharField(max_length=24, choices=Kind.choices)
     file = models.FileField(upload_to="practitioners/private/documents/%Y/%m/")
     original_name = models.CharField(max_length=255)
@@ -274,6 +297,7 @@ class PractitionerProfile(models.Model):
     is_approved = models.BooleanField(default=True)
     is_publicly_visible = models.BooleanField(default=False)
     is_open_to_work = models.BooleanField(default=False)
+    pending_credentials = models.JSONField(default=dict, blank=True)
     approved_at = models.DateTimeField()
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -309,8 +333,10 @@ class PractitionerAuditEvent(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application = models.ForeignKey(
-        PractitionerApplication, on_delete=models.PROTECT, related_name="audit_events"
+        PractitionerApplication, on_delete=models.PROTECT, related_name="audit_events", null=True, blank=True
     )
+    profile = models.ForeignKey(PractitionerProfile, on_delete=models.PROTECT,
+                               related_name="audit_events", null=True, blank=True)
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
@@ -332,3 +358,42 @@ class PractitionerAuditEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Practitioner audit events are immutable.")
+
+
+class TherapyLearningGuide(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    therapy = models.OneToOneField("appointments.TherapyOption", on_delete=models.PROTECT, related_name="learning_guide")
+    title_en = models.CharField(max_length=200)
+    title_hi = models.CharField(max_length=200, blank=True)
+    content_en = models.JSONField(default=dict, blank=True)
+    content_hi = models.JSONField(default=dict, blank=True)
+    learning_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    published = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class TherapyLearningImage(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guide = models.ForeignKey(TherapyLearningGuide, on_delete=models.CASCADE, related_name="images")
+    image = models.ImageField(upload_to="learning/images/%Y/%m/")
+    caption_en = models.CharField(max_length=300, blank=True)
+    caption_hi = models.CharField(max_length=300, blank=True)
+    alt_text = models.CharField(max_length=300)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    rights_confirmed = models.BooleanField(default=False)
+    class Meta:
+        ordering = ("sort_order", "id")
+
+class TherapyLearningVideo(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guide = models.ForeignKey(TherapyLearningGuide, on_delete=models.CASCADE, related_name="videos")
+    title = models.CharField(max_length=200)
+    youtube_url = models.URLField(max_length=500)
+    language = models.CharField(max_length=2, choices=(("en", "English"), ("hi", "Hindi")))
+    description = models.CharField(max_length=1000, blank=True)
+    approved = models.BooleanField(default=False)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    class Meta:
+        ordering = ("sort_order", "id")

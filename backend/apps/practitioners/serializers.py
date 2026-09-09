@@ -12,6 +12,7 @@ from apps.practitioners.models import (
     PractitionerProfile,
 )
 from apps.practitioners.services import upload_checksum
+from apps.practitioners.dob import canonical_dob, derived_age, identity_today, validate_dob
 
 ALLOWED_UPLOADS = {
     "application/pdf": {".pdf"},
@@ -94,14 +95,27 @@ class ProfilePhotoUploadSerializer(serializers.Serializer):
     profile_photo = serializers.ImageField()
 
     def validate_profile_photo(self, value):
-        if value.size > 5 * 1024 * 1024:
-            raise serializers.ValidationError("Profile photographs must not exceed 5 MB.")
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError("Profile photographs must not exceed 10 MB.")
         if getattr(value, "content_type", "") not in ("image/jpeg", "image/png", "image/webp"):
             raise serializers.ValidationError("Upload a JPEG, PNG, or WebP photograph.")
         return value
 
 
 class ApplicationSerializer(serializers.ModelSerializer):
+    therapy_ids = serializers.ListField(child=serializers.UUIDField(), required=False, write_only=True)
+    service_area_names = serializers.SlugRelatedField(source="service_areas", slug_field="name", many=True, read_only=True)
+    age = serializers.SerializerMethodField()
+
+    def get_age(self, value):
+        return derived_age(value)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        dob = canonical_dob(instance)
+        data["date_of_birth"] = dob.isoformat() if dob else None
+        return data
+
     competencies = CompetencySerializer(many=True, read_only=True)
     documents = DocumentMetadataSerializer(many=True, read_only=True)
     has_profile_photo = serializers.SerializerMethodField()
@@ -124,13 +138,9 @@ class ApplicationSerializer(serializers.ModelSerializer):
         )
 
     def validate_date_of_birth(self, value):
-        if value is None:
-            return value
-        today = timezone.localdate()
-        age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
-        if age < 18 or age > 85:
-            raise serializers.ValidationError("Applicants must be between 18 and 85 years old.")
-        return value
+        if value is None:  # Incomplete drafts may autosave; submission/approval require DOB.
+            return None
+        return validate_dob(value, identity_today(self.instance, self.context["request"].organization))
 
     def get_has_profile_photo(self, value) -> bool:
         return bool(value.profile_photo)
@@ -158,6 +168,24 @@ class ApplicationSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         instance = self.instance
+        if "therapy_ids" in attrs:
+            from apps.appointments.models import TherapyOption
+            ids = set(attrs["therapy_ids"])
+            if not ids or TherapyOption.objects.filter(pk__in=ids, is_active=True, organization=self.context["request"].organization).count() != len(ids):
+                raise serializers.ValidationError({"therapy_ids": "Select active therapy competencies."})
+        if instance and instance.qualification_title and "mobile_number" in attrs and attrs["mobile_number"] != instance.applicant.mobile_number:
+            raise serializers.ValidationError({"mobile_number": "Your verified account mobile cannot be changed through an application edit."})
+        for area in attrs.get("service_areas", []):
+            if area.organization_id != self.context["request"].organization.id or not area.is_active:
+                raise serializers.ValidationError({"service_areas": "Select active service areas from this organization."})
+        if "working_days" in attrs:
+            days = attrs["working_days"]
+            if not isinstance(days, list) or any(type(day) is not int or day not in range(7) for day in days):
+                raise serializers.ValidationError({"working_days": "Select valid working days."})
+        start = attrs.get("working_hours_start", getattr(instance, "working_hours_start", None))
+        end = attrs.get("working_hours_end", getattr(instance, "working_hours_end", None))
+        if start and end and start >= end:
+            raise serializers.ValidationError({"working_hours_end": "Working hours must end after they start."})
         if instance and instance.status not in (
             PractitionerApplication.Status.DRAFT,
             PractitionerApplication.Status.CORRECTION_REQUIRED,
@@ -174,6 +202,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        validated_data.pop("therapy_ids", None)
         value = PractitionerApplication(
             applicant=self.context["request"].user,
             organization=self.context["request"].organization,
@@ -184,6 +213,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
         return value
 
     def update(self, instance, validated_data):
+        therapy_ids = validated_data.pop("therapy_ids", None)
+        areas = validated_data.pop("service_areas", None)
         original_values = {field: getattr(instance, field) for field in validated_data}
         for field, value in validated_data.items():
             setattr(instance, field, value)
@@ -195,6 +226,12 @@ class ApplicationSerializer(serializers.ModelSerializer):
             detail = getattr(error, "message_dict", {"detail": error.messages})
             raise serializers.ValidationError(detail) from error
         instance.save()
+        if areas is not None:
+            instance.service_areas.set(areas)
+        if therapy_ids is not None:
+            instance.competencies.exclude(therapy_id__in=therapy_ids).delete()
+            for therapy_id in set(therapy_ids):
+                PractitionerCompetency.objects.get_or_create(application=instance, therapy_id=therapy_id)
         return instance
 
 
@@ -213,6 +250,7 @@ class ReviewActionSerializer(serializers.Serializer):
 
 class VerificationSerializer(serializers.Serializer):
     verified = serializers.BooleanField()
+    note = serializers.CharField(max_length=500, required=False, allow_blank=True, trim_whitespace=True)
 
 
 class OpenToWorkSerializer(serializers.Serializer):
@@ -220,6 +258,15 @@ class OpenToWorkSerializer(serializers.Serializer):
 
 
 class PublicPractitionerSerializer(serializers.ModelSerializer):
+    age = serializers.SerializerMethodField()
+    availability_badge = serializers.SerializerMethodField()
+
+    def get_age(self, value):
+        return derived_age(value)
+
+    def get_availability_badge(self, value):
+        return "Available with JeevaSetu"
+
     display_name = serializers.CharField(source="user.get_full_name", read_only=True)
     highest_qualification = serializers.SerializerMethodField()
     experience_years = serializers.SerializerMethodField()
@@ -237,6 +284,8 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
         model = PractitionerProfile
         fields = (
             "id",
+            "age",
+            "availability_badge",
             "display_name",
             "category",
             "highest_qualification",
@@ -270,33 +319,34 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
 
     def get_highest_qualification(self, value) -> str:
         application = self._application(value)
-        return application.get_highest_qualification_display() if application else value.staff_profile.qualification
+        return value.staff_profile.qualification if value.staff_profile_id else (application.qualification_title or application.get_highest_qualification_display())
 
     def get_experience_years(self, value) -> int:
         application = self._application(value)
-        return application.experience_years if application else value.staff_profile.experience_years
+        return value.staff_profile.experience_years if value.staff_profile_id else application.experience_years
 
     def get_experience_months(self, value) -> int:
         application = self._application(value)
-        return application.experience_months if application else value.staff_profile.experience_months
+        return value.staff_profile.experience_months if value.staff_profile_id else application.experience_months
 
     def get_languages(self, value) -> list[str]:
         application = self._application(value)
-        return application.languages if application else value.staff_profile.languages_known
+        return value.staff_profile.languages_known if value.staff_profile_id else application.languages
 
     def get_gender(self, value) -> str:
         application = self._application(value)
-        return application.get_gender_display() if application else value.staff_profile.get_gender_display()
+        return value.staff_profile.get_gender_display() if value.staff_profile_id else application.get_gender_display()
 
     def get_bio(self, value) -> str:
         application = self._application(value)
-        return application.bio if application else value.staff_profile.bio
+        return value.staff_profile.bio if value.staff_profile_id else application.bio
 
     def get_service_area(self, value) -> str:
         application = self._application(value)
-        return application.city if application else value.staff_profile.city
+        return ", ".join(value.staff_profile.service_areas.values_list("name", flat=True)) if value.staff_profile_id else application.city
 
     def get_photo_url(self, value) -> str:
-        request = self.context.get("request")
-        path = f"/api/v1/practitioners/public/{value.pk}/photo/"
-        return request.build_absolute_uri(path) if request else path
+        from apps.staff.photos import profile_photo
+        application = self._application(value)
+        photo = profile_photo(value.staff_profile) if value.staff_profile_id else getattr(application, "profile_photo", None)
+        return f"/api/practitioners/public/{value.pk}/photo" if photo else ""

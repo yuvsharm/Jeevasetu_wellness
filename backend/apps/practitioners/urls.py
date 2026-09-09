@@ -1,8 +1,13 @@
 from django.urls import path
 
 from apps.practitioners import views
+from apps.practitioners.registration import ApplicationOptionsView, CompleteApplicationView, ApplicantMobileAvailabilityView
 
 urlpatterns = [
+    path("registration-options/", ApplicationOptionsView.as_view()),
+    path("register-complete/", CompleteApplicationView.as_view()),
+    path("mobile-availability/", ApplicantMobileAvailabilityView.as_view()),
+    path("dob-preview/", views.DobPreviewView.as_view(), name="practitioner-dob-preview"),
     path(
         "applications/me/",
         views.MyApplicationListCreateView.as_view(),
@@ -70,9 +75,9 @@ urlpatterns = [
         name="practitioner-document-verify",
     ),
     path(
-        "competencies/<uuid:pk>/verify/",
-        views.VerifyCompetencyView.as_view(),
-        name="practitioner-competency-verify",
+        "competencies/<uuid:pk>/",
+        views.ManageApplicationCompetencyView.as_view(),
+        name="practitioner-competency-manage",
     ),
     path("me/open-to-work/", views.MyOpenToWorkView.as_view(), name="practitioner-open-to-work"),
     path("public/", views.PublicPractitionerListView.as_view(), name="practitioner-public-list"),

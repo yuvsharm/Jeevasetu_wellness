@@ -1,3 +1,5 @@
+import json
+
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -8,6 +10,7 @@ from rest_framework import status
 from rest_framework.exceptions import APIException, Throttled, ValidationError
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -46,6 +49,7 @@ from apps.accounts.services import (
 from apps.accounts.validators import normalize_email_address, normalize_mobile_number
 from apps.tenancy.models import OrganizationMembership
 from apps.appointments.booking_verification import resolve_booking_verification, verify_booking_otp
+from apps.appointments.models import BookingPhoneVerification
 from apps.patients.models import PatientAddress, PatientProfile
 
 
@@ -253,6 +257,7 @@ class CustomerRegistrationView(APIView):
 
     authentication_classes = ()
     permission_classes = (AllowAny,)
+    parser_classes = (JSONParser, MultiPartParser, FormParser)
     throttle_classes = (CustomerRegistrationRateThrottle,)
 
     def throttled(self, request, wait):
@@ -268,7 +273,15 @@ class CustomerRegistrationView(APIView):
     def post(self, request):
         if getattr(request, "organization", None) is None:
             return Response({"detail": "Organization context is unavailable."}, status=404)
-        serializer = CustomerRegistrationSerializer(data=request.data)
+        submitted = request.data
+        if "payload" in request.data:
+            try:
+                submitted = json.loads(request.data["payload"])
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValidationError({"payload": "Registration details are invalid."}) from error
+            if request.FILES.get("profile_photo"):
+                submitted["profile_photo"] = request.FILES["profile_photo"]
+        serializer = CustomerRegistrationSerializer(data=submitted)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         try:
@@ -330,6 +343,7 @@ class CustomerRegistrationView(APIView):
             guardian_name=data.get("guardian_name", ""),
             guardian_relationship=data.get("guardian_relationship", ""),
             guardian_mobile=data.get("guardian_mobile", ""),
+            profile_photo=data.get("profile_photo", ""),
         )
         patient.save()
         address = PatientAddress(
@@ -356,7 +370,26 @@ class CustomerPasswordResetView(APIView):
     permission_classes = (AllowAny,)
     throttle_scope = "auth_password_reset"
 
-    @transaction.atomic
+    def eligible_account(self, user, organization):
+        return bool(user and user.is_active and user.is_enabled
+            and OrganizationMembership.objects.filter(user=user, organization=organization, is_active=True).exists()
+            and user.role_assignments.filter(organization=organization, role=Role.CUSTOMER, is_active=True).exists()
+            and not user.role_assignments.filter(
+                organization=organization, is_active=True
+            ).exclude(role=Role.CUSTOMER).exists())
+
+    def verification_error(self, organization, data):
+        verification = BookingPhoneVerification.objects.filter(
+            id=data["verification_id"], organization=organization
+        ).first()
+        if verification is None or verification.mobile_number != data["mobile_number"]:
+            return "OTP verification does not match this mobile number. Please start again."
+        if verification.consumed_at:
+            return "OTP proof already used. Please start again."
+        if timezone.now() >= verification.expires_at:
+            return "OTP verification expired. Please verify again."
+        return "OTP verification is invalid. Please verify again."
+
     def post(self, request):
         if getattr(request, "organization", None) is None:
             return Response({"detail": "Organization context is unavailable."}, status=404)
@@ -364,39 +397,62 @@ class CustomerPasswordResetView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         try:
-            token = verify_booking_otp(
+            token = data.get("booking_verification_token") or verify_booking_otp(
                 organization=request.organization,
                 verification_id=data["verification_id"], mobile_number=data["mobile_number"],
                 otp=data.get("otp"), access_token=data.get("access_token"),
             )
+        except Exception as error:
+            raise ValidationError(self.verification_error(request.organization, data)) from error
+        return self.complete_reset(request, data, token)
+
+    @transaction.atomic
+    def complete_reset(self, request, data, token):
+        try:
             verification = resolve_booking_verification(
                 organization=request.organization, mobile_number=data["mobile_number"],
                 token=token, lock=True,
             )
+            if verification.id != data["verification_id"]:
+                raise ValidationError("Verification does not match this request.")
         except Exception as error:
-            raise ValidationError(getattr(error, "messages", [str(error)])) from error
+            raise ValidationError(self.verification_error(request.organization, data)) from error
         user = User.objects.select_for_update().filter(mobile_number=f"+91{data['mobile_number']}").first()
-        eligible = bool(
-            user and user.is_active and user.is_enabled
-            and OrganizationMembership.objects.filter(user=user, organization=request.organization, is_active=True).exists()
-            and user.role_assignments.filter(organization=request.organization, role=Role.CUSTOMER, is_active=True).exists()
-            and not user.role_assignments.filter(is_active=True).exclude(role=Role.CUSTOMER).exists()
-        )
+        eligible = self.eligible_account(user, request.organization)
         if not eligible:
-            raise ValidationError("Password reset could not be completed.")
+            raise ValidationError("Account not found for this password reset flow.")
         from django.contrib.auth import password_validation
-
-        password_validation.validate_password(data["new_password"], user)
+        from django.core.exceptions import ValidationError as PasswordValidationError
+        try:
+            password_validation.validate_password(data["new_password"], user)
+        except PasswordValidationError as error:
+            raise ValidationError({"new_password": error.messages}) from error
         user.set_password(data["new_password"])
         user.save(update_fields=("password",))
         verification.consumed_at = timezone.now()
         verification.save(update_fields=("consumed_at",))
+        from apps.accounts.models import PasswordResetRequest
+        PasswordResetRequest.objects.filter(user=user, used_at__isnull=True).update(used_at=timezone.now())
         blacklist_user_refresh_tokens(user)
         record_auth_event(
             request, AuthenticationAuditEvent.Event.PASSWORD_RESET_COMPLETE,
             AuthenticationAuditEvent.Outcome.SUCCESS, user=user,
         )
         return Response({"detail": "Password reset completed. Sign in with your new password."})
+
+
+class AccountPasswordResetView(CustomerPasswordResetView):
+    """Existing staff/applicant accounts, using the same verified reset transaction."""
+
+    def eligible_account(self, user, organization):
+        if not (user and user.is_active and user.is_enabled and user.has_usable_password()
+                and OrganizationMembership.objects.filter(user=user, organization=organization, is_active=True).exists()):
+            return False
+        roles = user.role_assignments.filter(organization=organization)
+        if roles.filter(is_active=True).exclude(role=Role.CUSTOMER).exists():
+            return True
+        # Pending applicants can recover their account, never an operational role.
+        return not roles.exists() and user.practitioner_applications.filter(organization=organization).exists()
 
 
 class PractitionerRegistrationView(APIView):
@@ -412,7 +468,7 @@ class PractitionerRegistrationView(APIView):
         organization = getattr(request, "organization", None)
         if organization is None:
             return Response({"detail": "Organization context is unavailable."}, status=404)
-        serializer = PractitionerRegistrationSerializer(data=request.data)
+        serializer = PractitionerRegistrationSerializer(data=request.data, context={"organization": organization})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         try:
@@ -459,6 +515,8 @@ class PractitionerRegistrationView(APIView):
                 })
             if data.get("email") and User.objects.filter(email__iexact=data["email"]).exists():
                 raise ValidationError({"email": "This email is already registered with JeevaSetu."})
+            if not data.get("date_of_birth"):
+                raise ValidationError({"date_of_birth": "Date of birth is required."})
             names = data["full_name"].strip().split(maxsplit=1)
             user = User(
                 username=data.get("email") or mobile,
@@ -471,6 +529,11 @@ class PractitionerRegistrationView(APIView):
         user.full_clean()
         user.save()
         OrganizationMembership.objects.get_or_create(user=user, organization=organization)
+        if not activated:
+            from apps.practitioners.models import PractitionerApplication
+            PractitionerApplication.objects.create(applicant=user, organization=organization,
+                date_of_birth=data["date_of_birth"], full_legal_name=data["full_name"],
+                mobile_number=mobile, email=data.get("email", ""))
         verification.consumed_at = timezone.now()
         verification.save(update_fields=("consumed_at",))
         record_auth_event(

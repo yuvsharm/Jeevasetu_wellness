@@ -7,13 +7,14 @@ import { createContext, useContext } from "react";
 import type { Session } from "@/lib/api/contracts";
 import { requestJson } from "@/lib/api/client";
 import { sessionEndpoints } from "@/lib/api/endpoints";
+import { sessionQueryKey } from "@/lib/auth/session-cache";
 
 const SessionContext = createContext<ReturnType<typeof useSessionQuery> | null>(null);
 
 function useSessionQuery() {
   return useQuery({
-    queryKey: ["session"],
-    queryFn: () => requestJson<Session>(sessionEndpoints.me),
+    queryKey: sessionQueryKey,
+    queryFn: ({ signal }) => requestJson<Session>(sessionEndpoints.me, { signal }),
     staleTime: 30_000,
     retry: false,
   });

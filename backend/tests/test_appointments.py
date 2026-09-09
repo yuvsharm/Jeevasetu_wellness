@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from django.db import close_old_connections, connection, connections
 from django.urls import reverse
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -267,6 +268,7 @@ def test_direct_customer_request_inside_advance_notice_is_rejected(api_client):
     assert "at least 24 hours' advance booking" in str(response.data["preferred_time"][0])
 
 
+@override_settings(MSG91_ENABLED=False)
 def test_customer_otp_login_authenticates_existing_customer_and_cannot_be_reused(api_client):
     organization, customer, _ = setup_identity(Role.CUSTOMER)
     api_client.force_authenticate(user=None)

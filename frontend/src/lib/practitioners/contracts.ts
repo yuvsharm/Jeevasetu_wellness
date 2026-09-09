@@ -1,7 +1,8 @@
 export type PractitionerStatus = "DRAFT" | "SUBMITTED" | "RESUBMITTED" | "UNDER_REVIEW" | "CORRECTION_REQUIRED" | "APPROVED" | "REJECTED" | "WITHDRAWN";
 export type PractitionerApplication = {
+  qualification_title?:string; service_areas?:string[]; service_area_names?:string[]; working_days?:number[]; working_hours_start?:string|null; working_hours_end?:string|null;
   id: string; status: PractitionerStatus; category: "PHYSIOTHERAPIST" | "WELLNESS"; full_legal_name: string;
-  date_of_birth: string; gender: string; mobile_number: string; alternate_mobile: string; email: string;
+  age?:number|null; date_of_birth: string; gender: string; mobile_number: string; alternate_mobile: string; email: string;
   current_address: string; city: string; state: string; pin_code: string; highest_qualification: string;
   specialization: string; college_institute: string; awarding_body: string; passing_year: number;
   registration_number: string; registration_authority: string; registration_expiry: string | null;
@@ -13,5 +14,5 @@ export type PractitionerApplication = {
   documents: Array<{id:string;kind:string;original_name:string;content_type:string;size_bytes:number;verification_status:string;created_at:string}>;
   competencies: Array<{id:string;therapy:string;therapy_name:string;experience_months:number;verification_status:string}>;
 };
-export type PublicPractitioner = { id:string; display_name:string; category:string; highest_qualification:string; qualification_specialization:string; experience_years:number; experience_months?:number; gender:string; languages:string[]; bio:string; service_area:string; verified_services:string[]; photo_url:string; average_rating:number|null; review_count:number };
+export type PublicPractitioner = { age?:number|null; availability_badge?:string; id:string; display_name:string; category:string; highest_qualification:string; qualification_specialization:string; experience_years:number; experience_months?:number; gender:string; languages:string[]; bio:string; service_area:string; verified_services:string[]; photo_url:string; average_rating:number|null; review_count:number };
 

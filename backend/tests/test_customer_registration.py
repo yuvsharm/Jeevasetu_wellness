@@ -1,9 +1,12 @@
+import base64
+import json
 from datetime import time
 
 import pytest
 from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
@@ -81,6 +84,11 @@ def registration_payload(token, mobile="9876543210", **overrides):
     return payload
 
 
+def png(name="profile.png"):
+    data = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+    return SimpleUploadedFile(name, data, content_type="image/png")
+
+
 @LOCAL_OTP
 def test_customer_registration_requires_verification_then_creates_profile_and_session(api_client, organization):
     issued = issue(api_client, organization)
@@ -109,6 +117,95 @@ def test_customer_registration_requires_verification_then_creates_profile_and_se
     assert PatientAddress.objects.filter(patient=profile, is_primary=True, is_active=True).exists()
     verification = BookingPhoneVerification.objects.get(pk=issued.data["verification_id"])
     assert verification.verified_at is not None and verification.consumed_at is not None
+
+
+@LOCAL_OTP
+def test_optional_customer_photo_and_self_profile_updates(api_client, organization, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    issued = issue(api_client, organization)
+    verified = verify(api_client, organization, issued)
+    payload = registration_payload(verified.data["token"])
+    completed = api_client.post(
+        reverse("auth-customer-register"),
+        {"payload": json.dumps(payload), "profile_photo": png()},
+        format="multipart", **tenant(organization),
+    )
+    assert completed.status_code == 201
+    customer = User.objects.get(mobile_number="+919876543210")
+    profile = PatientProfile.objects.get(user=customer, organization=organization)
+    assert bool(profile.profile_photo)
+    api_client.force_authenticate(customer)
+    detail = api_client.get(reverse("patient-me"), **tenant(organization))
+    assert detail.status_code == 200 and detail.data["photo_url"]
+    direct_mobile = api_client.patch(
+        reverse("patient-me"), {"mobile_number": "+919876543211"},
+        format="json", **tenant(organization),
+    )
+    assert direct_mobile.status_code == 400
+    updated = api_client.patch(
+        reverse("patient-me"),
+        {"first_name": "Anita", "last_name": "Sharma", "email": "anita@example.com",
+         "address_line_1": "42 Wellness Road", "city": "Meerut", "region": "Uttar Pradesh",
+         "pin_code": "250004"},
+        format="json", **tenant(organization),
+    )
+    assert updated.status_code == 200
+    profile.refresh_from_db(); customer.refresh_from_db()
+    assert profile.full_name == "Anita Sharma" and customer.email == "anita@example.com"
+    replaced = api_client.post(
+        reverse("patient-me-photo"), {"profile_photo": png("replacement.png")},
+        format="multipart", **tenant(organization),
+    )
+    assert replaced.status_code == 200
+    opened = api_client.get(reverse("patient-me-photo"), **tenant(organization))
+    assert opened.status_code == 200
+    removed = api_client.delete(reverse("patient-me-photo"), **tenant(organization))
+    profile.refresh_from_db()
+    assert removed.status_code == 204 and not profile.profile_photo
+
+
+@LOCAL_OTP
+def test_customer_mobile_change_requires_exact_verified_mobile_and_consumes_proof(api_client, organization):
+    issued = issue(api_client, organization)
+    verified = verify(api_client, organization, issued)
+    completed = api_client.post(
+        reverse("auth-customer-register"), registration_payload(verified.data["token"]),
+        format="json", **tenant(organization),
+    )
+    assert completed.status_code == 201
+    customer = User.objects.get(mobile_number="+919876543210")
+    profile = PatientProfile.objects.get(user=customer, organization=organization)
+    api_client.force_authenticate(customer)
+
+    new_mobile = "9876543213"
+    new_issued = issue(api_client, organization, mobile=new_mobile)
+    new_verified = verify(api_client, organization, new_issued, mobile=new_mobile)
+    changed = api_client.post(
+        reverse("patient-me-mobile"),
+        {
+            "mobile_number": new_mobile,
+            "current_password": "Asha-Strong-Password-2026!",
+            "booking_verification_token": new_verified.data["token"],
+        },
+        format="json", **tenant(organization),
+    )
+    assert changed.status_code == 200
+    customer.refresh_from_db(); profile.refresh_from_db()
+    assert customer.mobile_number == "+919876543213"
+    assert profile.mobile_number == new_mobile
+    proof = BookingPhoneVerification.objects.get(pk=new_issued.data["verification_id"])
+    assert proof.consumed_at is not None
+
+    reused = api_client.post(
+        reverse("patient-me-mobile"),
+        {
+            "mobile_number": new_mobile,
+            "current_password": "Asha-Strong-Password-2026!",
+            "booking_verification_token": new_verified.data["token"],
+        },
+        format="json", **tenant(organization),
+    )
+    assert reused.status_code == 400
 
 
 @LOCAL_OTP

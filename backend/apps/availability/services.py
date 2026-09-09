@@ -67,12 +67,11 @@ def validate_rule(rule):
     except ClinicOperatingHours.DoesNotExist:
         raise ValidationError("Clinic operating hours have not been configured.") from None
     window = hours.window_for_weekday(rule.weekday)
-    if (
-        window is None
-        or rule.starts_at < window[0]
-        or rule.ends_at > window[1]
-    ):
-        raise ValidationError("Availability must remain within clinic operating hours.")
+    if window is None:
+        day = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")[rule.weekday]
+        raise ValidationError(f"Clinic is closed on {day}.")
+    if rule.starts_at < window[0] or rule.ends_at > window[1]:
+        raise ValidationError("Therapist hours must remain within clinic operating hours.")
     overlap = AvailabilityRule.objects.filter(
         physiotherapist=rule.physiotherapist,
         weekday=rule.weekday,
@@ -232,13 +231,7 @@ def discover_slots(*, clinic, therapy, date_from, date_to, physiotherapist=None,
                 practitioner_profile__is_approved=True,
                 practitioner_profile__is_open_to_work=True,
             )
-        ).filter(
-            Q(practitioner_profile__isnull=True)
-            | Q(
-                practitioner_profile__source_application__competencies__therapy=therapy,
-                practitioner_profile__source_application__competencies__verification_status="VERIFIED",
-            )
-        ).filter(pk=physiotherapist.pk).distinct()
+        ).filter(therapy_competencies=therapy, pk=physiotherapist.pk).distinct()
     duration = duration_minutes or therapy.default_duration_minutes or 60
     zone = _zone(clinic)
     results = []

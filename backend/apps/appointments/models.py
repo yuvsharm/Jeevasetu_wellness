@@ -345,6 +345,7 @@ class AppointmentRequest(models.Model):
 class AppointmentRequestAuditEvent(models.Model):
     class Event(models.TextChoices):
         SUBMITTED = "SUBMITTED", "Submitted"
+        ACCEPTED = "ACCEPTED", "Accepted for assignment"
         APPROVED_AND_ASSIGNED = "APPROVED_AND_ASSIGNED", "Approved and assigned"
         REJECTED = "REJECTED", "Rejected"
 

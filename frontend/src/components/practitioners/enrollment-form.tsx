@@ -1,5 +1,7 @@
 "use client";
 
+import {DobField,DobReview} from "./dob-field";
+import {formatExperience,parseExperience} from "@/components/staff/staff-creation-wizard";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
@@ -122,8 +124,8 @@ async function photoErrorMessage(response: Response) {
   } catch {
     /* Use the safe format fallback. */
   }
-  if (detail.includes("5 mb") || detail.includes("size"))
-    return "Photo must be 5 MB or smaller.";
+  if (detail.includes("10 mb") || detail.includes("size"))
+    return "Photo must be 10 MB or smaller.";
   if (
     detail.includes("invalid_image") ||
     detail.includes("corrupt") ||
@@ -354,6 +356,7 @@ export function EnrollmentForm() {
   if (application && !editable)
     return <SubmittedStatus application={application} />;
   if (!application) return null;
+  if (application.qualification_title) return <CanonicalCorrection key={application.id} application={application}/>;
 
   const progress = Math.round(((step + 1) / steps.length) * 100);
   return (
@@ -429,7 +432,7 @@ export function EnrollmentForm() {
                 <ProfilePhotoCard application={application} />
               </div>
               {field("full_legal_name", "Full legal name *")}
-              {field("date_of_birth", "Date of birth *", "date")}
+              <DobField value={String(data.date_of_birth??"")} onChange={value=>change("date_of_birth",value)}/>
               <label className="grid gap-2 font-semibold">
                 Gender
                 <select
@@ -603,7 +606,7 @@ export function EnrollmentForm() {
           )}
           {step === 4 && <DocumentStep application={application} />}
           {step === 5 && (
-            <Review application={application} data={data} edit={move} />
+            <Review application={application} data={data} edit={move} canSubmit={!dirty && !save.isPending} />
           )}
         </div>
         <div className="mt-8 flex flex-col-reverse gap-3 min-[390px]:flex-row min-[390px]:justify-between">
@@ -631,6 +634,26 @@ export function EnrollmentForm() {
       </div>
     </section>
   );
+}
+
+function CanonicalCorrection({application:a}:{application:PractitionerApplication}) {
+  const client=useQueryClient();
+  const [v,setV]=useState(a),[experience,setExperience]=useState(`${a.experience_years}.${a.experience_months}`),[languages,setLanguages]=useState(a.languages.join(", "));
+  const [therapyIds,setTherapyIds]=useState(a.competencies.map(c=>c.therapy));
+  const [stage,setStage]=useState<"details"|"documents"|"review">("details");
+  const options=useQuery({queryKey:["practitioner-registration-options"],queryFn:()=>requestJson<{service_areas:{id:string;name:string}[];therapies:{id:string;name:string}[]}>("/api/practitioners/registration-options")});
+  const refresh=()=>client.invalidateQueries({queryKey:["my-practitioner-applications"]});
+  const save=useMutation({mutationFn:async()=>{
+    const parsed=parseExperience(experience);if(!parsed)throw new Error("Enter experience in Years.Months format. Months must be between 0 and 11.");
+    return requestJson(`/api/practitioners/me/${a.id}`,{method:"PATCH",body:JSON.stringify({full_legal_name:v.full_legal_name,email:v.email,gender:v.gender,date_of_birth:v.date_of_birth,qualification_title:v.qualification_title,specialization:v.specialization,bio:v.bio,languages:[...new Map(languages.split(",").map(x=>x.trim()).filter(Boolean).map(x=>[x.toLowerCase(),x])).values()],experience_years:parsed.years,experience_months:parsed.months,service_areas:v.service_areas,working_days:v.working_days,working_hours_start:v.working_hours_start,working_hours_end:v.working_hours_end,therapy_ids:therapyIds})});
+  },onSuccess:async()=>{await refresh();setStage("review")}});
+  const submit=useMutation({mutationFn:()=>requestJson(`/api/practitioners/me/${a.id}/submit`,{method:"POST",body:"{}"}),onSuccess:refresh});
+  const input=(key:"full_legal_name"|"email"|"qualification_title"|"specialization"|"bio"|"working_hours_start"|"working_hours_end",label:string,type="text")=><label className="grid gap-2 font-semibold">{label}<input className="min-h-12 rounded-xl border px-3" type={type} value={v[key]??""} onChange={e=>setV({...v,[key]:e.target.value})}/></label>;
+  return <section className="mx-auto max-w-5xl space-y-5 rounded-3xl border bg-white p-6"><h1 className="text-3xl font-bold text-emerald-950">Review your application correction</h1><p className="rounded-xl bg-amber-50 p-4">{a.correction_reason||"Complete your professional application."}</p><p>Verified account mobile: {a.mobile_number}. Application edits preserve this verified identity.</p>{(save.isError||submit.isError)&&<p role="alert" className="rounded-xl bg-red-50 p-4">{save.error?.message||submit.error?.message}</p>}
+  {stage==="details"&&<><div className="grid gap-4 sm:grid-cols-2">{input("full_legal_name","Full Name")}{input("email","Email","email")}<label className="grid gap-2 font-semibold">Gender<select value={v.gender} className="min-h-12 rounded-xl border px-3" onChange={e=>setV({...v,gender:e.target.value})}>{["FEMALE","MALE","OTHER","PREFER_NOT_TO_SAY"].map(g=><option key={g} value={g}>{g.replaceAll("_"," ")}</option>)}</select></label><DobField value={v.date_of_birth} onChange={date_of_birth=>setV({...v,date_of_birth})}/>{input("qualification_title","Qualification")}{input("specialization","Specialization")}<label className="grid gap-2 font-semibold">Experience (Years.Months)<input className="min-h-12 rounded-xl border px-3" value={experience} onChange={e=>setExperience(e.target.value)}/></label><label className="grid gap-2 font-semibold">Languages<input className="min-h-12 rounded-xl border px-3" value={languages} onChange={e=>setLanguages(e.target.value)}/></label>{input("bio","Professional Bio")}{input("working_hours_start","Working Hours Start","time")}{input("working_hours_end","Working Hours End","time")}</div><fieldset><legend className="font-bold">Working Days</legend>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((day,i)=><label className="mr-3" key={day}><input type="checkbox" checked={v.working_days?.includes(i)} onChange={()=>setV({...v,working_days:v.working_days?.includes(i)?v.working_days.filter(d=>d!==i):[...(v.working_days??[]),i]})}/> {day}</label>)}</fieldset><fieldset><legend className="font-bold">Service Areas</legend>{options.data?.service_areas.map(area=><label className="mr-3" key={area.id}><input type="checkbox" checked={v.service_areas?.includes(area.id)} onChange={()=>setV({...v,service_areas:v.service_areas?.includes(area.id)?v.service_areas.filter(id=>id!==area.id):[...(v.service_areas??[]),area.id]})}/> {area.name}</label>)}</fieldset><fieldset><legend className="font-bold">Therapy Competencies</legend>{options.data?.therapies.map(t=><label className="mr-3" key={t.id}><input type="checkbox" checked={therapyIds.includes(t.id)} onChange={()=>setTherapyIds(therapyIds.includes(t.id)?therapyIds.filter(id=>id!==t.id):[...therapyIds,t.id])}/> {t.name}</label>)}</fieldset><ProfilePhotoCard application={a}/><button className="button-primary" disabled={save.isPending} onClick={()=>save.mutate()}>Save & Review</button></>}
+  {stage==="documents"&&<><div className="grid gap-4 sm:grid-cols-2">{[{kind:"GOVERNMENT_ID",label:"Government Identity Proof",required:true},{kind:"QUALIFICATION",label:"Qualification Certificate",required:true},{kind:"EXPERIENCE",label:"Experience Certificate",required:false},{kind:"ADDITIONAL",label:"Other Practitioner Certificate",required:false}].map(config=><SecureDocumentCard key={config.kind} application={a} config={config}/>)}</div><button className="button-primary" onClick={()=>setStage("review")}>Continue</button></>}
+  {stage==="review"&&<><DobReview value={a.date_of_birth}/><dl className="grid gap-3 sm:grid-cols-2">{[["Name",a.full_legal_name],["Email",a.email],["Practitioner Type",a.category==="WELLNESS"?"Naturopathy Practitioner":"Physiotherapist"],["Qualification",a.qualification_title],["Specialization",a.specialization],["Experience",formatExperience(a.experience_years,a.experience_months)],["Languages",a.languages.join(", ")],["Service Areas",a.service_area_names?.join(", ")],["Therapies",a.competencies.map(c=>c.therapy_name).join(", ")],["Working Days",a.working_days?.map(d=>["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][d]).join(", ")],["Working Hours",`${a.working_hours_start}–${a.working_hours_end}`],["Bio",a.bio],["Photo",a.has_profile_photo?"Uploaded":"Required"],["Documents",a.documents.map(d=>d.original_name).join(", ")]].map(([label,value])=><div key={label}><dt className="font-bold">{label}</dt><dd>{value||"Not provided"}</dd></div>)}</dl><div className="flex flex-wrap gap-3"><button className="button-secondary" onClick={()=>setStage("details")}>Edit Details</button><button className="button-secondary" onClick={()=>setStage("documents")}>Edit Documents</button><button className="button-primary" disabled={submit.isPending||!a.has_profile_photo||!["GOVERNMENT_ID","QUALIFICATION"].every(kind=>a.documents.some(d=>d.kind===kind))} onClick={()=>submit.mutate()}>Submit Application</button></div></>}
+  </section>;
 }
 
 function SaveStatus({ state, retry }: { state: string; retry: () => void }) {
@@ -713,7 +736,7 @@ function Competencies({
       <ul className="mt-3 text-sm text-slate-600">
         {application.competencies.map((item) => (
           <li key={item.id}>
-            {item.therapy_name} · {friendly(item.verification_status)}
+            {item.therapy_name}
           </li>
         ))}
       </ul>
@@ -760,8 +783,8 @@ function ProfilePhotoCard({
       : "",
   );
   async function upload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      setMessage("Photo must be 5 MB or smaller.");
+    if (file.size > 10 * 1024 * 1024) {
+      setMessage("Photo must be 10 MB or smaller.");
       return;
     }
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
@@ -840,7 +863,7 @@ function ProfilePhotoCard({
             </span>
           </h3>
           <p className="text-sm text-slate-600">
-            JPG, JPEG, PNG, or WebP · Maximum 5 MB
+            JPG, JPEG, PNG, or WebP · Maximum 10 MB
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <label className="inline-flex min-h-11 cursor-pointer items-center rounded-xl bg-emerald-700 px-4 font-bold text-white">
@@ -1082,10 +1105,12 @@ function Review({
   application,
   data,
   edit,
+  canSubmit,
 }: {
   application: PractitionerApplication;
   data: Record<string, unknown>;
   edit: (step: number) => void;
+  canSubmit: boolean;
 }) {
   const client = useQueryClient();
   const [serverMissing, setServerMissing] = useState<
@@ -1110,6 +1135,7 @@ function Review({
       ),
   });
   const missing = [] as string[];
+  if (!data.date_of_birth) missing.push("Personal: date of birth");
   if (!application.has_profile_photo) missing.push("Personal: profile photo");
   for (const kind of ["GOVERNMENT_ID", "QUALIFICATION"])
     if (!application.documents.some((doc) => doc.kind === kind))
@@ -1125,7 +1151,7 @@ function Review({
     missing.push("Documents: registration / licence certificate");
   return (
     <div>
-      <h2 className="text-2xl font-bold">Review & submit</h2>
+      <h2 className="text-2xl font-bold">Review & submit</h2><DobReview value={String(data.date_of_birth??"")}/>
       <p className="mt-2 text-slate-600">
         Confirm your details and open every document you want to verify before
         submission.
@@ -1213,6 +1239,7 @@ function Review({
           {serverMissing.length ? <div className="mt-3 grid gap-3">{Object.entries(Object.groupBy(serverMissing, item=>item.section)).map(([section,items])=><section key={section}><h3 className="font-bold">{friendly(section)}</h3><ul className="list-disc pl-5">{items?.map(item=><li key={item.code}>{item.label}</li>)}</ul><button type="button" onClick={()=>edit(section==="documents"?4:section==="service_availability"?3:section==="professional_details"?1:0)} className="mt-1 min-h-11 font-bold underline">Go to {section==="documents"?"Documents":friendly(section)}</button></section>)}</div>:<p className="mt-2">{submit.error.message} Your draft remains saved.</p>}
         </div>
       )}
+      {!canSubmit&&<p role="status" className="mt-3 text-amber-800">Save your latest changes before submitting. Use Retry if saving failed.</p>}
       <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
         <p className="text-sm text-emerald-950">
           Submitting sends this application and its private documents to
@@ -1222,7 +1249,7 @@ function Review({
         <div className="mt-4 flex flex-col gap-3 sm:flex-row">
           <button
             type="button"
-            disabled={submit.isPending}
+            disabled={submit.isPending || !canSubmit}
             onClick={() => submit.mutate()}
             className="min-h-12 rounded-xl bg-emerald-700 px-5 font-bold text-white disabled:opacity-50"
           >
@@ -1288,7 +1315,7 @@ function SubmittedStatus({
               Current status
             </dt>
             <dd className="mt-1 font-bold text-emerald-800">
-              {friendly(application.status)}
+              {["SUBMITTED","RESUBMITTED"].includes(application.status)?"Pending Approval":friendly(application.status)}
             </dd>
           </div>
         </dl>

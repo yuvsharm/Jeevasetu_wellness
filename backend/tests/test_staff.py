@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import date, time
 
 import pytest
 from django.urls import reverse
 
 from apps.accounts.models import Role, RoleAssignment, User
-from apps.appointments.models import TherapyOption
+from apps.appointments.models import AppointmentRequest, AppointmentRequestAuditEvent, TherapyOption
 from apps.practitioners.models import PractitionerProfile
 from apps.staff.models import ServiceArea, Specialization, StaffProfile
 from apps.tenancy.models import Clinic, ClinicMembership, Organization, OrganizationMembership
@@ -265,3 +265,89 @@ def test_duplicate_mobile_is_rejected_before_owner_sends_otp(api_client):
     assert response.status_code == 400
     assert "already registered" in str(response.data).lower()
     assert User.objects.filter(mobile_number=existing.mobile_number).count() == 1
+
+
+def test_owner_permanently_deletes_therapist_without_protected_history(api_client):
+    organization, clinic, owner = actor(Role.OWNER)
+    api_client.force_authenticate(owner)
+    created = api_client.post(reverse("staff-list"), staff_payload(clinic), format="json", **headers(organization))
+    profile = StaffProfile.objects.get(pk=created.data["id"])
+    user_id = profile.user_id
+    response = api_client.delete(reverse("staff-detail", args=[profile.id]), **headers(organization))
+    assert response.status_code == 204
+    assert not StaffProfile.objects.filter(pk=profile.id).exists()
+    assert not User.objects.filter(pk=user_id).exists()
+
+
+def test_permanent_delete_is_owner_only_and_blocks_protected_history(api_client):
+    organization, clinic, owner = actor(Role.OWNER)
+    api_client.force_authenticate(owner)
+    created = api_client.post(reverse("staff-list"), staff_payload(clinic), format="json", **headers(organization))
+    profile = StaffProfile.objects.get(pk=created.data["id"])
+    therapy = TherapyOption.objects.get(organization=organization, slug="physiotherapy")
+    request = AppointmentRequest.objects.create(
+        organization=organization, creator=owner, therapy=therapy, patient_name="History Patient",
+        age=35, gender="FEMALE", mobile_number="9876543200", session_preference="SINGLE",
+        preferred_date=date.today(), preferred_time=time(10), address="Meerut", city="Meerut", pin_code="250004",
+    )
+    AppointmentRequestAuditEvent.objects.create(
+        appointment_request=request, organization=organization, actor=owner,
+        event=AppointmentRequestAuditEvent.Event.APPROVED_AND_ASSIGNED,
+        previous_status="PENDING", new_status="APPROVED", physiotherapist=profile,
+    )
+    blocked = api_client.delete(reverse("staff-detail", args=[profile.id]), **headers(organization))
+    assert blocked.status_code == 400
+    assert "historical records" in str(blocked.data).lower()
+    assert StaffProfile.objects.filter(pk=profile.id).exists()
+
+    manager_created = api_client.post(reverse("staff-list"), staff_payload(None, Role.MANAGER, "2"), format="json", **headers(organization))
+    manager = StaffProfile.objects.get(pk=manager_created.data["id"]).user
+    api_client.force_authenticate(manager)
+    forbidden = api_client.delete(reverse("staff-detail", args=[profile.id]), **headers(organization))
+    assert forbidden.status_code == 403
+
+
+@pytest.mark.parametrize("application_photo", [False, True])
+def test_canonical_profile_photo_scoped_and_public(api_client, settings, tmp_path, application_photo):
+    from django.core.files.base import ContentFile
+    from apps.practitioners.models import PractitionerApplication
+    settings.MEDIA_ROOT = tmp_path
+    organization, clinic, owner = actor(Role.OWNER)
+    api_client.force_authenticate(owner)
+    created = api_client.post(reverse("staff-list"), staff_payload(clinic), format="json", **headers(organization))
+    profile = StaffProfile.objects.get(pk=created.data["id"])
+    assert created.data["photo_url"] == ""
+    photo_bytes = b"GIF89a-profile-photo"
+    if application_photo:
+        application = PractitionerApplication.objects.create(applicant=profile.user, organization=organization, clinic=clinic, status="APPROVED")
+        application.profile_photo.save("avatar.gif", ContentFile(photo_bytes))
+        practitioner = profile.practitioner_profile
+        application.approved_profile = practitioner
+        application.save(update_fields=["approved_profile"])
+    else:
+        profile.profile_photo.save("avatar.gif", ContentFile(photo_bytes))
+        practitioner = profile.practitioner_profile
+    practitioner.is_publicly_visible = True
+    practitioner.save()
+    detail = api_client.get(reverse("staff-detail", args=[profile.pk]), **headers(organization))
+    assert detail.data["photo_url"] == f"/api/staff/profiles/{profile.pk}/photo"
+    photo = api_client.get(reverse("staff-photo", args=[profile.pk]), **headers(organization))
+    assert photo.status_code == 200 and b"".join(photo.streaming_content) == photo_bytes
+    public = api_client.get(reverse("practitioner-public-photo", args=[practitioner.pk]), **headers(organization))
+    assert public.status_code == 200 and b"".join(public.streaming_content) == photo_bytes
+    disabled = api_client.post(reverse("staff-status", args=[profile.pk]), {"is_active": False}, format="json", **headers(organization))
+    assert disabled.status_code == 200
+    assert api_client.get(reverse("practitioner-public-photo", args=[practitioner.pk]), **headers(organization)).status_code == 404
+    assert StaffProfile.objects.filter(pk=profile.pk).exists()
+    from apps.appointments.scheduling import ensure_request_practitioner_eligible
+    from django.core.exceptions import ValidationError
+    from types import SimpleNamespace
+    from django.utils import timezone
+    with pytest.raises(ValidationError, match="unavailable"):
+        ensure_request_practitioner_eligible(source=SimpleNamespace(organization=organization, organization_id=organization.pk),
+            physiotherapist=profile, start=timezone.now(), end=timezone.now())
+    enabled = api_client.post(reverse("staff-status", args=[profile.pk]), {"is_active": True}, format="json", **headers(organization))
+    assert enabled.status_code == 200
+    assert api_client.get(reverse("practitioner-public-photo", args=[practitioner.pk]), **headers(organization)).status_code == 200
+    api_client.force_authenticate(None)
+    assert api_client.get(reverse("staff-photo", args=[profile.pk]), **headers(organization)).status_code in (401, 403)

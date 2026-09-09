@@ -66,11 +66,30 @@ describe("customer registration", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/customer-login?registered=1&returnTo=%2Fbook-appointment%3Ftherapy%3Dtherapy-1"));
     expect(replace).not.toHaveBeenCalledWith(expect.stringMatching(/^\/login/));
     const call = fetchMock.mock.calls.find(([input]) => String(input) === "/api/session/customer-register");
-    const body = JSON.parse(String(call?.[1]?.body));
+    const submitted = call?.[1]?.body as FormData;
+    const body = JSON.parse(String(submitted.get("payload")));
     expect(body).toMatchObject({ booking_verification_token: "server-signed-mobile-proof", mobile_number: "9876543210", email: "asha@example.com", password: "Asha-Strong-Password-2026!", confirm_password: "Asha-Strong-Password-2026!" });
     expect(body).not.toHaveProperty("otp");
     expect(body).not.toHaveProperty("access_token");
     expect(body).not.toHaveProperty("authkey");
+    expect(submitted.get("profile_photo")).toBeNull();
+  });
+
+  it("allows an optional photo to be selected, replaced or removed before submission", async () => {
+    const fetchMock = providerFetch();
+    render(<CustomerRegistration />);
+    const first = new File(["one"], "first.png", { type: "image/png" });
+    const replacement = new File(["two"], "second.webp", { type: "image/webp" });
+    fireEvent.change(screen.getByLabelText("Profile photo"), { target: { files: [first] } });
+    expect(screen.getByRole("button", { name: "Remove selected photo" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Profile photo"), { target: { files: [replacement] } });
+    await reachSecureStep();
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "Asha-Strong-Password-2026!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Account" }));
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    const call = fetchMock.mock.calls.find(([input]) => String(input) === "/api/session/customer-register");
+    expect((call?.[1]?.body as FormData).get("profile_photo")).toBe(replacement);
   });
 
   it("provides independent password controls and blocks mismatched passwords", async () => {

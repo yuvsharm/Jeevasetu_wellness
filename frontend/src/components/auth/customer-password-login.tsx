@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
+import type { Session } from "@/lib/api/contracts";
 import { requestJson } from "@/lib/api/client";
+import { establishAuthenticatedSession } from "@/lib/auth/session-cache";
 
 function safeReturnTo(value: string | null) {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "/customer";
@@ -12,6 +15,7 @@ function safeReturnTo(value: string | null) {
 
 export function CustomerPasswordLogin() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const search = useSearchParams();
   const returnTo = safeReturnTo(search.get("returnTo"));
   const registered = search.get("registered") === "1";
@@ -27,10 +31,11 @@ export function CustomerPasswordLogin() {
     setBusy(true);
     setError("");
     try {
-      await requestJson("/api/session/customer-login", {
+      const session = await requestJson<Session>("/api/session/customer-login", {
         method: "POST",
         body: JSON.stringify({ mobile_number: mobile, password }),
       });
+      await establishAuthenticatedSession(queryClient, session);
       router.replace(returnTo);
       router.refresh();
     } catch (value) {

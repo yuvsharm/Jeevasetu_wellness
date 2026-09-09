@@ -1,3 +1,6 @@
+from datetime import datetime, time, timedelta
+from apps.availability.services import _zone
+
 from rest_framework import serializers
 
 from apps.availability.models import (
@@ -81,6 +84,31 @@ class ExceptionSerializer(serializers.ModelSerializer):
         source="physiotherapist.user.get_full_name", read_only=True
     )
 
+    from_date = serializers.DateField(write_only=True, required=False)
+    to_date = serializers.DateField(write_only=True, required=False)
+    starts_at = serializers.DateTimeField(required=False)
+    ends_at = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        start = attrs.pop("from_date", None)
+        end = attrs.pop("to_date", None)
+        if start is not None or end is not None:
+            if start is None or end is None or end < start:
+                raise serializers.ValidationError("Select a valid From Date and To Date.")
+            if "starts_at" in attrs or "ends_at" in attrs:
+                raise serializers.ValidationError("Use dates or times, not both.")
+            if attrs.get("kind", getattr(self.instance, "kind", None)) != "UNAVAILABLE":
+                raise serializers.ValidationError("Date ranges are only supported for leave.")
+            clinic = attrs.get("clinic", getattr(self.instance, "clinic", None)) or self.context.get("clinic")
+            if clinic is None:
+                raise serializers.ValidationError("Select a clinic for date-only leave.")
+            zone = _zone(clinic)
+            attrs["starts_at"] = datetime.combine(start, time.min, zone)
+            attrs["ends_at"] = datetime.combine(end + timedelta(days=1), time.min, zone)
+        if self.instance is None and not all(attrs.get(key) for key in ("starts_at", "ends_at")):
+            raise serializers.ValidationError("Select the leave date range.")
+        return attrs
+
     class Meta:
         model = AvailabilityException
         fields = (
@@ -89,6 +117,8 @@ class ExceptionSerializer(serializers.ModelSerializer):
             "physiotherapist_name",
             "clinic",
             "kind",
+            "from_date",
+            "to_date",
             "starts_at",
             "ends_at",
             "reason",

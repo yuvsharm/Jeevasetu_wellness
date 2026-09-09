@@ -228,3 +228,72 @@ class PatientProfileSerializer(serializers.ModelSerializer):
 class PatientStatusSerializer(serializers.Serializer):
     is_active = serializers.BooleanField()
     reason = serializers.CharField(max_length=255)
+
+
+class CustomerSelfProfileSerializer(serializers.Serializer):
+    def to_representation(self, value):
+        from datetime import date
+
+        primary = value.addresses.filter(is_active=True, is_primary=True).first()
+        age = value.age
+        if value.date_of_birth:
+            today = date.today()
+            born = value.date_of_birth
+            age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        return {
+            "id": str(value.pk),
+            "first_name": value.user.first_name,
+            "last_name": value.user.last_name,
+            "full_name": value.full_name,
+            "email": value.email or value.user.email,
+            "mobile_number": value.user.mobile_number,
+            "gender": value.gender,
+            "date_of_birth": value.date_of_birth,
+            "age": age,
+            "photo_url": "/api/customer/profile/photo" if value.profile_photo else "",
+            "address": PatientAddressSerializer(primary).data if primary else None,
+            "updated_at": value.updated_at,
+        }
+
+
+class CustomerSelfProfileUpdateSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=150, required=False)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    gender = serializers.ChoiceField(choices=PatientProfile.Gender.choices, required=False)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+    address_line_1 = serializers.CharField(max_length=255, required=False)
+    address_line_2 = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    landmark = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=120, required=False)
+    region = serializers.CharField(max_length=120, required=False)
+    pin_code = serializers.RegexField(r"^[1-9]\d{5}$", required=False)
+
+    def validate_date_of_birth(self, value):
+        from datetime import date
+
+        if value and value > date.today():
+            raise serializers.ValidationError("Date of birth cannot be in the future.")
+        return value
+
+
+class CustomerPhotoSerializer(serializers.Serializer):
+    profile_photo = serializers.ImageField()
+
+    def validate_profile_photo(self, value):
+        if value.content_type not in ("image/jpeg", "image/png", "image/webp"):
+            raise serializers.ValidationError("Upload a JPG, PNG, or WebP photograph.")
+        if value.size > 2 * 1024 * 1024:
+            raise serializers.ValidationError("Profile photographs must not exceed 2 MB.")
+        return value
+
+
+class CustomerMobileChangeSerializer(serializers.Serializer):
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    booking_verification_token = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_current_password(self, value):
+        if not self.context["request"].user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value

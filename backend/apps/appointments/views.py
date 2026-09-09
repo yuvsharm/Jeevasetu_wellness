@@ -81,6 +81,7 @@ from apps.appointments.serializers import (
     CommercialQuoteSerializer,
     CancelAppointmentSerializer,
     CustomerAppointmentSerializer,
+    CustomerAppointmentRequestSerializer,
     OwnerAppointmentUpdateSerializer,
     PhysiotherapistAppointmentSerializer,
     PhysiotherapistWorkloadSerializer,
@@ -369,22 +370,36 @@ class BookingOtpVerifyView(HasTenant, generics.GenericAPIView):
 
 class CustomerAppointmentListView(HasTenant, generics.ListAPIView):
     permission_classes = (IsEnabledAuthenticated, IsCustomer)
-    serializer_class = AppointmentRequestSerializer
+    serializer_class = CustomerAppointmentRequestSerializer
 
     def get_queryset(self):
         return AppointmentRequest.objects.filter(
             organization=self.request.organization, creator=self.request.user
-        ).select_related("therapy")
+        ).select_related(
+            "therapy", "family_member", "operational_appointment__physiotherapist__user",
+            "operational_appointment__physiotherapist__practitioner_profile",
+        ).prefetch_related(
+            "requested_therapies", "audit_events",
+            "operational_appointment__physiotherapist__therapy_competencies",
+            "operational_appointment__physiotherapist__specializations",
+        )
 
 
 class CustomerAppointmentDetailView(HasTenant, generics.RetrieveAPIView):
     permission_classes = (IsEnabledAuthenticated, IsCustomer)
-    serializer_class = AppointmentRequestSerializer
+    serializer_class = CustomerAppointmentRequestSerializer
 
     def get_queryset(self):
         return AppointmentRequest.objects.filter(
             organization=self.request.organization, creator=self.request.user
-        ).select_related("therapy")
+        ).select_related(
+            "therapy", "family_member", "operational_appointment__physiotherapist__user",
+            "operational_appointment__physiotherapist__practitioner_profile",
+        ).prefetch_related(
+            "requested_therapies", "audit_events",
+            "operational_appointment__physiotherapist__therapy_competencies",
+            "operational_appointment__physiotherapist__specializations",
+        )
 
 
 class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.UpdateAPIView):
@@ -395,7 +410,7 @@ class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.Upda
         serializer = self.get_serializer(instance, data={})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(AppointmentRequestSerializer(instance).data)
+        return Response(CustomerAppointmentRequestSerializer(instance, context={"request": request}).data)
 
 
 class CustomerAppointmentRebookView(HasTenant, GenericAPIView):
@@ -855,7 +870,9 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
 
     def get(self, request, pk):
         source = AppointmentRequest.objects.filter(
-            pk=pk, organization=request.organization, status=AppointmentRequest.Status.PENDING
+            pk=pk,
+            organization=request.organization,
+            status__in=(AppointmentRequest.Status.PENDING, AppointmentRequest.Status.APPROVED),
         ).select_related("creator", "therapy").first()
         if source is None or source.creator_id is None:
             raise NotFound("Appointment request is unavailable.")
@@ -903,16 +920,28 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
                 eligible = False
                 eligibility_reason = " ".join(error.messages)
             practitioner = getattr(profile, "practitioner_profile", None)
+            from apps.practitioners.dob import derived_age
+            from apps.staff.photos import profile_photo
+            required_ids = {
+                source.therapy_id,
+                *source.requested_therapies.values_list("id", flat=True),
+            }
             result.append({
                 "id": str(profile.id), "full_name": profile.user.get_full_name(),
                 "qualification": profile.qualification,
+                "age": derived_age(profile),
                 "experience_years": profile.experience_years,
+                "experience_months": profile.experience_months,
                 "specialization": (
                     practitioner.qualification_specialization if practitioner else ""
                 ),
+                "expertise": list(
+                    profile.therapy_competencies.filter(id__in=required_ids)
+                    .order_by("name").values_list("name", flat=True)
+                ),
                 "rating": profile.approved_rating,
                 "review_count": profile.approved_review_count,
-                "has_photo": bool(profile.profile_photo),
+                "has_photo": bool(profile_photo(profile)),
                 "eligible": eligible,
                 "eligibility_reason": eligibility_reason,
             })
@@ -1156,7 +1185,12 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
         return Appointment.objects.filter(organization=self.request.organization).filter(
             Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)
         ).select_related(
-            "clinic", "patient", "therapy", "physiotherapist__user", "originating_request"
+            "clinic", "patient", "therapy", "physiotherapist__user", "originating_request",
+            "physiotherapist__practitioner_profile",
+        ).prefetch_related(
+            "originating_request__requested_therapies",
+            "physiotherapist__therapy_competencies",
+            "physiotherapist__specializations",
         )
 
 
@@ -1311,18 +1345,22 @@ class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):
         elif level == Role.PHYSIOTHERAPIST:
             queryset = queryset.filter(physiotherapist__user=request.user)
         elif level == Role.CUSTOMER:
-            queryset = queryset.filter(originating_request__creator=request.user)
+            queryset = queryset.filter(
+                originating_request__creator=request.user,
+                assignment_status__in=(
+                    Appointment.AssignmentStatus.PENDING,
+                    Appointment.AssignmentStatus.ACCEPTED,
+                ),
+            )
         elif level != Role.OWNER:
             raise PermissionDenied("Appointment access is unavailable.")
         appointment = queryset.select_related("physiotherapist").filter(pk=pk).first()
-        if (
-            appointment is None
-            or appointment.physiotherapist is None
-            or not appointment.physiotherapist.profile_photo
-        ):
+        from apps.staff.photos import profile_photo
+        photo = profile_photo(appointment.physiotherapist) if appointment and appointment.physiotherapist else None
+        if appointment is None or appointment.physiotherapist is None or not photo:
             raise NotFound("Physiotherapist photograph is unavailable.")
         return FileResponse(
-            appointment.physiotherapist.profile_photo.open("rb"),
+            photo.open("rb"),
             content_type="application/octet-stream",
         )
 

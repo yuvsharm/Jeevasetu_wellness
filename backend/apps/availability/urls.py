@@ -17,7 +17,12 @@ from apps.availability.views import (
     OperatingHoursView,
 )
 
+from apps.availability.views import SelfRuleDetailView, SelfExceptionDetailView
+
 urlpatterns = [
+    path("me/rules/<uuid:pk>/", SelfRuleDetailView.as_view()),
+    path("me/rules/<uuid:pk>/deactivate/", SelfRuleDetailView.as_view()),
+    path("me/exceptions/<uuid:pk>/deactivate/", SelfExceptionDetailView.as_view()),
     path("rules/", RuleCollectionView.as_view(), name="availability-rule-list"),
     path("rules/<uuid:pk>/", RuleDetailView.as_view(), name="availability-rule-detail"),
     path("rules/<uuid:pk>/review/", RuleReviewView.as_view(), name="availability-rule-review"),

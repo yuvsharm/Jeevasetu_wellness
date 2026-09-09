@@ -55,10 +55,10 @@ describe("AppShell", () => {
     Element.prototype.scrollIntoView = scrollIntoView;
     const ownerSession: Session = { ...session, user: { ...session.user, roles: ["OWNER"] }, access: { ...session.access, roles: [{ ...session.access.roles[0], role: "OWNER" }] } };
     render(<AppShell session={ownerSession} role="OWNER" title="Owner operations"><section id="staff-management"><h2>Staff Management section</h2></section></AppShell>);
-    await userEvent.click(screen.getAllByRole("link", { name: "Managers & Physiotherapists" })[0]);
+    await userEvent.click(screen.getAllByRole("link", { name: "Physiotherapists" })[0]);
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
     expect(screen.getByRole("heading", { name: /Staff Management section/ })).toHaveFocus();
-    expect(screen.getAllByRole("link", { name: "Managers & Physiotherapists" })[0]).toHaveAttribute("aria-current", "location");
+    expect(screen.getAllByRole("link", { name: "Physiotherapists" })[0]).toHaveAttribute("aria-current", "location");
     navigationState.pathname = "/manager";
   });
 
@@ -69,7 +69,7 @@ describe("AppShell", () => {
     const expected = {
       "Appointment Requests": "/owner#appointment-requests",
       "Appointment Schedule": "/owner#appointment-schedule",
-      "Managers & Physiotherapists": "/owner#staff-management",
+      "Physiotherapists": "/owner#staff-management",
       Patients: "/owner#patients",
       "Operating Hours": "/owner#operating-hours",
       "Therapy Management": "/owner#therapy-management",

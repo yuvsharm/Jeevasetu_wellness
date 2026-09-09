@@ -2,7 +2,8 @@ import mimetypes
 from pathlib import Path
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Avg, Count, Q
+from django.db import transaction
+from django.db.models import Avg, Count, Q, F
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import generics, status
@@ -67,6 +68,12 @@ class ApplicantMixin:
 
 class MyApplicationListCreateView(ApplicantMixin, generics.ListCreateAPIView):
     serializer_class = ApplicationSerializer
+
+    def create(self, request, *args, **kwargs):
+        existing = self.get_queryset().filter(status__in=["DRAFT", "SUBMITTED", "RESUBMITTED", "UNDER_REVIEW", "CORRECTION_REQUIRED"]).first()
+        if existing:
+            return Response(self.get_serializer(existing).data)
+        return super().create(request, *args, **kwargs)
 
 
 class MyApplicationDetailView(ApplicantMixin, generics.RetrieveUpdateAPIView):
@@ -326,33 +333,23 @@ class VerifyDocumentView(generics.GenericAPIView):
         return Response({"verification_status": document.verification_status})
 
 
-class VerifyCompetencyView(generics.GenericAPIView):
+class ManageApplicationCompetencyView(generics.GenericAPIView):
     permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
-    serializer_class = VerificationSerializer
 
-    def post(self, request, pk):
+    @transaction.atomic
+    def delete(self, request, pk):
         competency = (
-            PractitionerCompetency.objects.select_related("application")
+            PractitionerCompetency.objects.select_for_update(of=("self",)).select_related(
+                "application", "application__approved_profile__staff_profile",
+            )
             .filter(pk=pk, application__organization=request.organization)
             .first()
         )
         if competency is None or not manager_can_access(request.user, competency.application):
-            raise NotFound("Competency is unavailable.")
-        serializer = VerificationSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        competency.verification_status = (
-            "VERIFIED" if serializer.validated_data["verified"] else "REJECTED"
-        )
-        competency.verified_by = request.user
-        competency.verified_at = timezone.now()
-        competency.save(update_fields=("verification_status", "verified_by", "verified_at"))
-        record_event(
-            competency.application,
-            actor=request.user,
-            action="COMPETENCY_VERIFIED",
-            metadata={"therapy_id": str(competency.therapy_id)},
-        )
-        return Response({"verification_status": competency.verification_status})
+            raise NotFound("Therapy is unavailable.")
+        from apps.practitioners.services import remove_competency
+        remove_competency(competency, actor=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PrivateDocumentView(generics.GenericAPIView):
@@ -421,6 +418,12 @@ class MyOpenToWorkView(generics.GenericAPIView):
     permission_classes = (IsEnabledAuthenticated,)
     serializer_class = OpenToWorkSerializer
 
+    def get(self, request):
+        profile = PractitionerProfile.objects.filter(user=request.user, organization=request.organization).first()
+        if profile is None:
+            raise NotFound("Approved practitioner profile is unavailable.")
+        return Response({"is_open_to_work": profile.is_open_to_work})
+
     def post(self, request):
         profile = PractitionerProfile.objects.filter(
             user=request.user, organization=request.organization
@@ -442,28 +445,57 @@ class PublicPractitionerListView(generics.ListAPIView):
         organization = getattr(self.request, "organization", None)
         if organization is None:
             return PractitionerProfile.objects.none()
+        from datetime import datetime, time, timedelta
+        from zoneinfo import ZoneInfo
+        from apps.tenancy.models import Clinic
+        from apps.availability.models import AvailabilityException
+        leave_windows = Q(pk__in=[])
+        for clinic in Clinic.objects.filter(organization=organization, is_active=True):
+            zone = ZoneInfo(clinic.timezone or organization.timezone or "Asia/Kolkata")
+            today = timezone.now().astimezone(zone).date()
+            leave_windows |= Q(clinic=clinic,
+                starts_at__lt=datetime.combine(today + timedelta(days=1), time.min, zone),
+                ends_at__gt=datetime.combine(today, time.min, zone))
+        on_leave = AvailabilityException.objects.filter(leave_windows,
+            organization=organization, kind="UNAVAILABLE", is_active=True,
+            approval_status="APPROVED").values("physiotherapist_id")
         return (
             PractitionerProfile.objects.filter(
                 organization=organization,
                 is_approved=True,
                 is_publicly_visible=True,
+                is_open_to_work=True,
+                clinic__is_active=True,
+                clinic__organization=organization,
+                staff_profile__isnull=False,
+                staff_profile__organization=organization,
+                staff_profile__clinic=F("clinic"),
+                staff_profile__user=F("user"),
+                staff_profile__staff_type="PHYSIOTHERAPIST",
+                user__role_assignments__clinic=F("clinic"),
+                user__role_assignments__organization_membership__is_active=True,
+                user__role_assignments__clinic_membership__is_active=True,
                 user__is_active=True,
                 user__is_enabled=True,
                 user__role_assignments__organization=organization,
                 user__role_assignments__role="PHYSIOTHERAPIST",
                 user__role_assignments__is_active=True,
             )
+            .filter(Q(source_application__isnull=True) | Q(source_application__status="APPROVED"))
+            .exclude(staff_profile_id__in=on_leave)
             .annotate(
                 average_rating=Avg(
                     "staff_profile__appointmentrating__stars",
                     filter=Q(
-                        staff_profile__appointmentrating__moderation_status="APPROVED"
+                        staff_profile__appointmentrating__moderation_status="APPROVED",
+                        staff_profile__appointmentrating__appointment__status="COMPLETED"
                     ),
                 ),
                 review_count=Count(
                     "staff_profile__appointmentrating",
                     filter=Q(
-                        staff_profile__appointmentrating__moderation_status="APPROVED"
+                        staff_profile__appointmentrating__moderation_status="APPROVED",
+                        staff_profile__appointmentrating__appointment__status="COMPLETED"
                     ),
                     distinct=True,
                 ),
@@ -493,10 +525,14 @@ class PublicPractitionerPhotoView(generics.GenericAPIView):
         profile = PublicPractitionerListView.get_queryset(self).filter(pk=pk).first()
         if profile is None:
             raise NotFound("Photo is unavailable.")
-        try:
-            photo = profile.source_application.profile_photo
-        except ObjectDoesNotExist:
-            photo = profile.staff_profile.profile_photo if profile.staff_profile_id else None
+        from apps.staff.photos import profile_photo
+        if profile.staff_profile_id:
+            photo = profile_photo(profile.staff_profile)
+        else:
+            try:
+                photo = profile.source_application.profile_photo
+            except ObjectDoesNotExist:
+                photo = None
         if not photo:
             raise NotFound("Photo is unavailable.")
         photo.open("rb")
@@ -506,3 +542,16 @@ class PublicPractitionerPhotoView(generics.GenericAPIView):
                 photo.name
             ),
         )
+
+
+class DobPreviewView(generics.GenericAPIView):
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        from apps.practitioners.dob import DobSerializer, age_on, identity_today
+        serializer = DobSerializer(data=request.data, context={"organization": request.organization})
+        serializer.is_valid(raise_exception=True)
+        response = Response({"age": age_on(serializer.validated_data["date_of_birth"], identity_today(organization=request.organization))})
+        response["Cache-Control"] = "private, no-store"
+        return response

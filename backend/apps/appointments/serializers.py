@@ -349,12 +349,11 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             preferred.organization_id != self.context["request"].organization.id
             or not preferred.is_approved
             or not preferred.is_publicly_visible
-            or not preferred.source_application.competencies.filter(
-                therapy=therapy, verification_status="VERIFIED"
-            ).exists()
+            or preferred.staff_profile_id is None
+            or not preferred.staff_profile.therapy_competencies.filter(pk=therapy.pk).exists()
         ):
             raise serializers.ValidationError(
-                {"preferred_practitioner": "Select a verified practitioner for this service."}
+                {"preferred_practitioner": "Select a practitioner who currently offers this service."}
             )
         return attrs
 
@@ -456,14 +455,17 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     )
     visit_verification = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
+    requested_therapy_names = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
         fields = (
             "id",
+            "originating_request",
             "patient_identifier",
             "patient_name",
             "therapy_name",
+            "requested_therapy_names",
             "clinic_name",
             "scheduled_start",
             "scheduled_end",
@@ -471,6 +473,12 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "status",
             "physiotherapist_name",
             "assignment_status",
+            "address_line_1",
+            "address_line_2",
+            "landmark",
+            "city",
+            "region",
+            "pin_code",
             "assigned_manager_name",
             "reschedule_count",
             "cancellation_category",
@@ -497,22 +505,22 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         return payment.status if payment else None
 
 
+    def get_requested_therapy_names(self, value):
+        source = getattr(value, "originating_request", None)
+        if source is None:
+            return [value.therapy.name]
+        return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
+
+
 class AppointmentDetailSerializer(AppointmentListSerializer):
     profile_photo_url = serializers.SerializerMethodField()
 
     class Meta(AppointmentListSerializer.Meta):
         fields = AppointmentListSerializer.Meta.fields + (
-            "originating_request",
             "patient",
             "therapy",
             "clinic",
             "physiotherapist",
-            "address_line_1",
-            "address_line_2",
-            "landmark",
-            "city",
-            "region",
-            "pin_code",
             "operational_notes",
             "manager_remarks",
             "assignment_rejection_reason",
@@ -542,7 +550,6 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
     google_map_link = serializers.CharField(source="originating_request.google_map_link", read_only=True, default="")
     rating_stars = serializers.IntegerField(source="rating.stars", read_only=True, default=None)
     rating_comment = serializers.CharField(source="rating.comment", read_only=True, default="")
-    requested_therapy_names = serializers.SerializerMethodField()
     reminders = serializers.SerializerMethodField()
 
     class Meta(AppointmentListSerializer.Meta):
@@ -557,7 +564,6 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "patient_age",
             "patient_gender",
             "problem_description",
-            "requested_therapy_names",
             "pain_area",
             "google_map_link",
             "rating_stars",
@@ -576,12 +582,6 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
         if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
             return "Service request"
         return value.patient.full_name
-
-    def get_requested_therapy_names(self, value):
-        source = value.originating_request
-        if source is None:
-            return [value.therapy.name]
-        return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
 
     def get_reminders(self, value):
         return [
@@ -610,6 +610,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     physiotherapist_name = serializers.SerializerMethodField()
     patient_name = serializers.CharField(source="patient.full_name", read_only=True)
     payment_status = serializers.SerializerMethodField()
+    requested_therapy_names = serializers.SerializerMethodField()
     physiotherapist_photo_url = serializers.SerializerMethodField()
     physiotherapist_qualification = serializers.CharField(
         source="physiotherapist.qualification", read_only=True, default=""
@@ -617,6 +618,11 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     physiotherapist_experience_years = serializers.IntegerField(
         source="physiotherapist.experience_years", read_only=True, default=None
     )
+    physiotherapist_age = serializers.SerializerMethodField()
+    physiotherapist_specialization = serializers.SerializerMethodField()
+    physiotherapist_expertise = serializers.SerializerMethodField()
+    physiotherapist_rating = serializers.SerializerMethodField()
+    physiotherapist_review_count = serializers.SerializerMethodField()
     visit_verification = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
     requested_at = serializers.DateTimeField(
@@ -635,6 +641,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "scheduled_end",
             "duration_minutes",
             "therapy_name",
+            "requested_therapy_names",
             "status",
             "address_line_1",
             "address_line_2",
@@ -646,6 +653,11 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "physiotherapist_photo_url",
             "physiotherapist_qualification",
             "physiotherapist_experience_years",
+            "physiotherapist_age",
+            "physiotherapist_specialization",
+            "physiotherapist_expertise",
+            "physiotherapist_rating",
+            "physiotherapist_review_count",
             "assignment_status",
             "manager_remarks",
             "cancellation_category",
@@ -659,9 +671,59 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "originating_request", "requested_at", "created_at")
 
     def get_physiotherapist_name(self, value):
-        if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED or not value.physiotherapist:
+        if not self._therapist_visible(value):
             return None
         return value.physiotherapist.user.get_full_name()
+
+    def _therapist_visible(self, value):
+        return bool(
+            value.physiotherapist
+            and value.assignment_status in (
+                Appointment.AssignmentStatus.PENDING,
+                Appointment.AssignmentStatus.ACCEPTED,
+            )
+        )
+
+    def get_physiotherapist_age(self, value):
+        if not self._therapist_visible(value):
+            return None
+        from apps.practitioners.dob import derived_age
+        return derived_age(value.physiotherapist)
+
+    def get_physiotherapist_specialization(self, value):
+        if not self._therapist_visible(value):
+            return ""
+        practitioner = getattr(value.physiotherapist, "practitioner_profile", None)
+        if practitioner and practitioner.qualification_specialization:
+            return practitioner.qualification_specialization
+        return ", ".join(value.physiotherapist.specializations.values_list("name", flat=True))
+
+    def get_physiotherapist_expertise(self, value):
+        if not self._therapist_visible(value):
+            return []
+        source = value.originating_request
+        ids = {value.therapy_id}
+        if source:
+            ids.update(source.requested_therapies.values_list("id", flat=True))
+        return list(
+            value.physiotherapist.therapy_competencies.filter(id__in=ids)
+            .order_by("name").values_list("name", flat=True)
+        )
+
+    def _approved_ratings(self, value):
+        if not self._therapist_visible(value):
+            return AppointmentRating.objects.none()
+        return AppointmentRating.objects.filter(
+            physiotherapist=value.physiotherapist,
+            moderation_status=AppointmentRating.ModerationStatus.APPROVED,
+        )
+
+    def get_physiotherapist_rating(self, value):
+        from django.db.models import Avg
+        return self._approved_ratings(value).aggregate(value=Avg("stars"))["value"]
+
+    def get_physiotherapist_review_count(self, value):
+        return self._approved_ratings(value).count()
 
     def get_rating(self, value):
         rating = getattr(value, "rating", None)
@@ -671,8 +733,17 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         payment = getattr(value, "practitioner_payment", None)
         return payment.status if payment else None
 
+    def get_requested_therapy_names(self, value):
+        source = getattr(value, "originating_request", None)
+        if source is None:
+            return [value.therapy.name]
+        return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
+
     def get_physiotherapist_photo_url(self, value) -> str | None:
-        if not value.physiotherapist or not value.physiotherapist.profile_photo:
+        if not self._therapist_visible(value):
+            return None
+        from apps.staff.photos import profile_photo
+        if not profile_photo(value.physiotherapist):
             return None
         request = self.context.get("request")
         path = f"/api/v1/appointments/schedule/{value.pk}/physiotherapist-photo/"
@@ -685,6 +756,71 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         actor = request.user if request and request.user.is_authenticated else None
         return visit_verification_status(value, actor=actor)
+
+
+class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
+    family_member_name = serializers.CharField(
+        source="family_member.full_name", read_only=True, default=""
+    )
+    appointment = serializers.SerializerMethodField()
+    timeline = serializers.SerializerMethodField()
+
+    class Meta(AppointmentRequestSerializer.Meta):
+        fields = AppointmentRequestSerializer.Meta.fields + (
+            "family_member_name", "appointment", "timeline"
+        )
+
+    def get_appointment(self, value):
+        try:
+            appointment = value.operational_appointment
+        except Appointment.DoesNotExist:
+            return None
+        return CustomerAppointmentSerializer(appointment, context=self.context).data
+
+    def get_timeline(self, value):
+        result = [{"key": "SUBMITTED", "label": "Request submitted", "at": value.created_at}]
+        result.append({"key": "REVIEW", "label": "Under Owner review", "at": value.created_at})
+        accepted = value.audit_events.filter(
+            event__in=(
+                AppointmentRequestAuditEvent.Event.ACCEPTED,
+                AppointmentRequestAuditEvent.Event.APPROVED_AND_ASSIGNED,
+            )
+        ).order_by("created_at").first()
+        if value.status == AppointmentRequest.Status.REJECTED:
+            rejected = value.audit_events.filter(
+                event=AppointmentRequestAuditEvent.Event.REJECTED
+            ).order_by("created_at").first()
+            result.append({"key": "REJECTED", "label": "Request not accepted", "at": getattr(rejected, "created_at", value.updated_at)})
+            return result
+        if value.status == AppointmentRequest.Status.CANCELLED:
+            result.append({"key": "CANCELLED", "label": "Request cancelled", "at": value.updated_at})
+            return result
+        if value.status == AppointmentRequest.Status.APPROVED:
+            result.append({"key": "ACCEPTED", "label": "Request accepted", "at": getattr(accepted, "created_at", value.updated_at)})
+        try:
+            appointment = value.operational_appointment
+        except Appointment.DoesNotExist:
+            return result
+        result.extend((
+            {"key": "ASSIGNED", "label": "Therapist assigned", "at": appointment.assigned_at},
+            {"key": "CONFIRMED", "label": "Appointment confirmed", "at": appointment.created_at},
+        ))
+        if appointment.assignment_status == Appointment.AssignmentStatus.REJECTED:
+            result.append({"key": "REASSIGNMENT", "label": "Therapist reassignment in progress", "at": appointment.assignment_responded_at})
+            return result
+        if appointment.assignment_status == Appointment.AssignmentStatus.ACCEPTED:
+            result.append({"key": "THERAPIST_ACCEPTED", "label": "Therapist confirmed", "at": appointment.assignment_responded_at})
+        if appointment.en_route_at:
+            result.append({"key": "EN_ROUTE", "label": "Therapist en route", "at": appointment.en_route_at})
+        if appointment.arrived_at:
+            result.append({"key": "ARRIVED", "label": "Therapist arrived", "at": appointment.arrived_at})
+        if appointment.service_started_at:
+            result.append({"key": "IN_SERVICE", "label": "Session in progress", "at": appointment.service_started_at})
+        if appointment.completed_at:
+            result.append({"key": "COMPLETED", "label": "Appointment completed", "at": appointment.completed_at})
+        if appointment.status in (Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW):
+            result.append({"key": appointment.status, "label": "Appointment closed", "at": appointment.updated_at})
+        return result
 
 
 class VisitOtpSubmissionSerializer(serializers.Serializer):
@@ -949,7 +1085,7 @@ class AppointmentRatingSerializer(serializers.ModelSerializer):
 
 
 class AppointmentRequestDecisionSerializer(serializers.Serializer):
-    action = serializers.ChoiceField(choices=("ACCEPT_ASSIGN", "REJECT"))
+    action = serializers.ChoiceField(choices=("ACCEPT", "ASSIGN", "ACCEPT_ASSIGN", "REJECT"))
     physiotherapist = serializers.PrimaryKeyRelatedField(
         queryset=StaffProfile.objects.all(), required=False
     )
@@ -960,7 +1096,7 @@ class AppointmentRequestDecisionSerializer(serializers.Serializer):
     internal_note = serializers.CharField(max_length=500, required=False, allow_blank=True)
 
     def validate(self, attrs):
-        if attrs["action"] == "ACCEPT_ASSIGN" and not attrs.get("physiotherapist"):
+        if attrs["action"] in ("ASSIGN", "ACCEPT_ASSIGN") and not attrs.get("physiotherapist"):
             raise serializers.ValidationError(
                 {"physiotherapist": "Select an eligible practitioner."}
             )

@@ -13,9 +13,12 @@ export class ClientApiError extends Error {
 export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
+    const headers = init?.body instanceof FormData
+      ? init.headers
+      : { "Content-Type": "application/json", ...init?.headers };
     response = await fetch(url, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers,
     });
   } catch (error) {
     if (init?.signal?.aborted) throw error;
@@ -42,7 +45,11 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
           : {};
         delete directFieldErrors.fieldErrors;
         const fieldErrors = { ...directFieldErrors, ...nestedFieldErrors };
-        error = { detail, ...(Object.keys(fieldErrors).length ? { fieldErrors } : {}) };
+        const actionable = Object.values(fieldErrors).find(Boolean);
+        const safeDetail = detail === "Please review the highlighted information." && actionable
+          ? actionable
+          : detail;
+        error = { detail: safeDetail, ...(Object.keys(fieldErrors).length ? { fieldErrors } : {}) };
       }
     } catch {
       // The safe fallback above intentionally hides unexpected response details.

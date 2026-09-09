@@ -10,6 +10,8 @@ export type AppointmentRequest = {
   problem_duration: string; doctor_reference: string; address: string; city: string; pin_code: string;
   landmark: string; google_map_link: string; status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   owner_remarks: string; rejection_category?: string; rejection_customer_reason?: string; created_at: string; updated_at: string;
+  family_member_name?:string; appointment?:OperationalAppointment|null;
+  timeline?:Array<{key:string;label:string;at:string|null}>;
 };
 
 export type OperationalAppointment = {
@@ -39,6 +41,11 @@ export type OperationalAppointment = {
   google_map_link?: string;
   physiotherapist_qualification?: string;
   physiotherapist_experience_years?: number | null;
+  physiotherapist_age?:number|null;
+  physiotherapist_specialization?:string;
+  physiotherapist_expertise?:string[];
+  physiotherapist_rating?:number|null;
+  physiotherapist_review_count?:number;
   address_line_1?: string;
   address_line_2?: string;
   landmark?: string;

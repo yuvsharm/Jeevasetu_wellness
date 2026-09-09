@@ -21,6 +21,7 @@ def practitioner_payload(token, mobile="9876543210"):
         "booking_verification_token": token,
         "mobile_number": mobile,
         "full_name": "TEST Practitioner",
+        "date_of_birth": "1990-08-15",
         "email": f"test-practitioner-{mobile}@example.com",
         "password": "Practitioner-Secure-2026!",
         "confirm_password": "Practitioner-Secure-2026!",
@@ -57,7 +58,8 @@ def test_practitioner_registers_once_then_signs_in_and_creates_one_application(a
     api_client.force_authenticate(user)
     first = api_client.post(reverse("practitioner-my-applications"), {}, format="json", **tenant(organization))
     second = api_client.get(reverse("practitioner-my-applications"), **tenant(organization))
-    assert first.status_code == 201
+    assert first.status_code == 200
+    assert first.data["date_of_birth"] == "1990-08-15"
     assert len(second.data) == 1
     assert PractitionerApplication.objects.filter(applicant=user, organization=organization).count() == 1
 
@@ -142,3 +144,18 @@ def test_owner_verified_manager_creation_hashes_staff_entered_password(api_clien
     profile = StaffProfile.objects.get(pk=created.data["id"])
     assert profile.user.check_password("Manager-Secure-2026!")
     assert not profile.user.practitioner_profiles.exists()
+
+
+@override_settings(MSG91_ENABLED=False)
+def test_new_registration_requires_dob_and_keeps_verified_mobile_proof(api_client):
+    organization, _, _ = actor("OWNER")
+    issued=issue(api_client,organization)
+    verified=verify(api_client,organization,issued)
+    payload=practitioner_payload(verified.data["token"])
+    payload.pop("date_of_birth")
+    rejected=api_client.post(reverse("auth-practitioner-register"),payload,format="json",**tenant(organization))
+    assert rejected.status_code==400 and "date_of_birth" in rejected.data
+    payload["date_of_birth"]="1990-08-15"
+    created=api_client.post(reverse("auth-practitioner-register"),payload,format="json",**tenant(organization))
+    assert created.status_code==201
+    assert PractitionerApplication.objects.get(organization=organization).date_of_birth.isoformat()=="1990-08-15"

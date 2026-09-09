@@ -68,6 +68,7 @@ class StaffProfile(models.Model):
         max_length=32, choices=(("MANAGER", "Manager"), ("PHYSIOTHERAPIST", "Physiotherapist"))
     )
     profile_photo = models.FileField(upload_to="staff/profile-photos/%Y/%m/", blank=True)
+    profile_photo_removed = models.BooleanField(default=False)
     gender = models.CharField(max_length=24, choices=Gender.choices)
     date_of_birth = models.DateField(null=True, blank=True)
     qualification = models.CharField(max_length=255)

@@ -3,6 +3,7 @@ import hashlib
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -11,9 +12,11 @@ from apps.accounts.role_policy import actor_role_scope, assign_role
 from apps.practitioners.models import (
     PractitionerApplication,
     PractitionerAuditEvent,
+    PractitionerCompetency,
     PractitionerProfile,
 )
 from apps.staff.models import StaffProfile
+from apps.practitioners.dob import validate_dob, identity_today
 from apps.tenancy.models import ClinicMembership, OrganizationMembership
 
 SAFE_AUDIT_KEYS = {"reason", "status", "document_kind", "therapy_id", "enabled"}
@@ -68,7 +71,19 @@ def require_manager_scope(actor, application):
 
 def submission_missing_requirements(application):
     missing = []
-    for section, fields in SUBMISSION_REQUIREMENTS.items():
+    requirements = SUBMISSION_REQUIREMENTS
+    if application.qualification_title:
+        requirements = {"personal_details": {"full_legal_name": "Full name", "date_of_birth": "Date of birth",
+            "mobile_number": "Mobile", "email": "Email", "clinic": "Clinic", "languages": "Languages"},
+            "professional_details": {"working_days": "Working days", "working_hours_start": "Working hours start",
+                                     "working_hours_end": "Working hours end"}}
+        if not application.service_areas.filter(is_active=True, organization=application.organization).exists():
+            missing.append({"section": "service_availability", "code": "service_areas", "label": "Service areas"})
+        if not application.competencies.exclude(
+            verification_status=PractitionerCompetency.Verification.REJECTED
+        ).filter(therapy__is_active=True, therapy__organization=application.organization).exists():
+            missing.append({"section": "professional_details", "code": "competencies", "label": "Therapy competencies"})
+    for section, fields in requirements.items():
         for field, label in fields.items():
             if not getattr(application, field):
                 missing.append({"section": section, "code": field, "label": label})
@@ -117,6 +132,7 @@ def submit_application(application, *, actor):
                 "missing_requirements": missing,
             }
         )
+    validate_dob(application.date_of_birth, identity_today(application))
     try:
         application.full_clean()
     except DjangoValidationError as error:
@@ -144,7 +160,9 @@ def submit_application(application, *, actor):
     return application
 
 
+@transaction.atomic
 def review_application(application, *, actor, action, reason=""):
+    application = PractitionerApplication.objects.select_for_update().get(pk=application.pk)
     require_manager_scope(actor, application)
     transitions = {
         "review": (
@@ -153,20 +171,12 @@ def review_application(application, *, actor, action, reason=""):
             PractitionerAuditEvent.Action.REVIEW_STARTED,
         ),
         "correction": (
-            (
-                PractitionerApplication.Status.SUBMITTED,
-                PractitionerApplication.Status.RESUBMITTED,
-                PractitionerApplication.Status.UNDER_REVIEW,
-            ),
+            (PractitionerApplication.Status.UNDER_REVIEW,),
             PractitionerApplication.Status.CORRECTION_REQUIRED,
             PractitionerAuditEvent.Action.CORRECTION_REQUESTED,
         ),
         "reject": (
-            (
-                PractitionerApplication.Status.SUBMITTED,
-                PractitionerApplication.Status.RESUBMITTED,
-                PractitionerApplication.Status.UNDER_REVIEW,
-            ),
+            (PractitionerApplication.Status.UNDER_REVIEW,),
             PractitionerApplication.Status.REJECTED,
             PractitionerAuditEvent.Action.REJECTED,
         ),
@@ -200,19 +210,26 @@ def approve_application(application, *, actor):
     require_manager_scope(actor, locked)
     if locked.status == PractitionerApplication.Status.APPROVED:
         return locked
-    if locked.status not in (
-        PractitionerApplication.Status.SUBMITTED,
-        PractitionerApplication.Status.RESUBMITTED,
-        PractitionerApplication.Status.UNDER_REVIEW,
-    ):
-        raise ValidationError({"detail": "This application cannot be approved."})
-    if not locked.competencies.filter(verification_status="VERIFIED").exists():
-        raise ValidationError({"detail": "At least one verified competency is required."})
-    if locked.documents.filter(verification_status="VERIFIED").count() < 2:
-        raise ValidationError({"detail": "Required documents must be verified."})
+    if locked.status != PractitionerApplication.Status.UNDER_REVIEW:
+        raise ValidationError({"detail": "Start review before approving this application."})
+    validate_dob(locked.date_of_birth, identity_today(locked))
+    current_competencies = locked.competencies.exclude(
+        verification_status=PractitionerCompetency.Verification.REJECTED
+    ).filter(therapy__is_active=True, therapy__organization=locked.organization)
+    if not current_competencies.exists():
+        raise ValidationError({"detail": "At least one therapy must be selected before approval."})
+    verified_documents = set(
+        locked.documents.filter(verification_status="VERIFIED").values_list("kind", flat=True)
+    )
+    if "GOVERNMENT_ID" not in verified_documents:
+        raise ValidationError({"detail": "Government ID must be verified before approval."})
+    if "QUALIFICATION" not in verified_documents:
+        raise ValidationError({"detail": "Qualification document must be verified before approval."})
+    if locked.qualification_title and submission_missing_requirements(locked):
+        raise ValidationError({"detail": "Complete the required application information before approval."})
 
     staff_profile = None
-    if locked.category == PractitionerApplication.Category.PHYSIOTHERAPIST:
+    if locked.category == PractitionerApplication.Category.PHYSIOTHERAPIST or locked.qualification_title:
         if locked.clinic is None:
             raise ValidationError({"detail": "A clinic is required for Physiotherapist activation."})
         membership, _ = OrganizationMembership.objects.get_or_create(
@@ -231,7 +248,7 @@ def approve_application(application, *, actor):
                 "staff_type": Role.PHYSIOTHERAPIST,
                 "gender": locked.gender,
                 "date_of_birth": locked.date_of_birth,
-                "qualification": locked.get_highest_qualification_display(),
+                "qualification": locked.qualification_title or locked.get_highest_qualification_display(),
                 "registration_number": locked.registration_number,
                 "experience_years": locked.experience_years,
                 "experience_months": locked.experience_months,
@@ -247,6 +264,8 @@ def approve_application(application, *, actor):
                 "bio": locked.bio,
             },
         )
+        staff_profile.date_of_birth = locked.date_of_birth
+        staff_profile.save(update_fields=["date_of_birth"])
         if staff_profile.staff_type != Role.PHYSIOTHERAPIST:
             raise ValidationError({"detail": "An incompatible staff profile already exists."})
         if not RoleAssignment.objects.filter(
@@ -278,10 +297,17 @@ def approve_application(application, *, actor):
         },
     )
     if staff_profile is not None:
-        staff_profile.therapy_competencies.set(
-            locked.competencies.filter(verification_status="VERIFIED").values_list(
-                "therapy_id", flat=True
-            )
+        if locked.qualification_title:
+            from apps.availability.models import AvailabilityRule
+            staff_profile.service_areas.set(locked.service_areas.filter(is_active=True))
+            for weekday in locked.working_days:
+                AvailabilityRule.objects.get_or_create(organization=locked.organization, clinic=locked.clinic,
+                    physiotherapist=staff_profile, weekday=weekday, effective_from=timezone.localdate(),
+                    defaults={"starts_at": locked.working_hours_start, "ends_at": locked.working_hours_end,
+                              "approval_status": "APPROVED", "is_active": True,
+                              "submitted_by": locked.applicant, "reviewed_by": actor})
+        staff_profile.therapy_competencies.add(
+            *current_competencies.values_list("therapy_id", flat=True)
         )
     locked.status = PractitionerApplication.Status.APPROVED
     locked.reviewed_by = actor
@@ -294,19 +320,103 @@ def approve_application(application, *, actor):
     return locked
 
 
+def competency_future_appointment(competency, profile):
+    """Return one future assignment that would be invalidated by removing a therapy."""
+    if profile is None or profile.staff_profile_id is None:
+        return None
+    from apps.appointments.models import Appointment
+
+    return (
+        Appointment.objects.filter(
+            physiotherapist_id=profile.staff_profile_id,
+            scheduled_start__gte=timezone.now(),
+            status__in=Appointment.BLOCKING_STATUSES,
+        )
+        .filter(
+            Q(therapy_id=competency.therapy_id)
+            | Q(originating_request__requested_therapies__id=competency.therapy_id)
+        )
+        .order_by("scheduled_start")
+        .first()
+    )
+
+
+@transaction.atomic
+def add_competency(profile, therapy, *, actor):
+    """Add an operational therapy while retaining the legacy competency audit record."""
+    competency, _ = PractitionerCompetency.objects.select_for_update().get_or_create(
+        profile=profile,
+        therapy=therapy,
+    )
+    competency.verification_status = PractitionerCompetency.Verification.VERIFIED
+    competency.verified_by = None
+    competency.verified_at = None
+    competency.save(update_fields=("verification_status", "verified_by", "verified_at"))
+    profile.staff_profile.therapy_competencies.add(therapy)
+    PractitionerAuditEvent.objects.create(
+        profile=profile,
+        organization=profile.organization,
+        actor=actor,
+        action="COMPETENCY_ADDED",
+        metadata={"therapy_id": str(therapy.id), "therapy_name": therapy.name, "status": "SELECTED"},
+    )
+    return competency
+
+
+@transaction.atomic
+def remove_competency(competency, *, actor, profile=None):
+    """Reject a claim and revoke operational eligibility without deleting its audit trail."""
+    competency = PractitionerCompetency.objects.select_for_update(of=("self",)).select_related(
+        "therapy", "application", "profile"
+    ).get(pk=competency.pk)
+    profile = profile or competency.profile or getattr(competency.application, "approved_profile", None)
+    if competency.verification_status == PractitionerCompetency.Verification.VERIFIED:
+        future = competency_future_appointment(competency, profile)
+        if future is not None:
+            local_start = timezone.localtime(future.scheduled_start)
+            raise ValidationError({
+                "detail": (
+                    f"{competency.therapy.name} cannot be removed because appointment "
+                    f"{future.id} is scheduled for {local_start:%d %b %Y at %I:%M %p}. "
+                    "Reassign or cancel that appointment first."
+                )
+            })
+    competency.verification_status = PractitionerCompetency.Verification.REJECTED
+    competency.verified_by = actor
+    competency.verified_at = timezone.now()
+    competency.save(update_fields=("verification_status", "verified_by", "verified_at"))
+    if profile is not None and profile.staff_profile_id:
+        profile.staff_profile.therapy_competencies.remove(competency.therapy)
+    PractitionerAuditEvent.objects.create(
+        application=competency.application,
+        profile=profile,
+        organization=(competency.application.organization if competency.application_id else profile.organization),
+        actor=actor,
+        action="COMPETENCY_REMOVED",
+        metadata={"therapy_id": str(competency.therapy_id), "status": "REJECTED"},
+    )
+    return competency
+
+
+@transaction.atomic
 def set_open_to_work(profile, *, actor, enabled):
     if profile.user_id != actor.id or not profile.is_approved:
         raise PermissionDenied("Open to Work is unavailable.")
     if enabled and profile.staff_profile_id is None:
         raise ValidationError("This category has no operational role yet.")
+    if not actor.is_active or not actor.is_enabled or not actor.has_usable_password():
+        raise PermissionDenied("Your account must be active and activated.")
+    if not RoleAssignment.objects.filter(user=actor, organization=profile.organization,
+            role=Role.PHYSIOTHERAPIST, is_active=True,
+            organization_membership__is_active=True, clinic_membership__is_active=True,
+            clinic__is_active=True).exists():
+        raise PermissionDenied("An active therapist role and clinic membership are required.")
     profile.is_open_to_work = enabled
     profile.save(update_fields=("is_open_to_work", "updated_at"))
-    record_event(
-        profile.source_application,
-        actor=actor,
-        action=PractitionerAuditEvent.Action.OPEN_TO_WORK_CHANGED,
-        metadata={"enabled": enabled},
-    )
+    PractitionerAuditEvent.objects.create(
+        application=getattr(profile, "source_application", None),
+        profile=profile, organization=profile.organization, actor=actor,
+        action=PractitionerAuditEvent.Action.OPEN_TO_WORK_CHANGED, metadata={"enabled": enabled})
     return profile
 
 

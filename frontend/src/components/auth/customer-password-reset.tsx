@@ -10,7 +10,7 @@ import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig
 
 type Stage = "mobile" | "otp" | "password" | "done";
 
-export function CustomerPasswordReset() {
+export function CustomerPasswordReset({context="customer"}:{context?:"customer"|"therapist"|"staff"}) {
   const search = useSearchParams();
   const returnTo = search.get("returnTo")?.startsWith("/") && !search.get("returnTo")?.startsWith("//") ? search.get("returnTo")! : "/customer";
   const [stage, setStage] = useState<Stage>("mobile");
@@ -23,9 +23,14 @@ export function CustomerPasswordReset() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const normalizeMobile = (value: string) => {
+    const digits = value.replace(/\D/g, "");
+    return digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits.slice(0, 10);
+  };
 
   async function send() {
-    setBusy(true); setError("");
+    if(!/^[6-9]\d{9}$/.test(mobile)){setError("Enter a valid 10-digit Indian mobile number.");return;}
+    setBusy(true); setError(""); setAccessToken("");
     try {
       const widget = await loadOtpWidgetConfig();
       const issued = await requestJson<{ verification_id: string }>("/api/booking-otp/issue", { method: "POST", body: JSON.stringify({ mobile_number: mobile }) });
@@ -38,7 +43,9 @@ export function CustomerPasswordReset() {
   async function verify() {
     setBusy(true); setError("");
     try {
-      if (config.enabled) setAccessToken(await verifyMsg91Otp(config, otp));
+      const proof=config.enabled?{access_token:await verifyMsg91Otp(config,otp)}:{otp};
+      const verified=await requestJson<{token:string}>("/api/booking-otp/verify",{method:"POST",body:JSON.stringify({verification_id:verificationId,mobile_number:mobile,...proof})});
+      setAccessToken(verified.token);
       setStage("password");
     } catch (value) { setError(value instanceof Error ? value.message : "OTP could not be verified."); }
     finally { setBusy(false); }
@@ -50,16 +57,18 @@ export function CustomerPasswordReset() {
     if (password !== confirm) { setError("Passwords do not match."); return; }
     setBusy(true); setError("");
     try {
-      await requestJson("/api/session/customer-password-reset", { method: "POST", body: JSON.stringify({ verification_id: verificationId, mobile_number: mobile, ...(config.enabled ? { access_token: accessToken } : { otp }), new_password: password, confirm_password: confirm }) });
-      setOtp(""); setAccessToken(""); setStage("done");
+      await requestJson(context==="customer"?"/api/session/customer-password-reset":"/api/session/account-password-reset", { method: "POST", body: JSON.stringify({ verification_id: verificationId, mobile_number: mobile, booking_verification_token:accessToken, new_password: password, confirm_password: confirm }) });
+      setOtp(""); setAccessToken(""); setPassword(""); setConfirm(""); setStage("done");
     } catch (value) { setError(value instanceof Error ? value.message : "Password reset could not be completed."); }
     finally { setBusy(false); }
   }
 
-  if (stage === "done") return <div className="space-y-5"><p role="status" className="rounded-xl bg-emerald-50 p-3 text-emerald-900">Your password has been reset.</p><Link className="button-primary block text-center" href={`/customer-login?returnTo=${encodeURIComponent(returnTo)}`}>Sign in</Link></div>;
+  if (stage === "done") return <div className="space-y-5"><p role="status" className="rounded-xl bg-emerald-50 p-3 text-emerald-900">Password reset successfully. Please sign in with your new password.</p><Link className="button-primary block text-center" href={context==="customer"?`/customer-login?returnTo=${encodeURIComponent(returnTo)}`:context==="therapist"?"/therapist-login":"/login"}>Sign in</Link></div>;
   return <div className="space-y-5">
+    <p className="text-sm text-slate-600">Enter your registered 10-digit Indian mobile number.</p>
+    {stage!=="mobile"&&<button type="button" disabled={busy} className="button-secondary" onClick={()=>{setStage("mobile");setAccessToken("");setOtp("");setPassword("");setConfirm("");setError("")}}>Change mobile number / Start again</button>}
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-    {stage === "mobile" && <><label className="grid gap-2 font-semibold text-slate-800">Mobile number<input inputMode="numeric" autoComplete="tel" maxLength={10} value={mobile} onChange={(event) => setMobile(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4" required /></label><button disabled={busy || mobile.length !== 10} onClick={send} className="button-primary w-full disabled:opacity-50">{busy ? "Sending…" : "Send OTP"}</button></>}
+    {stage === "mobile" && <><label className="grid gap-2 font-semibold text-slate-800">Mobile number<input inputMode="tel" autoComplete="tel" maxLength={13} value={mobile} onChange={(event) => setMobile(normalizeMobile(event.target.value))} className="min-h-12 rounded-xl border border-slate-300 px-4" required /></label><button disabled={busy || mobile.length !== 10} onClick={send} className="button-primary w-full disabled:opacity-50">{busy ? "Sending…" : "Send OTP"}</button></>}
     {stage === "otp" && <><label className="grid gap-2 font-semibold text-slate-800">One-time password<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4 tracking-[0.4em]" /></label><button disabled={busy || otp.length !== 6} onClick={verify} className="button-primary w-full disabled:opacity-50">{busy ? "Verifying…" : "Verify mobile"}</button><button disabled={busy} onClick={send} className="button-secondary w-full">Resend OTP</button></>}
     {stage === "password" && <form className="space-y-5" onSubmit={reset}><PasswordCreationFields password={password} confirmPassword={confirm} onPasswordChange={setPassword} onConfirmPasswordChange={setConfirm} passwordLabel="New password" confirmLabel="Confirm new password"/><button disabled={busy || !isStrongPassword(password) || password !== confirm} className="button-primary w-full disabled:opacity-50">{busy ? "Resetting…" : "Reset password"}</button></form>}
   </div>;

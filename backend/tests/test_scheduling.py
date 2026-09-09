@@ -25,6 +25,7 @@ from apps.appointments.scheduling import save_scheduled_appointment
 from apps.appointments.scheduling import validate_schedule
 from apps.availability.models import ApprovalStatus, AvailabilityRule
 from apps.patients.models import PatientAddress, PatientProfile
+from apps.practitioners.models import PractitionerApplication, PractitionerCompetency, PractitionerProfile
 from apps.staff.models import StaffProfile
 from apps.tenancy.models import Clinic, ClinicMembership, Organization, OrganizationMembership
 
@@ -369,6 +370,7 @@ def test_conversion_requires_explicit_patient_and_is_idempotent(api_client):
 def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client):
     values = setup_domain("request-decision")
     organization, _, owner, _, physio_user, physio, customer, _, _, therapy = values
+    physio.therapy_competencies.add(therapy)
     source = AppointmentRequest.objects.create(
         organization=organization, creator=customer, therapy=therapy,
         patient_name="Asha Sharma", age=28, gender="FEMALE",
@@ -378,6 +380,11 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
         commercial_snapshot={"duration_minutes": 45}, regular_amount="0.00",
         discount_amount="0.00", final_amount="0.00",
     )
+    second = TherapyOption.objects.create(
+        organization=organization, name="Basti", slug="basti", default_duration_minutes=45,
+    )
+    source.requested_therapies.add(second)
+    physio.therapy_competencies.add(second)
     api_client.force_authenticate(owner)
     response = api_client.post(
         reverse("appointment-request-decision", args=[source.id]),
@@ -400,6 +407,116 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
     assert AppointmentReminder.objects.filter(
         appointment=appointment, status=AppointmentReminder.Status.PENDING
     ).count() >= 1
+
+
+def test_request_accept_then_exact_slot_assignment_is_idempotent_and_customer_synced(api_client):
+    values = setup_domain("request-two-step")
+    organization, _, owner, _, physio_user, physio, customer, _, _, therapy = values
+    profile = PractitionerProfile.objects.create(
+        user=physio_user, organization=organization, clinic=physio.clinic,
+        staff_profile=physio, category=PractitionerApplication.Category.PHYSIOTHERAPIST,
+        is_approved=True, is_open_to_work=True, approved_at=timezone.now(),
+    )
+    source = AppointmentRequest.objects.create(
+        organization=organization, creator=customer, therapy=therapy,
+        patient_name="Asha Sharma", age=28, gender="FEMALE",
+        mobile_number="9876543210", session_preference="SINGLE",
+        preferred_date=start_at().date(), preferred_time=time(10),
+        address="Shastri Nagar", city="Meerut", pin_code="250004",
+        commercial_snapshot={"duration_minutes": 45}, regular_amount="0.00",
+        discount_amount="0.00", final_amount="0.00",
+    )
+    second = TherapyOption.objects.create(
+        organization=organization, name="Basti", slug="basti", default_duration_minutes=45,
+    )
+    source.requested_therapies.add(second)
+    api_client.force_authenticate(owner)
+    accepted = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "ACCEPT"}, format="json", **headers(organization),
+    )
+    source.refresh_from_db()
+    assert accepted.status_code == 200 and source.status == AppointmentRequest.Status.APPROVED
+    assert not Appointment.objects.filter(originating_request=source).exists()
+    assert source.audit_events.filter(event=AppointmentRequestAuditEvent.Event.ACCEPTED).exists()
+    missing = api_client.get(
+        reverse("appointment-request-eligible", args=[source.id]), **headers(organization)
+    )
+    missing_item = next(item for item in missing.data if item["id"] == str(physio.id))
+    assert missing_item["eligible"] is False
+    assert missing_item["eligibility_reason"] == "Therapist does not currently offer Basti, Physiotherapy."
+    api_client.force_authenticate(physio_user)
+    requested = api_client.post(
+        "/api/v1/staff/me/competencies/", {"therapy_id": str(therapy.id)},
+        format="json", **headers(organization),
+    )
+    assert requested.status_code == 201
+    assert requested.data["status"] == "SELECTED"
+    assert physio.therapy_competencies.filter(pk=therapy.pk).exists()
+    api_client.force_authenticate(owner)
+    still_missing = api_client.get(
+        reverse("appointment-request-eligible", args=[source.id]), **headers(organization)
+    )
+    assert next(item for item in still_missing.data if item["id"] == str(physio.id))["eligibility_reason"] == "Therapist does not currently offer Basti."
+    api_client.force_authenticate(physio_user)
+    assert api_client.post(
+        "/api/v1/staff/me/competencies/", {"therapy_id": str(second.id)},
+        format="json", **headers(organization),
+    ).status_code == 201
+    api_client.force_authenticate(owner)
+    eligible = api_client.get(
+        reverse("appointment-request-eligible", args=[source.id]), **headers(organization)
+    )
+    assert eligible.status_code == 200
+    assert next(item for item in eligible.data if item["id"] == str(physio.id))["eligible"] is True
+    assigned = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "ASSIGN", "physiotherapist": str(physio.id)},
+        format="json", **headers(organization),
+    )
+    repeated = api_client.post(
+        reverse("appointment-request-decision", args=[source.id]),
+        {"action": "ASSIGN", "physiotherapist": str(physio.id)},
+        format="json", **headers(organization),
+    )
+    appointment = Appointment.objects.get(originating_request=source)
+    assert assigned.status_code == repeated.status_code == 200
+    assert Appointment.objects.filter(originating_request=source).count() == 1
+    assert appointment.scheduled_start.date() == source.preferred_date
+    assert appointment.scheduled_start.astimezone(ZoneInfo("Asia/Kolkata")).time().replace(tzinfo=None) == source.preferred_time
+    owner_view = api_client.get(reverse("appointment-owner-detail", args=[source.id]), **headers(organization))
+    assert owner_view.status_code == 200
+    api_client.force_authenticate(customer)
+    history = api_client.get(reverse("appointment-mine"), **headers(organization))
+    item = next(value for value in history.data if value["id"] == str(source.id))
+    assert item["appointment"]["id"] == str(appointment.id)
+    assert item["appointment"]["physiotherapist_name"] == physio.user.get_full_name()
+    assert item["appointment"]["physiotherapist_age"] is not None
+    assert item["appointment"]["physiotherapist_qualification"] == "BPT"
+    assert item["appointment"]["physiotherapist_experience_years"] == 5
+    assert item["appointment"]["requested_therapy_names"] == [therapy.name, second.name]
+    assert [step["key"] for step in item["timeline"]][:4] == [
+        "SUBMITTED", "REVIEW", "ACCEPTED", "ASSIGNED"
+    ]
+    api_client.force_authenticate(physio_user)
+    assignments = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
+    assigned_item = next(value for value in assignments.data if value["id"] == str(appointment.id))
+    assert assigned_item["assignment_status"] == "PENDING"
+    assert owner_view.data["preferred_date"] == source.preferred_date.isoformat()
+    assert owner_view.data["preferred_time"] == source.preferred_time.strftime("%H:%M:%S")
+    assert assigned_item["scheduled_start"] == item["appointment"]["scheduled_start"]
+    declined = api_client.post(
+        reverse("schedule-assignment-response", args=[appointment.id]),
+        {"accept": False, "reason": "Unavailable for this visit"},
+        format="json", **headers(organization),
+    )
+    assert declined.status_code == 200
+    api_client.force_authenticate(customer)
+    detail = api_client.get(reverse("appointment-mine-detail", args=[source.id]), **headers(organization))
+    assert detail.data["appointment"]["assignment_status"] == "REJECTED"
+    assert detail.data["appointment"]["physiotherapist_name"] is None
+    assert detail.data["timeline"][-1]["key"] == "REASSIGNMENT"
+    assert Appointment.objects.filter(originating_request=source).count() == 1
 
 
 def test_request_rejection_requires_customer_safe_structured_reason(api_client):

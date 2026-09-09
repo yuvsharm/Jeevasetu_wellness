@@ -3,14 +3,17 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useForm, useWatch, type FieldValues, type Path, type UseFormSetError } from "react-hook-form";
 import type { ZodType } from "zod";
 
 import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
 import { StatusPanel } from "@/components/feedback/status-panel";
 import { FormField } from "@/components/forms/form-field";
+import type { Session } from "@/lib/api/contracts";
 import { ClientApiError, requestJson } from "@/lib/api/client";
 import { sessionEndpoints } from "@/lib/api/endpoints";
+import { establishAuthenticatedSession } from "@/lib/auth/session-cache";
 import {
   forgotPasswordSchema,
   loginSchema,
@@ -56,6 +59,7 @@ const linkClass = "font-semibold text-emerald-800 underline-offset-4 hover:under
 
 export function LoginForm() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const search = useSearchParams();
   const requestedReturn = search.get("returnTo");
   const returnTo = requestedReturn?.startsWith("/") && !requestedReturn.startsWith("//")
@@ -69,7 +73,8 @@ export function LoginForm() {
     const payload = validate(loginSchema, values, form.setError);
     if (!payload) return;
     try {
-      await requestJson(sessionEndpoints.login, { method: "POST", body: JSON.stringify(payload) });
+      const session = await requestJson<Session>(sessionEndpoints.login, { method: "POST", body: JSON.stringify(payload) });
+      await establishAuthenticatedSession(queryClient, session);
       router.replace(returnTo);
     } catch (error) {
       applyApiError(error, form.setError, setMessage);

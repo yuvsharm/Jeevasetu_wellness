@@ -1,8 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BookingForm } from "./booking-form";
+
+function localToday() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 const replace = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -56,7 +64,13 @@ function renderBooking(fetchImplementation: typeof fetch, initialOffer = "offer-
 }
 
 describe("offer booking", () => {
-  beforeEach(() => { vi.restoreAllMocks(); replace.mockReset(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-01T06:00:00+05:30"));
+    replace.mockReset();
+  });
+  afterEach(() => vi.useRealTimers());
 
   it("prefills only the qualifying therapy count and submits the exact returned slot", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -75,7 +89,7 @@ describe("offer booking", () => {
     expect(screen.getByRole("button", { name: /Basti/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("5 of 5 therapies selected")).toBeInTheDocument();
     const date = screen.getByLabelText("Date");
-    expect(date).toHaveAttribute("min", "2026-09-02");
+    expect(date).toHaveAttribute("min", localToday());
     expect(date).toHaveAttribute("max", "2026-09-15");
     fireEvent.change(date, { target: { value: "2026-09-08" } });
     fireEvent.change(await screen.findByLabelText("Available time slot"), { target: { value: "10:00" } });
@@ -125,7 +139,7 @@ describe("offer booking", () => {
   it("clears an invalid-date error and ignores its late response after a valid date is selected", async () => {
     let releaseInvalid!: () => void;
     const invalidResponse = new Promise<void>((resolve) => { releaseInvalid = resolve; });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/commercial/public") return new Response(JSON.stringify(catalog));
       if (url === "/api/customer/family") return new Response(JSON.stringify([]));
@@ -164,7 +178,7 @@ describe("offer booking", () => {
     });
     renderBooking(fetchMock as typeof fetch, "");
     await screen.findByRole("button", { name: /Abhyang/ });
-    expect(screen.getByLabelText("Date")).toHaveAttribute("min", "2026-09-02");
+    expect(screen.getByLabelText("Date")).toHaveAttribute("min", localToday());
     expect(screen.getByLabelText("Date")).not.toHaveAttribute("max");
   });
 });

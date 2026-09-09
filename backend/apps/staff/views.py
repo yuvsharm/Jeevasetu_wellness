@@ -1,4 +1,4 @@
-from django.db.models import Count, Q
+from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.generics import GenericAPIView
@@ -11,6 +11,7 @@ from apps.accounts.permissions import IsEnabledAuthenticated, IsOwnerOrManager, 
 from apps.accounts.role_policy import activate_role, actor_role_scope, disable_role
 from apps.accounts.services import issue_password_reset
 from apps.staff.models import ServiceArea, Specialization, StaffProfile
+from apps.staff.services import permanently_delete_therapist
 from apps.staff.serializers import (
     ServiceAreaSerializer,
     SpecializationSerializer,
@@ -38,18 +39,10 @@ class TenantMixin:
                 "specializations",
                 "service_areas",
                 "documents",
+                "availabilityrule_set",
                 "practitioner_profile__source_application__competencies__therapy",
             )
-            .annotate(
-                approved_weekly_rule_count=Count(
-                    "availabilityrule",
-                    filter=Q(
-                        availabilityrule__approval_status="APPROVED",
-                        availabilityrule__is_active=True,
-                    ),
-                    distinct=True,
-                )
-            )
+
         )
         level, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
         if level == Role.MANAGER:
@@ -111,12 +104,22 @@ class StaffListCreateView(TenantMixin, generics.ListCreateAPIView):
         serializer.save()
 
 
-class StaffDetailView(TenantMixin, generics.RetrieveUpdateAPIView):
+class StaffDetailView(TenantMixin, generics.RetrieveUpdateDestroyAPIView):
     serializer_class = StaffProfileSerializer
     parser_classes = (JSONParser, MultiPartParser, FormParser)
 
     def get_queryset(self):
         return self.scoped_queryset()
+
+    def destroy(self, request, *args, **kwargs):
+        level, _ = actor_role_scope(request.user, request.organization)
+        if level != Role.OWNER:
+            raise PermissionDenied("Only an Owner can permanently delete a therapist.")
+        profile = self.get_object()
+        if profile.staff_type != Role.PHYSIOTHERAPIST:
+            raise ValidationError({"detail": "Only therapist accounts can be permanently deleted here."})
+        permanently_delete_therapist(profile)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class StaffStatusView(TenantMixin, GenericAPIView):
@@ -167,9 +170,12 @@ class ManagerPasswordResetView(TenantMixin, GenericAPIView):
         )
 
 
+from apps.staff.self_profile import SelfProfileSerializer
+
+
 class MyStaffProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
-    serializer_class = StaffProfileSerializer
+    serializer_class = SelfProfileSerializer
     parser_classes = (JSONParser, MultiPartParser, FormParser)
 
     def get_object(self):
@@ -184,6 +190,7 @@ class MyStaffProfileView(generics.RetrieveUpdateAPIView):
 
 
 class AvailabilityView(MyStaffProfileView):
+    serializer_class = StaffProfileSerializer
     def patch(self, request):
         profile = self.get_object()
         serializer = self.get_serializer(
@@ -225,3 +232,19 @@ class StaffMobileAvailabilityView(TenantMixin, GenericAPIView):
         if User.objects.filter(mobile_number=mobile).exists():
             raise ValidationError({"mobile": "This mobile number is already registered with JeevaSetu."})
         return Response({"available": True})
+
+
+class StaffPhotoView(TenantMixin, GenericAPIView):
+    def get(self, request, pk):
+        from django.http import FileResponse
+        from apps.staff.photos import profile_photo
+        from apps.practitioners.views import profile_photo_content_type
+
+        profile = self.scoped_queryset().filter(pk=pk).first()
+        photo = profile_photo(profile) if profile else None
+        if not photo:
+            raise NotFound("Profile photograph is unavailable.")
+        photo.open("rb")
+        response = FileResponse(photo, content_type=profile_photo_content_type(photo.name))
+        response["Cache-Control"] = "private, no-store"
+        return response

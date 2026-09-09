@@ -62,6 +62,7 @@ export function PasswordCreationFields({ password, confirmPassword, onPasswordCh
     <div className="rounded-xl bg-slate-50 p-3 text-sm" aria-live="polite">
       <p className="font-semibold text-slate-800">Password requirements:</p>
       <ul className="mt-2 space-y-1">{passwordRequirements.map(([label, check]) => <li key={label} className={check(password) ? "text-emerald-700" : "text-slate-600"}>{check(password) ? "✓" : "✕"} {label}</li>)}</ul>
+      <p className="mt-2 text-slate-600">Avoid commonly used passwords and passwords that closely match your name, email, or mobile number.</p>
       {confirmPassword && <p className={`mt-2 font-semibold ${password === confirmPassword ? "text-emerald-700" : "text-red-700"}`}>{password === confirmPassword ? "✓ Passwords match" : "✕ Passwords do not match"}</p>}
     </div>
   </div>;

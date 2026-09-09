@@ -556,6 +556,11 @@ def test_correction_and_rejection_workflow_is_audited(api_client, domain):
     organization, _, _, _, manager, _ = domain
     value = application(domain, "SUBMITTED")
     api_client.force_authenticate(manager)
+    started = api_client.post(
+        reverse("practitioner-review", args=[value.id]),
+        {"action": "review"}, format="json", **headers(organization),
+    )
+    assert started.status_code == 200 and started.data["status"] == "UNDER_REVIEW"
     corrected = api_client.post(
         reverse("practitioner-review", args=[value.id]),
         {"action": "correction", "reason": "Replace blurred certificate."},
@@ -566,7 +571,7 @@ def test_correction_and_rejection_workflow_is_audited(api_client, domain):
     assert corrected.data["reviewed_by"] == manager.id
     assert corrected.data["reviewer_name"] == manager.get_full_name()
     assert corrected.data["reviewed_at"]
-    value.status = "SUBMITTED"
+    value.status = "UNDER_REVIEW"
     value.save(update_fields=("status",))
     rejected = api_client.post(
         reverse("practitioner-review", args=[value.id]),
@@ -575,7 +580,7 @@ def test_correction_and_rejection_workflow_is_audited(api_client, domain):
         **headers(organization),
     )
     assert rejected.status_code == 200 and rejected.data["status"] == "REJECTED"
-    assert PractitionerAuditEvent.objects.filter(application=value).count() == 2
+    assert PractitionerAuditEvent.objects.filter(application=value).count() == 3
 
 
 def test_approval_payload_reports_missing_competency(api_client, domain):
@@ -593,9 +598,29 @@ def test_approval_payload_reports_missing_competency(api_client, domain):
     )
 
     assert response.status_code == 400
-    assert response.data == {"detail": "At least one verified competency is required."}
+    assert response.data == {"detail": "At least one therapy must be selected before approval."}
     value.refresh_from_db()
     assert value.status == "UNDER_REVIEW"
+
+
+def test_owner_removes_application_therapy_without_verification_workflow(api_client, domain):
+    organization, _, _, _, manager, _ = domain
+    value = application(domain, "UNDER_REVIEW")
+    competency = value.competencies.first()
+    api_client.force_authenticate(manager)
+
+    response = api_client.delete(
+        reverse("practitioner-competency-manage", args=[competency.id]),
+        **headers(organization),
+    )
+
+    assert response.status_code == 204
+    competency.refresh_from_db()
+    assert competency.verification_status == "REJECTED"
+    assert PractitionerAuditEvent.objects.filter(
+        application=value, action="COMPETENCY_REMOVED",
+        metadata__therapy_id=str(competency.therapy_id),
+    ).exists()
 
 def test_applicant_cannot_self_approve_or_self_promote(api_client, domain):
     organization, _, _, applicant, _, _ = domain
@@ -656,6 +681,8 @@ def test_rejection_never_modifies_existing_owner_access(api_client, domain):
 
 def test_open_to_work_requires_approved_operational_profile(domain):
     _, _, _, applicant, manager, _ = domain
+    applicant.set_password("Activated-Password-2026!")
+    applicant.save(update_fields=["password"])
     value = application(domain, "UNDER_REVIEW")
     value.competencies.update(verification_status="VERIFIED", verified_by=manager)
     value.documents.update(verification_status="VERIFIED", verified_by=manager)
@@ -671,6 +698,7 @@ def test_public_profile_has_no_private_fields(api_client, domain):
     value.competencies.update(verification_status="VERIFIED", verified_by=manager)
     value.documents.update(verification_status="VERIFIED", verified_by=manager)
     value = approve_application(value, actor=manager)
+    value.approved_profile.is_open_to_work = True
     value.approved_profile.is_publicly_visible = True
     value.approved_profile.save()
     response = api_client.get(reverse("practitioner-public-list"), **headers(organization))
@@ -699,6 +727,7 @@ def test_preferred_practitioner_never_assigns_request(domain):
     value.competencies.update(verification_status="VERIFIED", verified_by=manager)
     value.documents.update(verification_status="VERIFIED", verified_by=manager)
     value = approve_application(value, actor=manager)
+    value.approved_profile.is_open_to_work = True
     value.approved_profile.is_publicly_visible = True
     value.approved_profile.save()
     request = AppointmentRequest(

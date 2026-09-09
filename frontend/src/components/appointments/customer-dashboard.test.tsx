@@ -1,91 +1,20 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {QueryClient,QueryClientProvider} from "@tanstack/react-query";
+import {render,screen} from "@testing-library/react";
+import {beforeEach,describe,expect,it,vi} from "vitest";
+import {CustomerDashboard} from "./customer-dashboard";
 
-import { CustomerDashboard } from "@/components/appointments/customer-dashboard";
-
-vi.mock("@/components/auth/session-provider", () => ({
-  useSession: () => ({ data: { user: { first_name: "Asha", mobile_number: "+910000000000" } } }),
-}));
-vi.mock("@/components/appointments/customer-rating", () => ({ CustomerRatingPanel: () => null }));
-
-function renderDashboard(requests: unknown[], appointments: unknown[] = [], offers: unknown[] = []) {
-  vi.spyOn(global, "fetch").mockImplementation(async (input) => {
-    const url = String(input);
-    if (url === "/api/appointment-requests") return new Response(JSON.stringify(requests), { status: 200 });
-    if (url === "/api/schedule/my-appointments") return new Response(JSON.stringify(appointments), { status: 200 });
-    if (url === "/api/commercial/public") return new Response(JSON.stringify({ therapies: [], packages: [], offers }), { status: 200 });
-    return new Response(JSON.stringify([]), { status: 200 });
-  });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><CustomerDashboard /></QueryClientProvider>);
-}
-
-const pendingRequest = {
-  id: "request-1", status: "PENDING", patient_name: "Test patient",
-  therapy_name: "Kati Basti", requested_therapy_names: ["Kati Basti"],
-  requested_duration_minutes: 45, preferred_date: "2026-09-05", preferred_time: "10:00:00",
-  created_at: "2026-08-31T06:12:00Z",
-};
-
-describe("CustomerDashboard", () => {
-  beforeEach(() => vi.restoreAllMocks());
-
-  it("does not render an empty Pending requests heading", async () => {
-    renderDashboard([]);
-    expect(await screen.findByText(/welcome, asha/i)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Pending requests" })).not.toBeInTheDocument();
-  });
-
-  it("renders pending requests separately when present", async () => {
-    renderDashboard([pendingRequest]);
-    expect(await screen.findByRole("heading", { name: "Pending requests" })).toBeInTheDocument();
-    expect(screen.getByText("Test patient")).toBeInTheDocument();
-    expect(screen.getByText("Request Received")).toBeInTheDocument();
-    expect(screen.getByText(/Booking Submitted At:/)).toBeInTheDocument();
-    expect(screen.getByText(/Booking reference: request-1/)).toBeInTheDocument();
-  });
-
-  it("does not present a converted request as a second active booking", async () => {
-    renderDashboard([{ ...pendingRequest, status: "APPROVED" }], [{
-      id: "appointment-1", originating_request: "request-1", requested_at: pendingRequest.created_at,
-      patient_name: "Test patient", therapy_name: "Kati Basti",
-      scheduled_start: "2026-09-05T10:00:00+05:30", scheduled_end: "2026-09-05T10:45:00+05:30",
-      duration_minutes: 45, status: "SCHEDULED", physiotherapist_name: null,
-      assignment_status: "PENDING", payment_status: null,
-      visit_verification: { status: "NOT_READY", verified_at: null, expires_at: null, failed_attempt_warning: false },
-    }]);
-    expect(await screen.findByText("Appointment appointment-1")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Pending requests" })).not.toBeInTheDocument();
-    expect(screen.getByText("Booking Submitted At")).toBeInTheDocument();
-    expect(screen.getByText("Requested Visit")).toBeInTheDocument();
-  });
-
-  it("shows visit verification only inside an eligible active appointment", async () => {
-    renderDashboard([], [{
-      id: "appointment-1", patient_name: "Test patient", therapy_name: "Kati Basti",
-      scheduled_start: "2026-09-05T10:00:00+05:30", scheduled_end: "2026-09-05T10:45:00+05:30",
-      duration_minutes: 45, status: "CONFIRMED", physiotherapist_name: "Dr Asha",
-      assignment_status: "ACCEPTED", journey_status: "ARRIVED", payment_status: "PENDING",
-      visit_verification: { status: "AWAITING_VERIFICATION", verified_at: null, expires_at: null, failed_attempt_warning: false },
-    }]);
-    expect(await screen.findByText("Service arrival verification")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate Visit OTP" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Visit Verification" })).not.toBeInTheDocument();
-  });
-
-  it("shows a current public offer without technical configuration", async () => {
-    renderDashboard([], [], [{
-      id: "offer-1", title: "Active Wellness Test Offer", promotional_text: "Save on Kati Basti",
-      offer_type: "PERCENTAGE", eligible_therapies: ["therapy-1"], eligible_therapy_names: ["Kati Basti"],
-      minimum_therapy_count: 1,
-      discount_value: "10.00", fixed_price: null, free_therapy: null, free_therapy_name: "", free_quantity: 1,
-      valid_from: "2026-08-31T00:00:00Z", valid_until: "2026-09-02T00:00:00Z",
-    }]);
-    expect(await screen.findByText("Active Wellness Test Offer")).toBeInTheDocument();
-    expect(screen.getByText("10.00% OFF")).toBeInTheDocument();
-    expect(screen.getByText("Choose any 1 eligible therapy")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Choose offer" })).toHaveAttribute("href", "/book-appointment?offer=offer-1");
-    expect(screen.queryByText(/rule_config|minimum_therapy_count/i)).not.toBeInTheDocument();
-  });
+const base={id:"request-1",therapy:"therapy-1",therapy_name:"Kati Basti",requested_therapy_names:["Kati Basti"],requested_duration_minutes:45,family_member:null,family_member_name:"",preferred_practitioner:null,patient_name:"Asha Sharma",age:34,gender:"FEMALE",mobile_number:"9876543210",alternate_mobile:"",email:"",session_preference:"SINGLE",preferred_date:"2026-09-15",preferred_time:"10:00:00",problem_description:"",pain_area:"",problem_duration:"",doctor_reference:"",address:"163 C Block",city:"Meerut",pin_code:"250004",landmark:"",google_map_link:"",status:"PENDING",owner_remarks:"",created_at:"2026-09-01T10:00:00Z",updated_at:"2026-09-01T10:00:00Z",timeline:[{key:"SUBMITTED",label:"Request submitted",at:"2026-09-01T10:00:00Z"}]};
+const appointment={id:"appointment-1",originating_request:"request-1",patient_identifier:"PAT-1",patient_name:"Asha Sharma",therapy_name:"Kati Basti",clinic_name:"Main",scheduled_start:"2026-09-15T10:00:00+05:30",scheduled_end:"2026-09-15T10:45:00+05:30",duration_minutes:45,status:"SCHEDULED",physiotherapist_name:"Krishna",assignment_status:"PENDING",physiotherapist_qualification:"MPT",physiotherapist_age:31,physiotherapist_experience_years:2,physiotherapist_specialization:"Orthopaedic care",physiotherapist_expertise:["Kati Basti"],physiotherapist_rating:4.5,physiotherapist_review_count:2,physiotherapist_photo_url:"/photo",visit_verification:{status:"NOT_READY",verified_at:null,expires_at:null,failed_attempt_warning:false}};
+const offer=(id:string,title:string,overrides:Record<string,unknown>={})=>({id,title,promotional_text:"Save on your next home therapy visit",offer_type:"PERCENTAGE",eligible_therapies:["therapy-1"],eligible_therapy_names:["Kati Basti"],qualifying_package:null,minimum_therapy_count:1,maximum_therapy_count:null,discount_value:"10.00",fixed_price:null,free_therapy:null,free_therapy_name:"",free_quantity:0,family_required:false,minimum_family_members:1,rule_config:{},valid_from:null,valid_until:"2099-01-01T00:00:00Z",is_active:true,is_publicly_visible:true,display_order:0,...overrides});
+function show(items:unknown[],offers:unknown[]=[]){vi.spyOn(global,"fetch").mockImplementation(async input=>new Response(JSON.stringify(String(input)==="/api/commercial/public"?{therapies:[],packages:[],offers}:items),{status:200}));const client=new QueryClient({defaultOptions:{queries:{retry:false}}});return render(<QueryClientProvider client={client}><CustomerDashboard/></QueryClientProvider>)}
+describe("customer appointment history",()=>{beforeEach(()=>vi.restoreAllMocks());
+ it("shows every required history section and a pending timeline",async()=>{show([base]);expect(await screen.findByText("Your appointment request has been submitted.")).toBeInTheDocument();for(const title of ["Pending Requests","Accepted / Awaiting Therapist Assignment","Confirmed / Upcoming Appointments","Completed","Rejected / Cancelled","Past Appointment History"])expect(screen.getByRole("heading",{name:title})).toBeInTheDocument();expect(screen.getByText("Request submitted")).toBeInTheDocument()});
+ it("shows accepted assignment-in-progress without therapist identity",async()=>{show([{...base,status:"APPROVED",timeline:[...base.timeline,{key:"ACCEPTED",label:"Request accepted",at:base.updated_at}]}]);expect(await screen.findByText("Your request has been accepted. Therapist assignment is in progress.")).toBeInTheDocument();expect(screen.queryByText("Krishna")).not.toBeInTheDocument()});
+ it("shows canonical confirmed slot and public therapist details after assignment",async()=>{show([{...base,status:"APPROVED",appointment,timeline:[...base.timeline,{key:"ASSIGNED",label:"Therapist assigned",at:base.updated_at}]}]);expect(await screen.findByText("Your appointment is confirmed.")).toBeInTheDocument();expect(screen.getByText("Krishna")).toBeInTheDocument();expect(screen.getByText(/MPT · Age 31/)).toBeInTheDocument();expect(screen.getByText(/Relevant expertise: Kati Basti/)).toBeInTheDocument();expect(screen.getByLabelText("Therapist rating")).toHaveTextContent("4.5");expect(screen.getByText("Therapist assigned")).toBeInTheDocument()});
+ it("retains rejection reason",async()=>{show([{...base,status:"REJECTED",rejection_customer_reason:"The requested slot is unavailable.",timeline:[...base.timeline,{key:"REJECTED",label:"Request not accepted",at:base.updated_at}]}]);expect(await screen.findByText("Your appointment request was not accepted.")).toBeInTheDocument();expect(screen.getByText(/The requested slot is unavailable/)).toBeInTheDocument()});
+ it("hides a declined therapist and shows reassignment",async()=>{show([{...base,status:"APPROVED",appointment:{...appointment,assignment_status:"REJECTED",physiotherapist_name:null},timeline:[...base.timeline,{key:"REASSIGNMENT",label:"Therapist reassignment in progress",at:base.updated_at}]}]);expect(await screen.findByText("We are assigning another therapist to your appointment.")).toBeInTheDocument();expect(screen.queryByText("Krishna")).not.toBeInTheDocument();expect(screen.getByText("Therapist reassignment in progress")).toBeInTheDocument()});
+ it("shows an active offer above pending requests and keeps the booking CTA first",async()=>{show([base],[offer("offer-1","September care savings")]);const offerHeading=await screen.findByRole("heading",{name:"Current Offers & Packages"});const pendingHeading=screen.getByRole("heading",{name:"Pending Requests"});const bookLink=screen.getByRole("link",{name:"Book Service"});expect(offerHeading.compareDocumentPosition(pendingHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();expect(bookLink.compareDocumentPosition(offerHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();expect(screen.getByRole("link",{name:"View all offers & packages"})).toHaveAttribute("href","/customer/offers")});
+ it("renders multiple active offers",async()=>{show([base],[offer("offer-1","September care savings"),offer("offer-2","Family wellness offer")]);expect(await screen.findByText("September care savings")).toBeInTheDocument();expect(screen.getByText("Family wellness offer")).toBeInTheDocument()});
+ it("hides the dashboard offer section when no current offer exists",async()=>{show([base]);expect(await screen.findByText("Your appointment request has been submitted.")).toBeInTheDocument();expect(screen.queryByRole("heading",{name:"Current Offers & Packages"})).not.toBeInTheDocument();expect(screen.getByRole("heading",{name:"Pending Requests"})).toBeInTheDocument()});
+ it("hides inactive, private, and expired offers while pending requests remain",async()=>{show([base],[offer("inactive","Inactive",{is_active:false}),offer("private","Private",{is_publicly_visible:false}),offer("expired","Expired",{valid_until:"2020-01-01T00:00:00Z"})]);expect(await screen.findByText("Your appointment request has been submitted.")).toBeInTheDocument();expect(screen.queryByRole("heading",{name:"Current Offers & Packages"})).not.toBeInTheDocument();expect(screen.queryByText("Inactive")).not.toBeInTheDocument();expect(screen.queryByText("Private")).not.toBeInTheDocument();expect(screen.queryByText("Expired")).not.toBeInTheDocument();expect(screen.getByRole("heading",{name:"Pending Requests"})).toBeInTheDocument()});
 });

@@ -38,6 +38,7 @@ describe("public website", () => {
     const client=new QueryClient({defaultOptions:{queries:{staleTime:Infinity}}});
     client.setQueryData(["commercial-public"],{therapies:productionTherapies,packages:[],offers:[]});
     client.setQueryData(["public-reviews"],{average_rating:null,review_count:0,reviews:[]});
+    client.setQueryData(["public-practitioners"],[]);
     render(<QueryClientProvider client={client}><Home/></QueryClientProvider>);
     for(const [index,name] of productionTherapyNames.entries()){
       expect(screen.getByRole("heading",{name})).toBeInTheDocument();
@@ -55,6 +56,7 @@ describe("public website", () => {
     const client=new QueryClient({defaultOptions:{queries:{staleTime:Infinity}}});
     client.setQueryData(["commercial-public"],{therapies:[{id:"therapy-1",name:"Kati Basti",slug:"kati-basti",base_price:"1200.00",short_description:"Focused care",benefits:[],is_active:true,is_publicly_visible:true}],packages:[{id:"package-1",name:"7 Session Plan",therapy:"therapy-1",therapy_name:"Kati Basti",session_count:7,selling_price:"7000.00",regular_total:"8400.00",saving:"1400.00",discount_percentage:16.67,description:"",valid_from:null,valid_until:null,is_active:true,is_publicly_visible:true,display_order:1}],offers:[]});
     client.setQueryData(["public-reviews"],{average_rating:5,review_count:1,reviews:[{stars:5,comment:"Thoughtful home service",customer_display_name:"Asha",physiotherapist_name:"Priya",created_at:"2026-08-20T10:00:00Z"}]});
+    client.setQueryData(["public-practitioners"],[]);
     render(<QueryClientProvider client={client}><Home/></QueryClientProvider>);
     expect(screen.getByRole("heading",{level:1,name:/physiotherapy & wellness care/i})).toBeInTheDocument();
     expect(screen.getByRole("heading",{name:"Kati Basti"})).toBeInTheDocument();
@@ -64,6 +66,9 @@ describe("public website", () => {
     expect(bookingLinks).toHaveLength(1);
     expect(bookingLinks[0]).toHaveAttribute("href","/customer-access?returnTo=%2Fbook-appointment");
     expect(screen.getByRole("link",{name:"Explore Therapies"})).toHaveAttribute("href","#therapies");
+    const therapistsHeading=screen.getByRole("heading",{name:"Available Therapists"});
+    expect(screen.getByRole("heading",{name:"Kati Basti"}).compareDocumentPosition(therapistsHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(therapistsHeading.compareDocumentPosition(screen.getByRole("heading",{name:"7 Session Plan"}))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const professionalHeading=screen.getByRole("heading",{name:"Grow your practice with JeevaSetu"});
     const journeyHeading=screen.getByRole("heading",{name:"From your first choice to a verified home visit"});
     expect(professionalHeading.compareDocumentPosition(journeyHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

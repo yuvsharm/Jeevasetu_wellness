@@ -9,7 +9,7 @@ from apps.appointments.models import TherapyOption
 from apps.staff.models import ServiceArea, Specialization, StaffDocument, StaffProfile
 from apps.tenancy.models import ClinicMembership, OrganizationMembership
 from apps.appointments.booking_verification import resolve_booking_verification
-from apps.practitioners.serializers import DocumentUploadSerializer
+from apps.practitioners.serializers import DocumentUploadSerializer, ProfilePhotoUploadSerializer
 
 
 class SpecializationSerializer(serializers.ModelSerializer):
@@ -46,6 +46,55 @@ class StaffOptionsSerializer(serializers.Serializer):
 
 
 class StaffProfileSerializer(serializers.ModelSerializer):
+    age = serializers.SerializerMethodField()
+
+    def get_age(self, value):
+        from apps.practitioners.dob import derived_age
+        return derived_age(value)
+
+    def validate_date_of_birth(self, value):
+        from apps.practitioners.dob import validate_dob, identity_today
+        role = getattr(self.instance, "staff_type", None) or self.initial_data.get("staff_type")
+        if role == Role.PHYSIOTHERAPIST:
+            return validate_dob(value, identity_today(self.instance, self.context["request"].organization))
+        return value
+
+    photo_url = serializers.SerializerMethodField()
+    clinic_timezone = serializers.SerializerMethodField()
+    operating_days = serializers.SerializerMethodField()
+    upcoming_leave = serializers.SerializerMethodField()
+
+    def get_photo_url(self, value):
+        from apps.staff.photos import profile_photo
+        return f"/api/staff/profiles/{value.pk}/photo" if profile_photo(value) else ""
+
+    def get_clinic_timezone(self, value):
+        return (value.clinic.timezone if value.clinic else None) or value.organization.timezone or "Asia/Kolkata"
+
+    def get_operating_days(self, value):
+        try:
+            hours = value.clinic.appointment_operating_hours
+        except (AttributeError, ObjectDoesNotExist):
+            return []
+        result = []
+        for day in range(7):
+            window = hours.window_for_weekday(day)
+            result.append({"weekday": day, "is_open": window is not None,
+                           "opens_at": str(window[0]) if window else None,
+                           "closes_at": str(window[1]) if window else None})
+        return result
+
+    def get_upcoming_leave(self, value):
+        from apps.availability.models import AvailabilityException
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta
+        zone = ZoneInfo(self.get_clinic_timezone(value))
+        return [{"id": str(item.pk), "from_date": item.starts_at.astimezone(zone).date().isoformat(),
+                 "to_date": (item.ends_at - timedelta(microseconds=1)).astimezone(zone).date().isoformat()}
+                for item in AvailabilityException.objects.filter(physiotherapist=value,
+                    kind="UNAVAILABLE", is_active=True, approval_status="APPROVED",
+                    ends_at__gt=timezone.now()).order_by("starts_at")]
+
     full_name = serializers.CharField(source="user.get_full_name", read_only=True)
     email = serializers.EmailField(source="user.email")
     mobile = serializers.CharField(source="user.mobile_number")
@@ -63,7 +112,14 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         required=False,
     )
     profile_source = serializers.SerializerMethodField()
-    approved_weekly_rule_count = serializers.IntegerField(read_only=True, default=0)
+    approved_weekly_rule_count = serializers.SerializerMethodField()
+
+    def get_approved_weekly_rule_count(self, value):
+        from zoneinfo import ZoneInfo
+        today = timezone.now().astimezone(ZoneInfo(self.get_clinic_timezone(value))).date()
+        return len({rule.weekday for rule in value.availabilityrule_set.all()
+                    if rule.is_active and rule.approval_status == "APPROVED"
+                    and (rule.effective_until is None or rule.effective_until >= today)})
     approval_status = serializers.SerializerMethodField()
     activation_status = serializers.SerializerMethodField()
     is_publicly_visible = serializers.BooleanField(
@@ -93,8 +149,13 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             "email",
             "mobile",
             "profile_photo",
+            "photo_url",
+            "clinic_timezone",
+            "operating_days",
+            "upcoming_leave",
             "gender",
             "date_of_birth",
+            "age",
             "qualification",
             "registration_number",
             "experience_years",
@@ -167,6 +228,10 @@ class StaffProfileSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context["request"]
         organization = request.organization
+        if self.instance is not None and "therapy_competencies" in attrs:
+            raise serializers.ValidationError(
+                {"therapy_competency_ids": "Use Therapies I Can Perform to update this list safely."}
+            )
         clinic = attrs.get("clinic", getattr(self.instance, "clinic", None))
         if clinic and (clinic.organization_id != organization.id or not clinic.is_active):
             raise serializers.ValidationError({"clinic": "The selected clinic is unavailable."})
@@ -186,6 +251,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
         practitioner_data = validated_data.pop("practitioner_profile", {})
@@ -195,13 +261,21 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
         if user_data:
+            instance.user.first_name = user_data.get("first_name", instance.user.first_name)
+            instance.user.last_name = user_data.get("last_name", instance.user.last_name)
             instance.user.email = user_data.get("email", instance.user.email)
             instance.user.mobile_number = user_data.get(
                 "mobile_number", instance.user.mobile_number
             )
             instance.user.full_clean()
-            instance.user.save(update_fields=("email", "mobile_number"))
-        instance.full_clean()
+            instance.user.save(update_fields=("email", "mobile_number", "first_name", "last_name"))
+        # A partial edit must not fail on unrelated missing legacy profile data.
+        excluded = [field.name for field in instance._meta.fields
+                    if self.partial and field.name not in validated_data]
+        try:
+            instance.full_clean(exclude=excluded)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
         instance.save()
         if specializations is not None:
             instance.specializations.set(specializations)
@@ -216,6 +290,11 @@ class StaffProfileSerializer(serializers.ModelSerializer):
 
 
 class StaffCreateSerializer(StaffProfileSerializer):
+    profile_photo = serializers.ImageField(required=False)
+
+    def validate_profile_photo(self, value):
+        return ProfilePhotoUploadSerializer().validate_profile_photo(value)
+
     full_name = serializers.CharField(write_only=True, max_length=255)
     email = serializers.EmailField(write_only=True)
     mobile = serializers.RegexField(
@@ -253,6 +332,8 @@ class StaffCreateSerializer(StaffProfileSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        if attrs.get("staff_type") == Role.PHYSIOTHERAPIST and not attrs.get("date_of_birth"):
+            raise serializers.ValidationError({"date_of_birth": "Date of birth is required."})
         if attrs.get("experience_years", 0) > 60:
             raise serializers.ValidationError({"experience_years": "Experience cannot exceed 60 years."})
         password = attrs.get("password")
@@ -261,6 +342,8 @@ class StaffCreateSerializer(StaffProfileSerializer):
                 {"mobile_verification_token": "Verify the mobile number before creating credentials."}
             )
         if password:
+            if attrs.get("staff_type") == Role.PHYSIOTHERAPIST and not attrs.get("profile_photo"):
+                raise serializers.ValidationError({"profile_photo": "Profile Photograph is required."})
             if password != attrs.pop("confirm_password", None):
                 raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
             from django.contrib.auth import password_validation

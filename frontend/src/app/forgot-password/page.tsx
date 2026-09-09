@@ -1,6 +1,7 @@
 import { AuthCard } from "@/components/auth/auth-card";
-import { ForgotPasswordForm } from "@/components/auth/auth-forms";
+import { AccountPasswordReset } from "@/components/auth/account-password-reset";
 
 export default function ForgotPasswordPage() {
-  return <AuthCard title="Reset your password" description="Enter your registered email or mobile number. We never disclose whether an account exists."><ForgotPasswordForm /></AuthCard>;
+  return <AuthCard title="Reset your password" description="Verify your registered mobile number, then choose a new password."><Suspense fallback={null}><AccountPasswordReset /></Suspense></AuthCard>;
 }
+import { Suspense } from "react";
