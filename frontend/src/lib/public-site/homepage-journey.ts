@@ -11,7 +11,7 @@ export const journeySteps: JourneyStep[] = [
     number: "01",
     title: "Choose your therapy",
     description: "Browse therapies, session plans and available offers.",
-    image: "/images/journey/choose-therapy.webp",
+    image: "/images/journey/jeevasetu-how-it-works-01.png",
     imageAlt: "Customer comparing home-wellness services on a tablet",
   },
   {
@@ -25,7 +25,7 @@ export const journeySteps: JourneyStep[] = [
     number: "03",
     title: "Login/Register & request booking",
     description: "Securely sign in or register and submit your appointment request.",
-    image: "/images/journey/request-booking.webp",
+    image: "/images/journey/jeevasetu-how-it-works-03.png",
     imageAlt: "Customer securely requesting a home-care appointment by mobile",
   },
   {
@@ -46,7 +46,7 @@ export const journeySteps: JourneyStep[] = [
     number: "06",
     title: "Verify & complete",
     description: "Secure service verification confirms the visit and completion.",
-    image: "/images/journey/verify-complete.webp",
+    image: "/images/journey/jeevasetu-how-it-works-06.png",
     imageAlt: "Customer and professional confirming successful service completion",
   },
 ];

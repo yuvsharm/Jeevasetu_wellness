@@ -8,7 +8,7 @@ const benefits=[
   ["Skill-Based Matching","Eligible assignments connect patient requirements with the therapies you currently offer."],
   ["Professional Ratings","Build a record of moderated feedback from completed visits."],
   ["Organized Schedule","Keep confirmed visits and your availability in one place."],
-  ["Transparent Visit Workflow","Follow a structured process from assignment through visit verification."],
+  ["Transparent Service Workflow","Follow a clear process from assignment through session completion."],
   ["Structured Professional Record","Keep your application, credentials and professional history connected."],
 ];
 const steps=["Enter Personal & Professional Details","Upload Profile Photograph","Verify Mobile Number by OTP","Create Password & Confirm Password","Upload Mandatory Documents","Review Complete Application","Correct Any Issue if Needed","Submit Application","JeevaSetu Reviews & Approves","Start Receiving Eligible Assignments"];

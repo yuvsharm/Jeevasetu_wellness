@@ -425,6 +425,12 @@ def test_offer_uses_service_date_and_safe_delete_preserves_used_offer(api_client
             organization=organization, therapy_ids=[therapy.id], offer_id=offer.id, at=exclusive_boundary
         )
 
+    # Restore the relative window before reusing `inside` for the historical booking below.
+    # Otherwise this test becomes date-dependent once `inside` falls after the fixed boundary.
+    offer.valid_from = now + timedelta(days=2)
+    offer.valid_until = now + timedelta(days=5)
+    offer.save(update_fields=("valid_from", "valid_until", "updated_at"))
+
     api_client.force_authenticate(owner)
     listing = api_client.get(reverse("commercial-offer-list"), **headers(organization))
     listed = next(item for item in listing.data if str(item["id"]) == str(offer.id))

@@ -309,6 +309,16 @@ class CustomerRegistrationView(APIView):
         clinic = request.organization.clinics.filter(is_active=True).order_by("created_at").first()
         if clinic is None:
             raise ValidationError("Customer registration is temporarily unavailable.")
+        offline_patient = (
+            PatientProfile.objects.select_for_update()
+            .filter(
+                organization=request.organization,
+                mobile_number=data["mobile_number"],
+                is_active=True,
+                user__isnull=True,
+            )
+            .first()
+        )
 
         names = data["full_name"].split(" ", 1)
         user = User.objects.create_user(
@@ -328,32 +338,37 @@ class CustomerRegistrationView(APIView):
             organization=request.organization,
             organization_membership=membership,
         )
-        patient = PatientProfile(
-            organization=request.organization,
-            user=user,
-            clinic=clinic,
-            full_name=data["full_name"],
-            mobile_number=data["mobile_number"],
-            gender=data["gender"],
-            date_of_birth=data.get("date_of_birth"),
-            age=data.get("age"),
-            emergency_contact_name=data["full_name"],
-            emergency_contact_relationship="Self",
-            emergency_contact_mobile=data["mobile_number"],
-            guardian_name=data.get("guardian_name", ""),
-            guardian_relationship=data.get("guardian_relationship", ""),
-            guardian_mobile=data.get("guardian_mobile", ""),
-            profile_photo=data.get("profile_photo", ""),
-        )
-        patient.save()
-        address = PatientAddress(
-            patient=patient,
-            label="Home",
-            is_primary=True,
-            **data["address"],
-        )
-        address.full_clean()
-        address.save()
+        if offline_patient is not None:
+            patient = offline_patient
+            patient.user = user
+            patient.save(update_fields=("user", "updated_at"))
+        else:
+            patient = PatientProfile(
+                organization=request.organization,
+                user=user,
+                clinic=clinic,
+                full_name=data["full_name"],
+                mobile_number=data["mobile_number"],
+                gender=data["gender"],
+                date_of_birth=data.get("date_of_birth"),
+                age=data.get("age"),
+                emergency_contact_name=data["full_name"],
+                emergency_contact_relationship="Self",
+                emergency_contact_mobile=data["mobile_number"],
+                guardian_name=data.get("guardian_name", ""),
+                guardian_relationship=data.get("guardian_relationship", ""),
+                guardian_mobile=data.get("guardian_mobile", ""),
+                profile_photo=data.get("profile_photo", ""),
+            )
+            patient.save()
+            address = PatientAddress(
+                patient=patient,
+                label="Home",
+                is_primary=True,
+                **data["address"],
+            )
+            address.full_clean()
+            address.save()
         verification.consumed_at = timezone.now()
         verification.save(update_fields=("consumed_at",))
         record_auth_event(

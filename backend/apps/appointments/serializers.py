@@ -10,12 +10,14 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.models import Role, RoleAssignment
+from apps.accounts.role_policy import actor_role_scope
 from apps.appointments.booking_verification import resolve_booking_verification
 from apps.appointments.commercial import calculate_quote
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
     AppointmentChangeRequest,
+    AppointmentPayment,
     AppointmentRequest,
     AppointmentRequestAuditEvent,
     AppointmentRating,
@@ -26,8 +28,9 @@ from apps.appointments.models import (
 )
 from apps.appointments.scheduling import save_scheduled_appointment, validate_schedule
 from apps.availability.services import discover_slots
-from apps.patients.models import CustomerFamilyMember, PatientProfile
+from apps.patients.models import CustomerFamilyMember, PatientAddress, PatientProfile
 from apps.staff.models import StaffProfile
+from apps.tenancy.models import Clinic
 
 
 class TherapyOptionSerializer(serializers.ModelSerializer):
@@ -238,11 +241,17 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "doctor_reference",
             "address",
             "city",
+            "region",
             "pin_code",
             "landmark",
             "google_map_link",
+            "latitude",
+            "longitude",
+            "location_accuracy_meters",
+            "location_source",
             "status",
             "owner_remarks",
+            "booking_source",
             "rejection_category",
             "rejection_customer_reason",
             "created_at",
@@ -253,6 +262,7 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "therapy_name",
             "status",
             "owner_remarks",
+            "booking_source",
             "rejection_category",
             "rejection_customer_reason",
             "created_at",
@@ -262,6 +272,11 @@ class AppointmentRequestSerializer(serializers.ModelSerializer):
             "discount_amount",
             "final_amount",
         )
+        extra_kwargs = {
+            "latitude": {"write_only": True},
+            "longitude": {"write_only": True},
+            "location_accuracy_meters": {"write_only": True},
+        }
 
     def validate_preferred_date(self, value):
         if value < timezone.localdate():
@@ -433,15 +448,6 @@ class CancelAppointmentSerializer(serializers.Serializer):
         raise NotImplementedError
 
 
-class VisitVerificationStatusSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(
-        choices=("NOT_READY", "AWAITING_VERIFICATION", "VERIFIED", "EXPIRED", "LOCKED")
-    )
-    verified_at = serializers.DateTimeField(allow_null=True)
-    expires_at = serializers.DateTimeField(allow_null=True)
-    failed_attempt_warning = serializers.BooleanField()
-
-
 class AppointmentListSerializer(serializers.ModelSerializer):
     patient_identifier = serializers.CharField(source="patient.patient_identifier", read_only=True)
     patient_name = serializers.CharField(source="patient.full_name", read_only=True)
@@ -453,8 +459,11 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     assigned_manager_name = serializers.CharField(
         source="assigned_by.get_full_name", read_only=True, default=None
     )
-    visit_verification = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
+    payment_amount_due = serializers.SerializerMethodField()
+    payment_paid_at = serializers.SerializerMethodField()
+    payment_confirmed_by = serializers.SerializerMethodField()
+    payment_qr_available = serializers.SerializerMethodField()
     requested_therapy_names = serializers.SerializerMethodField()
 
     class Meta:
@@ -482,27 +491,40 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "assigned_manager_name",
             "reschedule_count",
             "cancellation_category",
-            "visit_verification",
             "journey_status",
             "en_route_at",
-            "arrived_at",
             "service_started_at",
             "completed_at",
             "payment_status",
+            "payment_amount_due",
+            "payment_paid_at",
+            "payment_confirmed_by",
+            "payment_qr_available",
         )
 
-    @extend_schema_field(VisitVerificationStatusSerializer)
-    def get_visit_verification(self, value):
-        from apps.appointments.visit_verification import visit_verification_status
-
-        request = self.context.get("request")
-        actor = request.user if request and request.user.is_authenticated else None
-        return visit_verification_status(value, actor=actor)
-
-
     def get_payment_status(self, value):
-        payment = getattr(value, "practitioner_payment", None)
+        payment = getattr(value, "payment", None)
         return payment.status if payment else None
+
+    def get_payment_amount_due(self, value):
+        payment = getattr(value, "payment", None)
+        if payment:
+            return payment.amount_due
+        source = getattr(value, "originating_request", None)
+        return source.final_amount if source and source.final_amount is not None else None
+
+    def get_payment_paid_at(self, value):
+        payment = getattr(value, "payment", None)
+        return payment.paid_at if payment else None
+
+    def get_payment_confirmed_by(self, value):
+        payment = getattr(value, "payment", None)
+        if not payment or payment.status != AppointmentPayment.Status.PAID:
+            return ""
+        return payment.updated_by.get_full_name() or payment.updated_by.get_username()
+
+    def get_payment_qr_available(self, value):
+        return bool(settings.PAYMENT_UPI_ID and settings.PAYMENT_PAYEE_NAME)
 
 
     def get_requested_therapy_names(self, value):
@@ -572,7 +594,6 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
             "assignment_rejection_reason",
             "journey_status",
             "en_route_at",
-            "arrived_at",
             "service_started_at",
             "completed_at",
             "reminders",
@@ -610,6 +631,10 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     physiotherapist_name = serializers.SerializerMethodField()
     patient_name = serializers.CharField(source="patient.full_name", read_only=True)
     payment_status = serializers.SerializerMethodField()
+    payment_amount_due = serializers.SerializerMethodField()
+    payment_paid_at = serializers.SerializerMethodField()
+    payment_confirmed_by = serializers.SerializerMethodField()
+    payment_qr_available = serializers.SerializerMethodField()
     requested_therapy_names = serializers.SerializerMethodField()
     physiotherapist_photo_url = serializers.SerializerMethodField()
     physiotherapist_qualification = serializers.CharField(
@@ -623,7 +648,6 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
     physiotherapist_expertise = serializers.SerializerMethodField()
     physiotherapist_rating = serializers.SerializerMethodField()
     physiotherapist_review_count = serializers.SerializerMethodField()
-    visit_verification = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
     requested_at = serializers.DateTimeField(
         source="originating_request.created_at", read_only=True, default=None
@@ -665,7 +689,10 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
             "service_started_at",
             "completed_at",
             "payment_status",
-            "visit_verification",
+            "payment_amount_due",
+            "payment_paid_at",
+            "payment_confirmed_by",
+            "payment_qr_available",
             "rating",
         )
         read_only_fields = ("id", "originating_request", "requested_at", "created_at")
@@ -730,8 +757,28 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         return AppointmentRatingSerializer(rating).data if rating else None
 
     def get_payment_status(self, value):
-        payment = getattr(value, "practitioner_payment", None)
+        payment = getattr(value, "payment", None)
         return payment.status if payment else None
+
+    def get_payment_amount_due(self, value):
+        payment = getattr(value, "payment", None)
+        if payment:
+            return payment.amount_due
+        source = getattr(value, "originating_request", None)
+        return source.final_amount if source and source.final_amount is not None else None
+
+    def get_payment_paid_at(self, value):
+        payment = getattr(value, "payment", None)
+        return payment.paid_at if payment else None
+
+    def get_payment_confirmed_by(self, value):
+        payment = getattr(value, "payment", None)
+        if not payment or payment.status != AppointmentPayment.Status.PAID:
+            return ""
+        return payment.updated_by.get_full_name() or payment.updated_by.get_username()
+
+    def get_payment_qr_available(self, value):
+        return bool(settings.PAYMENT_UPI_ID and settings.PAYMENT_PAYEE_NAME)
 
     def get_requested_therapy_names(self, value):
         source = getattr(value, "originating_request", None)
@@ -748,15 +795,6 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         path = f"/api/v1/appointments/schedule/{value.pk}/physiotherapist-photo/"
         return request.build_absolute_uri(path) if request else path
-
-    @extend_schema_field(VisitVerificationStatusSerializer)
-    def get_visit_verification(self, value):
-        from apps.appointments.visit_verification import visit_verification_status
-
-        request = self.context.get("request")
-        actor = request.user if request and request.user.is_authenticated else None
-        return visit_verification_status(value, actor=actor)
-
 
 class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
     family_member_name = serializers.CharField(
@@ -812,8 +850,6 @@ class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
             result.append({"key": "THERAPIST_ACCEPTED", "label": "Therapist confirmed", "at": appointment.assignment_responded_at})
         if appointment.en_route_at:
             result.append({"key": "EN_ROUTE", "label": "Therapist en route", "at": appointment.en_route_at})
-        if appointment.arrived_at:
-            result.append({"key": "ARRIVED", "label": "Therapist arrived", "at": appointment.arrived_at})
         if appointment.service_started_at:
             result.append({"key": "IN_SERVICE", "label": "Session in progress", "at": appointment.service_started_at})
         if appointment.completed_at:
@@ -821,10 +857,6 @@ class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
         if appointment.status in (Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW):
             result.append({"key": appointment.status, "label": "Appointment closed", "at": appointment.updated_at})
         return result
-
-
-class VisitOtpSubmissionSerializer(serializers.Serializer):
-    otp = serializers.RegexField(r"^\d{6}$", write_only=True)
 
 
 class AppointmentWriteSerializer(serializers.ModelSerializer):
@@ -993,17 +1025,20 @@ class AppointmentStatusSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
-class JourneyUpdateSerializer(serializers.Serializer):
-    journey_status = serializers.ChoiceField(
-        choices=(Appointment.JourneyStatus.EN_ROUTE, Appointment.JourneyStatus.ARRIVED)
-    )
-    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False)
-    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False)
+class AppointmentCompletionPaymentSerializer(serializers.Serializer):
+    therapy_delivered = serializers.BooleanField()
+    payment_received = serializers.BooleanField()
 
     def validate(self, attrs):
-        if ("latitude" in attrs) != ("longitude" in attrs):
-            raise serializers.ValidationError("Latitude and longitude must be shared together.")
+        if not attrs["therapy_delivered"] or not attrs["payment_received"]:
+            raise serializers.ValidationError(
+                "Confirm both therapy delivery and customer payment confirmation."
+            )
         return attrs
+
+
+class JourneyUpdateSerializer(serializers.Serializer):
+    journey_status = serializers.ChoiceField(choices=(Appointment.JourneyStatus.EN_ROUTE,))
 
 
 class AvailabilityQuerySerializer(serializers.Serializer):
@@ -1112,6 +1147,19 @@ class AppointmentRequestDecisionSerializer(serializers.Serializer):
         return attrs
 
 
+class BookingServiceAddressSerializer(serializers.Serializer):
+    address_line_1 = serializers.CharField(max_length=255)
+    address_line_2 = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    landmark = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=120)
+    region = serializers.CharField(max_length=120)
+    pin_code = serializers.RegexField(r"^[1-9]\d{5}$")
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    location_accuracy_meters = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    location_source = serializers.ChoiceField(choices=PatientAddress.LocationSource.choices, required=False)
+
+
 class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
     therapy = serializers.PrimaryKeyRelatedField(queryset=TherapyOption.objects.all())
     requested_therapies = serializers.PrimaryKeyRelatedField(
@@ -1129,6 +1177,8 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
     preferred_date = serializers.DateField()
     preferred_time = serializers.TimeField()
     pain_area = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    service_address = BookingServiceAddressSerializer(required=False)
+    save_as_primary_address = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         request = self.context["request"]
@@ -1227,7 +1277,15 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
                 "preferred_time": "The selected appointment slot is no longer available."
             })
         attrs["_profile"] = profile
+        address_data = attrs.get("service_address") or {
+            field: getattr(address, field)
+            for field in (
+                "address_line_1", "address_line_2", "landmark", "city", "region", "pin_code",
+                "latitude", "longitude", "location_accuracy_meters", "location_source",
+            )
+        }
         attrs["_address"] = address
+        attrs["_address_data"] = address_data
         attrs["_quote"] = quote
         return attrs
 
@@ -1236,6 +1294,9 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
         request = self.context["request"]
         profile = validated_data.pop("_profile")
         address = validated_data.pop("_address")
+        address_data = validated_data.pop("_address_data")
+        save_as_primary = validated_data.pop("save_as_primary_address", False)
+        has_service_override = validated_data.pop("service_address", None) is not None
         quote = validated_data.pop("_quote")
         requested = validated_data.pop("requested_therapies", [])
         family = validated_data.get("family_member")
@@ -1255,6 +1316,8 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
         value = AppointmentRequest(
             organization=request.organization,
             creator=request.user,
+            patient_profile=profile,
+            booking_source=AppointmentRequest.BookingSource.ONLINE,
             therapy=validated_data["therapy"],
             family_member=family,
             selected_package=package,
@@ -1277,12 +1340,17 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             problem_duration="",
             doctor_reference="",
             address=" ".join(
-                part for part in (address.address_line_1, address.address_line_2) if part
+                part for part in (address_data["address_line_1"], address_data.get("address_line_2", "")) if part
             ),
-            city=address.city,
-            pin_code=address.pin_code,
-            landmark=address.landmark,
+            city=address_data["city"],
+            region=address_data["region"],
+            pin_code=address_data["pin_code"],
+            landmark=address_data.get("landmark", ""),
             google_map_link="",
+            latitude=address_data.get("latitude"),
+            longitude=address_data.get("longitude"),
+            location_accuracy_meters=address_data.get("location_accuracy_meters"),
+            location_source=address_data.get("location_source", PatientAddress.LocationSource.MANUAL),
             commercial_snapshot=quote.snapshot(),
             regular_amount=quote.regular_amount,
             discount_amount=quote.discount_amount,
@@ -1294,6 +1362,11 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
             free_ids = [benefit["therapy_id"] for benefit in quote.free_benefits]
             additional = [*requested, *TherapyOption.objects.filter(id__in=free_ids).exclude(id=value.therapy_id)]
             value.requested_therapies.set(list(dict.fromkeys(additional)))
+            if save_as_primary and has_service_override:
+                for field, field_value in address_data.items():
+                    setattr(address, field, field_value)
+                address.full_clean()
+                address.save()
             AppointmentRequestAuditEvent.objects.create(
                 appointment_request=value,
                 organization=request.organization,
@@ -1310,6 +1383,216 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         return AppointmentRequestSerializer(instance, context=self.context).data
+
+
+class OfflineAppointmentCreateSerializer(serializers.Serializer):
+    mobile_number = serializers.RegexField(r"^[6-9]\d{9}$")
+    patient_name = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    age = serializers.IntegerField(min_value=1, max_value=120, required=False)
+    gender = serializers.ChoiceField(choices=PatientProfile.Gender.choices, required=False)
+    clinic = serializers.PrimaryKeyRelatedField(queryset=Clinic.objects.all())
+    therapies = serializers.PrimaryKeyRelatedField(
+        queryset=TherapyOption.objects.all(), many=True, allow_empty=False
+    )
+    physiotherapist = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all())
+    preferred_date = serializers.DateField()
+    preferred_time = serializers.TimeField()
+    service_address = BookingServiceAddressSerializer(required=False)
+    booking_source = serializers.ChoiceField(
+        choices=[
+            choice for choice in AppointmentRequest.BookingSource.choices
+            if choice[0] != AppointmentRequest.BookingSource.ONLINE
+        ]
+    )
+    operational_note = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    payment_status = serializers.ChoiceField(
+        choices=AppointmentPayment.Status.choices,
+        default=AppointmentPayment.Status.PENDING,
+    )
+    payment_reference = serializers.CharField(max_length=120, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        organization = request.organization
+        clinic = attrs["clinic"]
+        if clinic.organization_id != organization.id or not clinic.is_active:
+            raise serializers.ValidationError({"clinic": "The selected clinic is unavailable."})
+        level, clinic_ids = actor_role_scope(request.user, organization)
+        if level == Role.MANAGER and clinic.id not in (clinic_ids or ()):
+            raise serializers.ValidationError({"clinic": "The selected clinic is unavailable."})
+        patient = PatientProfile.objects.filter(
+            organization=organization,
+            mobile_number=attrs["mobile_number"],
+            is_active=True,
+        ).select_related("clinic").prefetch_related("addresses").first()
+        if patient and patient.clinic_id != clinic.id:
+            raise serializers.ValidationError(
+                {"clinic": "This mobile number belongs to a patient at another clinic."}
+            )
+        if patient is None:
+            missing = [
+                field for field in ("patient_name", "age", "gender", "service_address")
+                if not attrs.get(field)
+            ]
+            if missing:
+                raise serializers.ValidationError(
+                    {field: "This field is required for a new patient." for field in missing}
+                )
+        else:
+            attrs["_patient"] = patient
+        therapies = list(dict.fromkeys(attrs["therapies"]))
+        if len(therapies) > 8 or any(
+            therapy.organization_id != organization.id
+            or not therapy.is_active
+            or therapy.is_offer_free_addon
+            for therapy in therapies
+        ):
+            raise serializers.ValidationError(
+                {"therapies": "Select up to eight active bookable therapies."}
+            )
+        attrs["therapies"] = therapies
+        physiotherapist = attrs["physiotherapist"]
+        if (
+            physiotherapist.organization_id != organization.id
+            or physiotherapist.clinic_id != clinic.id
+            or physiotherapist.staff_type != Role.PHYSIOTHERAPIST
+        ):
+            raise serializers.ValidationError(
+                {"physiotherapist": "The selected Physiotherapist is unavailable."}
+            )
+        zone = ZoneInfo(clinic.timezone or organization.timezone or "Asia/Kolkata")
+        start = datetime.combine(attrs["preferred_date"], attrs["preferred_time"], zone)
+        try:
+            quote = calculate_quote(
+                organization=organization,
+                therapy_ids=[therapy.id for therapy in therapies],
+                at=start,
+            )
+            validate_schedule(clinic=clinic, start=start, duration_minutes=quote.duration_minutes)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.messages) from error
+        address = attrs.get("service_address")
+        if address is None and patient is not None:
+            primary = next(
+                (item for item in patient.addresses.all() if item.is_active and item.is_primary),
+                None,
+            )
+            if primary is None:
+                raise serializers.ValidationError(
+                    {"service_address": "This patient does not have a confirmed primary address."}
+                )
+            address = {
+                field: getattr(primary, field)
+                for field in (
+                    "address_line_1", "address_line_2", "landmark", "city", "region",
+                    "pin_code", "latitude", "longitude", "location_accuracy_meters",
+                    "location_source",
+                )
+            }
+        attrs["_address"] = address
+        attrs["_quote"] = quote
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        request = self.context["request"]
+        organization = request.organization
+        patient = validated_data.pop("_patient", None)
+        address = validated_data.pop("_address")
+        quote = validated_data.pop("_quote")
+        therapies = validated_data.pop("therapies")
+        clinic = validated_data.pop("clinic")
+        physiotherapist = validated_data.pop("physiotherapist")
+        operational_note = validated_data.pop("operational_note", "").strip()
+        payment_status = validated_data.pop("payment_status")
+        payment_reference = validated_data.pop("payment_reference", "").strip()
+        try:
+            if patient is None:
+                patient = PatientProfile(
+                    organization=organization,
+                    clinic=clinic,
+                    full_name=validated_data.get("patient_name", "").strip(),
+                    mobile_number=validated_data["mobile_number"],
+                    gender=validated_data["gender"],
+                    age=validated_data["age"],
+                    emergency_contact_name=validated_data.get("patient_name", "").strip(),
+                    emergency_contact_relationship="Self",
+                    emergency_contact_mobile=validated_data["mobile_number"],
+                )
+                patient.save()
+                primary = PatientAddress(patient=patient, label="Home", is_primary=True, **address)
+                primary.full_clean()
+                primary.save()
+            age = patient.age
+            if patient.date_of_birth:
+                today = timezone.localdate()
+                age = today.year - patient.date_of_birth.year - (
+                    (today.month, today.day) < (patient.date_of_birth.month, patient.date_of_birth.day)
+                )
+            source = AppointmentRequest(
+                organization=organization,
+                creator=patient.user,
+                patient_profile=patient,
+                therapy=therapies[0],
+                patient_name=patient.full_name,
+                age=age,
+                gender=patient.gender,
+                mobile_number=patient.mobile_number,
+                session_preference=AppointmentRequest.SessionPreference.SINGLE,
+                preferred_date=validated_data["preferred_date"],
+                preferred_time=validated_data["preferred_time"],
+                address=" ".join(
+                    part for part in (address["address_line_1"], address.get("address_line_2", "")) if part
+                ),
+                city=address["city"],
+                region=address["region"],
+                pin_code=address["pin_code"],
+                landmark=address.get("landmark", ""),
+                latitude=address.get("latitude"),
+                longitude=address.get("longitude"),
+                location_accuracy_meters=address.get("location_accuracy_meters"),
+                location_source=address.get("location_source", PatientAddress.LocationSource.MANUAL),
+                booking_source=validated_data["booking_source"],
+                owner_remarks=operational_note,
+                commercial_snapshot=quote.snapshot(),
+                regular_amount=quote.regular_amount,
+                discount_amount=quote.discount_amount,
+                final_amount=quote.final_amount,
+            )
+            source.full_clean(exclude=("duplicate_fingerprint",))
+            source.save()
+            source.requested_therapies.set(therapies[1:])
+            AppointmentRequestAuditEvent.objects.create(
+                appointment_request=source,
+                organization=organization,
+                actor=request.user,
+                event=AppointmentRequestAuditEvent.Event.SUBMITTED,
+                previous_status="",
+                new_status=source.status,
+                internal_note=f"Offline booking source: {source.get_booking_source_display()}",
+            )
+            from apps.appointments.scheduling import decide_appointment_request
+            source, appointment = decide_appointment_request(
+                source,
+                actor=request.user,
+                action="ACCEPT_ASSIGN",
+                physiotherapist=physiotherapist,
+            )
+            appointment.operational_notes = operational_note
+            appointment.save(update_fields=("operational_notes", "updated_at"))
+            payment = AppointmentPayment.objects.create(
+                appointment=appointment,
+                organization=organization,
+                amount_due=source.final_amount,
+                status=payment_status,
+                paid_at=timezone.now() if payment_status == AppointmentPayment.Status.PAID else None,
+                reference=payment_reference,
+                note=f"Created with {source.get_booking_source_display().lower()} booking.",
+                updated_by=request.user,
+            )
+        except (DjangoValidationError, IntegrityError) as error:
+            raise serializers.ValidationError(str(error)) from error
+        return appointment, patient, payment
 
 
 class ReviewOperationsSerializer(serializers.ModelSerializer):
@@ -1356,3 +1639,15 @@ class PractitionerPaymentSerializer(serializers.ModelSerializer):
         model = PractitionerPayment
         fields = ("id", "appointment", "therapy_name", "service_date", "payable_amount", "status", "paid_at", "reference", "note", "updated_at")
         read_only_fields = ("id", "appointment", "therapy_name", "service_date", "paid_at", "updated_at")
+
+
+class AppointmentPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppointmentPayment
+        fields = ("id", "appointment", "amount_due", "status", "paid_at", "reference", "note", "updated_at")
+        read_only_fields = ("id", "appointment", "amount_due", "paid_at", "updated_at")
+
+    def validate_status(self, value):
+        if self.instance and self.instance.status == AppointmentPayment.Status.PAID and value != AppointmentPayment.Status.PAID:
+            raise serializers.ValidationError("A recorded payment cannot be returned to pending.")
+        return value

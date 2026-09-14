@@ -120,6 +120,48 @@ def test_customer_registration_requires_verification_then_creates_profile_and_se
 
 
 @LOCAL_OTP
+def test_customer_registration_links_existing_offline_patient_history(api_client, organization):
+    clinic = organization.clinics.get()
+    patient = PatientProfile.objects.create(
+        organization=organization,
+        clinic=clinic,
+        full_name="Phone Booking Customer",
+        mobile_number="9876543210",
+        gender="FEMALE",
+        age=34,
+        emergency_contact_name="Phone Booking Customer",
+        emergency_contact_relationship="Self",
+        emergency_contact_mobile="9876543210",
+    )
+    address = PatientAddress.objects.create(
+        patient=patient,
+        label="Home",
+        address_line_1="Existing offline address",
+        city="Meerut",
+        region="Uttar Pradesh",
+        pin_code="250004",
+        is_primary=True,
+    )
+    issued = issue(api_client, organization)
+    verified = verify(api_client, organization, issued)
+
+    completed = api_client.post(
+        reverse("auth-customer-register"),
+        registration_payload(verified.data["token"]),
+        format="json",
+        **tenant(organization),
+    )
+
+    assert completed.status_code == 201
+    patient.refresh_from_db()
+    assert patient.user == User.objects.get(mobile_number="+919876543210")
+    assert PatientProfile.objects.filter(
+        organization=organization, mobile_number="9876543210", is_active=True
+    ).count() == 1
+    assert PatientAddress.objects.get(pk=address.pk).address_line_1 == "Existing offline address"
+
+
+@LOCAL_OTP
 def test_optional_customer_photo_and_self_profile_updates(api_client, organization, settings, tmp_path):
     settings.MEDIA_ROOT = tmp_path
     issued = issue(api_client, organization)
@@ -159,6 +201,7 @@ def test_optional_customer_photo_and_self_profile_updates(api_client, organizati
     assert replaced.status_code == 200
     opened = api_client.get(reverse("patient-me-photo"), **tenant(organization))
     assert opened.status_code == 200
+    opened.close()
     removed = api_client.delete(reverse("patient-me-photo"), **tenant(organization))
     profile.refresh_from_db()
     assert removed.status_code == 204 and not profile.profile_photo
@@ -389,5 +432,5 @@ def test_customer_registration_does_not_inherit_generic_registration_lockout(api
     ).status_code == 400
 
 
-def test_development_customer_registration_rate_is_practical():
-    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["customer_register"] == "30/hour"
+def test_default_customer_registration_rate_is_production_safe():
+    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["customer_register"] == "5/hour"

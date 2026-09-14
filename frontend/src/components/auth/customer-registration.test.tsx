@@ -20,8 +20,10 @@ function fillDetails() {
   fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
   fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543210" } });
   fireEvent.change(screen.getByLabelText("Email (optional)"), { target: { value: "asha@example.com" } });
-  fireEvent.change(screen.getByLabelText("Address"), { target: { value: "163 C Block" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add address manually" }));
+  fireEvent.change(screen.getByLabelText("House / Flat / Building"), { target: { value: "163 C Block" } });
   fireEvent.change(screen.getByLabelText("PIN code"), { target: { value: "250004" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm this address" }));
 }
 
 function providerFetch() {
@@ -54,6 +56,33 @@ describe("customer registration", () => {
     expect(screen.getByLabelText("Confirm password")).toHaveAttribute("type", "password");
     const verifyCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/booking-otp/verify");
     expect(JSON.parse(String(verifyCall?.[1]?.body))).toMatchObject({ verification_id: "verification-1", mobile_number: "9876543210", access_token: "header.payload.signature" });
+  });
+
+  it("allows a valid programmatically populated short house number to continue after confirmation", async () => {
+    const fetchMock = providerFetch();
+    Object.defineProperty(navigator, "geolocation", {
+      value: { getCurrentPosition: (success: PositionCallback) => success({ coords: { latitude: 29.08, longitude: 77.71, accuracy: 111 } } as GeolocationPosition) },
+      configurable: true,
+    });
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input) === "/api/location/reverse-geocode") return new Response(JSON.stringify({
+        address_line_1: "276", address_line_2: "", landmark: "", city: "Meerut",
+        region: "Uttar Pradesh", pin_code: "250110", display_address: "276, Modipuram, Meerut, Uttar Pradesh 250110",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (String(input) === "/api/booking-otp/issue") return new Response(JSON.stringify({ verification_id: "verification-1" }), { status: 201 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    render(<CustomerRegistration />);
+    fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Asha Sharma" } });
+    fireEvent.change(screen.getByLabelText("Age"), { target: { value: "34" } });
+    fireEvent.change(screen.getByLabelText("Gender"), { target: { value: "FEMALE" } });
+    fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "9876543210" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use your current location" }));
+    await screen.findByDisplayValue("276");
+    fireEvent.click(screen.getByRole("button", { name: "Confirm this address" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send OTP" }));
+    expect(await screen.findByLabelText("One-time password")).toBeInTheDocument();
+    expect(screen.queryByText("Enter your complete address.")).not.toBeInTheDocument();
   });
 
   it("creates the customer with signed proof and sends them to customer login", async () => {

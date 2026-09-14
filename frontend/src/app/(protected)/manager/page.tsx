@@ -1,6 +1,5 @@
 import { ProtectedPage } from "@/components/auth/protected-page";
 import { ScheduleOperations } from "@/components/appointments/operational-schedule";
-import { OperationsVisitVerificationPanel } from "@/components/appointments/visit-verification-panels";
 import { OwnerRequests } from "@/components/appointments/owner-requests";
 import { AvailabilityOperations } from "@/components/availability/availability-management";
 import { OperatingHoursManagement } from "@/components/availability/operating-hours-management";
@@ -14,5 +13,5 @@ import { CommercialManagement } from "@/components/appointments/commercial-manag
 import { TherapyManagement } from "@/components/appointments/therapy-management";
 
 export default function ManagerPage() {
-  return <ProtectedPage role="MANAGER" title="Operations team"><ManagerOperationsDashboard /><TherapyManagement /><CommercialManagement /><ReviewModerationPanel /><OwnerRequests /><ScheduleOperations /><OperationsVisitVerificationPanel /><PractitionerReview /><ManagerDashboard /><OperatingHoursManagement /><AvailabilityOperations /><PaymentOperations /><PatientDirectory /></ProtectedPage>;
+  return <ProtectedPage role="MANAGER" title="Operations team"><ManagerOperationsDashboard /><TherapyManagement /><CommercialManagement /><ReviewModerationPanel /><OwnerRequests /><ScheduleOperations /><PractitionerReview /><ManagerDashboard /><OperatingHoursManagement /><AvailabilityOperations /><PaymentOperations /><PatientDirectory /></ProtectedPage>;
 }

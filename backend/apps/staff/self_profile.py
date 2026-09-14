@@ -25,7 +25,7 @@ class SelfProfileSerializer(StaffProfileSerializer):
     class Meta(StaffProfileSerializer.Meta):
         fields = StaffProfileSerializer.Meta.fields + ("first_name", "last_name", "service_area_names")
     def validate(self, attrs):
-        allowed = {"first_name", "last_name", "email", "gender", "date_of_birth", "experience_years", "experience_months", "languages_known", "specialization_ids", "bio", "service_area_ids", "is_publicly_visible"}
+        allowed = {"first_name", "last_name", "email", "gender", "date_of_birth", "experience_years", "experience_months", "languages_known", "specialization_ids", "bio", "service_area_ids", "is_publicly_visible", "current_address", "city", "pin_code", "base_latitude", "base_longitude", "base_location_accuracy_meters", "base_location_source"}
         invalid = set(self.initial_data) - allowed
         if invalid:
             raise serializers.ValidationError({key: "Use the secure verification workflow to change this field." for key in invalid})

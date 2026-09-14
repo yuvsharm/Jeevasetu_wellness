@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py", "*_test.py"]
-addopts = "--strict-markers --cov=. --cov-report=term-missing --cov-fail-under=80"
+addopts = "--ds=config.settings.test --strict-markers --cov=. --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]
 
 [tool.black]

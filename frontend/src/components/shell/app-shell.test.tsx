@@ -68,7 +68,9 @@ describe("AppShell", () => {
     render(<AppShell session={ownerSession} role="OWNER" title="Owner operations"><p>Owner content</p></AppShell>);
     const expected = {
       "Appointment Requests": "/owner#appointment-requests",
-      "Appointment Schedule": "/owner#appointment-schedule",
+      "Appointment Schedule": "/owner/appointments",
+      "Book for Customer": "/owner/appointments/create",
+      Payments: "/owner/payments",
       "Physiotherapists": "/owner#staff-management",
       Patients: "/owner#patients",
       "Operating Hours": "/owner#operating-hours",

@@ -55,30 +55,31 @@ export type OperationalAppointment = {
   physiotherapist_photo_url?: string | null;
   reschedule_count?: number;
   cancellation_category?: "CUSTOMER_REQUEST" | "PHYSIOTHERAPIST_UNAVAILABLE" | "CLINIC_OPERATIONAL_ISSUE" | "SCHEDULING_CONFLICT" | "DUPLICATE_APPOINTMENT" | "OTHER" | "";
-  visit_verification: VisitVerificationStatus;
-  journey_status?: "NOT_STARTED" | "EN_ROUTE" | "ARRIVED";
+  journey_status?: "NOT_STARTED" | "EN_ROUTE";
   en_route_at?: string | null;
-  arrived_at?: string | null;
   service_started_at?: string | null;
   completed_at?: string | null;
   rating_stars?: number | null;
   rating_comment?: string;
-  payment_status?: "PENDING" | "PROCESSING" | "PAID" | "HELD" | null;
+  payment_status?: "PENDING" | "PAID" | null;
+  payment_amount_due?: string | null;
+  payment_paid_at?: string | null;
+  payment_confirmed_by?: string;
+  payment_qr_available?: boolean;
   rating?: CustomerReview | null;
   reminders?: Array<{kind:"HOURS_24"|"HOURS_2";scheduled_for:string;status:"PENDING"|"SENT"}>;
+};
+
+export type AppointmentRequestPage = {
+  count:number;
+  next:string|null;
+  previous:string|null;
+  results:AppointmentRequest[];
 };
 
 export type CustomerReview = { id:string; appointment:string; stars:number; comment:string; moderation_status:"PENDING"|"APPROVED"|"HIDDEN"; status_display:string; moderation_reason:string; created_at:string };
 export type ReviewItem = { id:string; stars:number; comment:string; moderation_status:"PENDING"|"APPROVED"|"HIDDEN"; moderation_reason:string; customer_display_name:string; physiotherapist_name:string; appointment_date:string; therapy_name:string; created_at:string };
 export type ReviewSummary = { average_rating:number|null; review_count:number; reviews:ReviewItem[] };
-
-export type VisitVerificationStatus = {
-  status: "NOT_READY" | "AWAITING_VERIFICATION" | "VERIFIED" | "EXPIRED" | "LOCKED";
-  verified_at: string | null;
-  expires_at: string | null;
-  failed_attempt_warning: boolean;
-  otp?: string;
-};
 
 export type PhysiotherapistWorkload = {
   id: string;

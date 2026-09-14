@@ -9,12 +9,33 @@ from apps.accounts.models import Role, RoleAssignment
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
+    AppointmentPayment,
     AppointmentRequest,
     AppointmentRequestAuditEvent,
     ClinicOperatingHours,
 )
 from apps.availability.services import ensure_physiotherapist_available
-from apps.staff.models import StaffProfile
+from apps.staff.models import ServiceArea, StaffProfile
+
+
+def _normalize_service_area_name(value):
+    return " ".join((value or "").split()).casefold()
+
+
+def _request_service_area_ids(source):
+    """Resolve an address snapshot to configured service areas for its organization."""
+    city = _normalize_service_area_name(source.city)
+    pin_code = (source.pin_code or "").strip()
+    matches = set()
+    for area in ServiceArea.objects.filter(
+        organization_id=source.organization_id, is_active=True
+    ).only("id", "name", "pin_codes"):
+        normalized_pins = {str(value).strip() for value in area.pin_codes if value}
+        if (city and _normalize_service_area_name(area.name) == city) or (
+            pin_code and pin_code in normalized_pins
+        ):
+            matches.add(area.id)
+    return matches
 
 
 def validate_schedule(*, clinic, start, duration_minutes):
@@ -104,8 +125,13 @@ def ensure_request_practitioner_eligible(*, source, physiotherapist, start, end)
             TherapyOption.objects.filter(id__in=missing_ids).order_by("name").values_list("name", flat=True)
         )
         raise ValidationError(f"Therapist does not currently offer {missing}.")
-    service_areas = list(physiotherapist.service_areas.filter(is_active=True))
-    if service_areas and not any(source.pin_code in area.pin_codes for area in service_areas):
+    therapist_service_area_ids = set(
+        physiotherapist.service_areas.filter(is_active=True).values_list("id", flat=True)
+    )
+    if (
+        therapist_service_area_ids
+        and not therapist_service_area_ids.intersection(_request_service_area_ids(source))
+    ):
         raise ValidationError("The selected Physiotherapist does not serve this area.")
     ensure_no_overlap(physiotherapist=physiotherapist, start=start, end=end)
     ensure_physiotherapist_available(
@@ -122,7 +148,7 @@ def decide_appointment_request(
     customer_reason="", internal_note=""
 ):
     source = AppointmentRequest.objects.select_for_update(of=("self",)).select_related(
-        "organization", "creator", "therapy", "family_member", "selected_package", "selected_offer"
+        "organization", "creator", "patient_profile", "therapy", "family_member", "selected_package", "selected_offer"
     ).get(pk=source.pk)
     previous_status = source.status
     if action == "REJECT":
@@ -172,11 +198,11 @@ def decide_appointment_request(
     except Appointment.DoesNotExist:
         pass
 
-    if source.creator_id is None:
-        raise ValidationError("A customer profile is required before this request can be assigned.")
-    patient = source.creator.patient_profiles.filter(
-        organization=source.organization, is_active=True
-    ).select_related("clinic").first()
+    patient = source.patient_profile
+    if patient is None and source.creator_id is not None:
+        patient = source.creator.patient_profiles.filter(
+            organization=source.organization, is_active=True
+        ).select_related("clinic").first()
     if patient is None:
         raise ValidationError("A customer patient profile is required before assignment.")
     clinic = patient.clinic
@@ -213,7 +239,10 @@ def decide_appointment_request(
         scheduled_start=start, scheduled_end=end, duration_minutes=source.requested_duration_minutes,
         status=Appointment.Status.SCHEDULED,
         address_line_1=source.address[:255], landmark=source.landmark,
-        city=source.city, region="Uttar Pradesh", pin_code=source.pin_code,
+        city=source.city, region=source.region, pin_code=source.pin_code,
+        service_latitude=source.latitude, service_longitude=source.longitude,
+        service_location_accuracy_meters=source.location_accuracy_meters,
+        service_location_source=source.location_source,
         assignment_status=Appointment.AssignmentStatus.PENDING,
         assigned_by=actor, assigned_at=timezone.now(), created_by=actor, updated_by=actor,
     )
@@ -287,9 +316,6 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
     ):
         raise ValidationError("This appointment can no longer be assigned or reassigned.")
     previous = appointment.physiotherapist
-    from apps.appointments.visit_verification import invalidate_active_visit_verifications
-
-    invalidate_active_visit_verifications(appointment, reason="ASSIGNMENT_CHANGED", actor=actor)
     ensure_practitioner_operationally_eligible(physiotherapist)
     ensure_no_overlap(
         physiotherapist=physiotherapist,
@@ -351,9 +377,6 @@ def unassign_physiotherapist(appointment, *, actor, reason):
     if appointment.physiotherapist is None:
         raise ValidationError("This appointment is already unassigned.")
     previous = appointment.physiotherapist
-    from apps.appointments.visit_verification import invalidate_active_visit_verifications
-
-    invalidate_active_visit_verifications(appointment, reason="ASSIGNMENT_REMOVED", actor=actor)
     appointment.physiotherapist = None
     appointment.assignment_status = Appointment.AssignmentStatus.UNASSIGNED
     appointment.assigned_by = actor
@@ -407,12 +430,6 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
         )
     if not accept and len(reason.strip()) < 3:
         raise ValidationError("A short rejection reason is required.")
-    if not accept:
-        from apps.appointments.visit_verification import invalidate_active_visit_verifications
-
-        invalidate_active_visit_verifications(
-            appointment, reason="ASSIGNMENT_REJECTED", actor=actor
-        )
     appointment.assignment_status = (
         Appointment.AssignmentStatus.ACCEPTED if accept else Appointment.AssignmentStatus.REJECTED
     )
@@ -450,7 +467,7 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
 
 
 @transaction.atomic
-def update_journey(appointment, *, actor, journey_status, latitude=None, longitude=None):
+def update_journey(appointment, *, actor, journey_status):
     appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
     if appointment.physiotherapist_id is None or appointment.physiotherapist.user_id != actor.id:
         raise ValidationError("This visit is unavailable.")
@@ -458,19 +475,18 @@ def update_journey(appointment, *, actor, journey_status, latitude=None, longitu
         raise ValidationError("Accept the service request before updating the journey.")
     if appointment.status not in (Appointment.Status.SCHEDULED, Appointment.Status.CONFIRMED):
         raise ValidationError("Journey updates are unavailable for this visit.")
-    allowed = {Appointment.JourneyStatus.NOT_STARTED: (Appointment.JourneyStatus.EN_ROUTE,), Appointment.JourneyStatus.EN_ROUTE: (Appointment.JourneyStatus.ARRIVED,), Appointment.JourneyStatus.ARRIVED: ()}
+    allowed = {
+        Appointment.JourneyStatus.NOT_STARTED: (Appointment.JourneyStatus.EN_ROUTE,),
+        Appointment.JourneyStatus.EN_ROUTE: (),
+        Appointment.JourneyStatus.ARRIVED: (),  # Retained only for historical records.
+    }
     if journey_status not in allowed[appointment.journey_status]:
         raise ValidationError("This journey transition is not permitted.")
     now = timezone.now()
     appointment.journey_status = journey_status
     fields = ["journey_status", "updated_at"]
-    if journey_status == Appointment.JourneyStatus.EN_ROUTE:
-        appointment.en_route_at = now; fields.append("en_route_at")
-    else:
-        appointment.arrived_at = now; fields.append("arrived_at")
-    if latitude is not None and longitude is not None:
-        appointment.shared_latitude = latitude; appointment.shared_longitude = longitude; appointment.location_shared_at = now
-        fields.extend(("shared_latitude", "shared_longitude", "location_shared_at"))
+    appointment.en_route_at = now
+    fields.append("en_route_at")
     appointment.save(update_fields=fields)
     AppointmentAuditEvent.objects.create(appointment=appointment, organization=appointment.organization, actor=actor, event=AppointmentAuditEvent.Event.JOURNEY_STATUS_CHANGED, reason=journey_status)
     return appointment
@@ -500,10 +516,10 @@ def transition_status(appointment, *, new_status, actor, reason=""):
             exclude_id=appointment.pk,
         )
     if new_status == Appointment.Status.IN_PROGRESS:
-        from apps.appointments.visit_verification import can_start_visit
-
-        if not can_start_visit(appointment):
-            raise ValidationError("Customer arrival verification is required before visit start.")
+        if appointment.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+            raise ValidationError("The Physiotherapist must accept this appointment first.")
+        if appointment.journey_status != Appointment.JourneyStatus.EN_ROUTE:
+            raise ValidationError("Mark the appointment En Route before starting the session.")
     previous = appointment.status
     appointment.status = new_status
     now = timezone.now()
@@ -520,6 +536,17 @@ def transition_status(appointment, *, new_status, actor, reason=""):
     if timestamp_field:
         update_fields.append(timestamp_field)
     appointment.save(update_fields=update_fields)
+    if new_status == Appointment.Status.COMPLETED:
+        source = appointment.originating_request
+        amount_due = source.final_amount if source and source.final_amount is not None else 0
+        AppointmentPayment.objects.get_or_create(
+            appointment=appointment,
+            defaults={
+                "organization": appointment.organization,
+                "amount_due": amount_due,
+                "updated_by": actor,
+            },
+        )
     AppointmentAuditEvent.objects.create(
         appointment=appointment,
         organization=appointment.organization,
@@ -528,6 +555,48 @@ def transition_status(appointment, *, new_status, actor, reason=""):
         previous_status=previous,
         new_status=new_status,
         reason=reason,
+    )
+    return appointment
+
+
+@transaction.atomic
+def complete_and_confirm_payment(appointment, *, actor):
+    appointment = (
+        Appointment.objects.select_for_update()
+        .select_related("physiotherapist__user", "originating_request")
+        .get(pk=appointment.pk)
+    )
+    if appointment.physiotherapist_id is None or appointment.physiotherapist.user_id != actor.id:
+        raise ValidationError("This appointment is unavailable.")
+    if appointment.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+        raise ValidationError("Accept the service request before completing it.")
+    if appointment.status == Appointment.Status.COMPLETED:
+        raise ValidationError("This appointment has already been completed.")
+    if appointment.status != Appointment.Status.IN_PROGRESS:
+        raise ValidationError("Start the therapy before confirming completion and payment.")
+
+    appointment = transition_status(
+        appointment,
+        new_status=Appointment.Status.COMPLETED,
+        actor=actor,
+        reason="Therapy delivered and customer payment confirmation verified.",
+    )
+    payment = AppointmentPayment.objects.select_for_update().get(appointment=appointment)
+    if payment.status == AppointmentPayment.Status.PAID:
+        raise ValidationError("Payment has already been confirmed.")
+    previous_status = payment.status
+    payment.status = AppointmentPayment.Status.PAID
+    payment.paid_at = timezone.now()
+    payment.updated_by = actor
+    payment.save(update_fields=("status", "paid_at", "updated_by", "updated_at"))
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
+        previous_status=previous_status,
+        new_status=payment.status,
+        reason="Customer showed successful owner payment confirmation.",
     )
     return appointment
 
@@ -650,11 +719,6 @@ def reschedule_appointment(
                     exclude_id=appointment.pk,
                 )
             previous_start = appointment.scheduled_start
-            from apps.appointments.visit_verification import invalidate_active_visit_verifications
-
-            invalidate_active_visit_verifications(
-                appointment, reason="APPOINTMENT_RESCHEDULED", actor=actor
-            )
             appointment.scheduled_start = scheduled_start
             appointment.scheduled_end = scheduled_end
             appointment.duration_minutes = duration_minutes
@@ -739,11 +803,6 @@ def cancel_appointment(
                     "A structured override reason is required.", "OVERRIDE_REASON_REQUIRED"
                 )
             previous_status = appointment.status
-            from apps.appointments.visit_verification import invalidate_active_visit_verifications
-
-            invalidate_active_visit_verifications(
-                appointment, reason="APPOINTMENT_CANCELLED", actor=actor
-            )
             appointment.status = Appointment.Status.CANCELLED
             appointment.cancellation_category = category
             appointment.cancellation_reason = reason.strip()[:255]

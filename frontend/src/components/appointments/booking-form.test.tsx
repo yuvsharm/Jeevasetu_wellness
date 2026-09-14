@@ -58,7 +58,9 @@ const discountedQuote = {
 };
 
 function renderBooking(fetchImplementation: typeof fetch, initialOffer = "offer-1") {
-  vi.spyOn(global, "fetch").mockImplementation(fetchImplementation);
+  vi.spyOn(global, "fetch").mockImplementation((input, init) => String(input) === "/api/customer/profile"
+    ? Promise.resolve(new Response(JSON.stringify({ address: { address_line_1: "163 C Block", address_line_2: "", landmark: "", city: "Meerut", region: "Uttar Pradesh", pin_code: "250004", latitude: null, longitude: null, location_accuracy_meters: null, location_source: "MANUAL" } })))
+    : fetchImplementation(input, init));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={client}><BookingForm initialOffer={initialOffer} initialTherapy={initialOffer ? "" : "therapy-1"} /></QueryClientProvider>);
 }

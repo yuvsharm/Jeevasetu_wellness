@@ -2,9 +2,15 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.appointments.models import Appointment, AppointmentRating, PractitionerPayment
+from apps.accounts.models import Role
+from apps.appointments.models import (
+    Appointment,
+    AppointmentAuditEvent,
+    AppointmentPayment,
+    AppointmentRating,
+)
 from tests.test_appointment_operations import create_scheduled
-from tests.test_scheduling import headers, setup_domain
+from tests.test_scheduling import add_actor, headers, setup_domain
 
 pytestmark = pytest.mark.django_db
 
@@ -38,7 +44,7 @@ def test_rating_before_completion_and_cross_tenant_are_denied(api_client):
     assert api_client.post(reverse("schedule-customer-rating", args=[appointment.id]), {"stars": 5}, format="json", **headers(foreign[0])).status_code == 404
 
 
-def test_payment_is_operations_controlled_and_visible_to_assigned_practitioner(api_client):
+def test_appointment_payment_is_operations_controlled_and_visible_to_assigned_practitioner(api_client):
     values = setup_domain("payment-flow")
     organization, _, _, manager, physio_user, _, _, *_ = values
     appointment = create_scheduled(api_client, values)
@@ -50,10 +56,155 @@ def test_payment_is_operations_controlled_and_visible_to_assigned_practitioner(a
     api_client.force_authenticate(manager)
     updated = api_client.post(url, {"status": "PAID", "reference": "BANK-42"}, format="json", **headers(organization))
     assert updated.status_code == 200 and updated.data["status"] == "PAID"
+    assert AppointmentPayment.objects.get(appointment=appointment).updated_by == manager
     api_client.force_authenticate(physio_user)
-    listing = api_client.get(reverse("schedule-practitioner-payments"), **headers(organization))
-    assert listing.status_code == 200 and listing.data[0]["reference"] == "BANK-42"
-    assert PractitionerPayment.objects.get(appointment=appointment).updated_by == manager
+    listing = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
+    item = next(value for value in listing.data if value["id"] == str(appointment.id))
+    assert item["payment_status"] == "PAID"
+    assert item["payment_paid_at"] is not None
+
+
+def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once(api_client):
+    values = setup_domain("therapist-owner-payment")
+    organization, _, owner, manager, physio_user, _, customer, *_ = values
+    appointment = create_scheduled(api_client, values)
+    appointment.status = Appointment.Status.IN_PROGRESS
+    appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
+    appointment.journey_status = Appointment.JourneyStatus.EN_ROUTE
+    appointment.service_started_at = timezone.now()
+    appointment.save(
+        update_fields=(
+            "status",
+            "assignment_status",
+            "journey_status",
+            "service_started_at",
+        )
+    )
+    AppointmentPayment.objects.create(
+        appointment=appointment,
+        organization=organization,
+        amount_due="1777.00",
+        updated_by=owner,
+    )
+    url = reverse("schedule-complete-and-confirm-payment", args=[appointment.id])
+    api_client.force_authenticate(physio_user)
+
+    incomplete = api_client.post(
+        url,
+        {"therapy_delivered": True, "payment_received": False},
+        format="json",
+        **headers(organization),
+    )
+    result = api_client.post(
+        url,
+        {"therapy_delivered": True, "payment_received": True},
+        format="json",
+        **headers(organization),
+    )
+    duplicate = api_client.post(
+        url,
+        {"therapy_delivered": True, "payment_received": True},
+        format="json",
+        **headers(organization),
+    )
+
+    appointment.refresh_from_db()
+    payment = AppointmentPayment.objects.get(appointment=appointment)
+    assert incomplete.status_code == 400
+    assert result.status_code == 200
+    assert result.data["status"] == Appointment.Status.COMPLETED
+    assert result.data["payment_status"] == AppointmentPayment.Status.PAID
+    assert result.data["payment_confirmed_by"] == physio_user.get_full_name()
+    assert duplicate.status_code == 400
+    assert appointment.completed_at and appointment.updated_by == physio_user
+    assert payment.paid_at and payment.updated_by == physio_user
+    assert appointment.audit_events.filter(
+        event=AppointmentAuditEvent.Event.STATUS_CHANGED,
+        new_status=Appointment.Status.COMPLETED,
+        actor=physio_user,
+    ).count() == 1
+    assert appointment.audit_events.filter(
+        event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
+        previous_status=AppointmentPayment.Status.PENDING,
+        new_status=AppointmentPayment.Status.PAID,
+        actor=physio_user,
+    ).count() == 1
+
+    api_client.force_authenticate(customer)
+    customer_items = api_client.get(
+        reverse("schedule-customer-me"), **headers(organization)
+    )
+    customer_item = next(item for item in customer_items.data if item["id"] == str(appointment.id))
+    assert customer_item["status"] == Appointment.Status.COMPLETED
+    assert customer_item["payment_status"] == AppointmentPayment.Status.PAID
+
+    for actor in (manager, owner):
+        api_client.force_authenticate(actor)
+        operations = api_client.get(
+            reverse("schedule-operations"),
+            {"status": Appointment.Status.COMPLETED, "page_size": 100},
+            **headers(organization),
+        )
+        operations_item = next(
+            item for item in operations.data["results"] if item["id"] == str(appointment.id)
+        )
+        assert operations_item["payment_status"] == AppointmentPayment.Status.PAID
+        assert operations_item["payment_paid_at"] is not None
+        assert operations_item["payment_confirmed_by"] == physio_user.get_full_name()
+
+
+def test_completion_payment_confirmation_rejects_customer_unassigned_and_cross_tenant_users(api_client):
+    values = setup_domain("therapist-payment-policy")
+    organization, clinic, owner, _, physio_user, _, customer, *_ = values
+    appointment = create_scheduled(api_client, values)
+    appointment.status = Appointment.Status.IN_PROGRESS
+    appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
+    appointment.journey_status = Appointment.JourneyStatus.EN_ROUTE
+    appointment.service_started_at = timezone.now()
+    appointment.save(
+        update_fields=(
+            "status",
+            "assignment_status",
+            "journey_status",
+            "service_started_at",
+        )
+    )
+    AppointmentPayment.objects.create(
+        appointment=appointment,
+        organization=organization,
+        amount_due="1777.00",
+        updated_by=owner,
+    )
+    url = reverse("schedule-complete-and-confirm-payment", args=[appointment.id])
+    payload = {"therapy_delivered": True, "payment_received": True}
+
+    api_client.force_authenticate(customer)
+    assert api_client.post(
+        url, payload, format="json", **headers(organization)
+    ).status_code == 403
+
+    other_physio = add_actor(organization, clinic, Role.PHYSIOTHERAPIST, "unassigned-payment")
+    api_client.force_authenticate(other_physio)
+    assert api_client.post(
+        url, payload, format="json", **headers(organization)
+    ).status_code == 404
+
+    foreign = setup_domain("therapist-payment-foreign")
+    api_client.force_authenticate(foreign[4])
+    assert api_client.post(
+        url, payload, format="json", **headers(foreign[0])
+    ).status_code == 404
+
+    api_client.force_authenticate(physio_user)
+    assert api_client.post(
+        reverse("schedule-status", args=[appointment.id]),
+        {"status": "COMPLETED"},
+        format="json",
+        **headers(organization),
+    ).status_code == 403
+    appointment.refresh_from_db()
+    assert appointment.status == Appointment.Status.IN_PROGRESS
+    assert appointment.payment.status == AppointmentPayment.Status.PENDING
 
 
 def test_offer_hides_patient_details_until_acceptance_and_journey_is_owned(api_client):
@@ -69,8 +220,8 @@ def test_offer_hides_patient_details_until_acceptance_and_journey_is_owned(api_c
     after = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
     accepted = next(item for item in after.data if item["id"] == str(appointment.id))
     assert accepted["patient_name"] == appointment.patient.full_name
-    en_route = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE", "latitude": "28.613900", "longitude": "77.209000"}, format="json", **headers(organization))
+    en_route = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE"}, format="json", **headers(organization))
     arrived = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "ARRIVED"}, format="json", **headers(organization))
-    assert en_route.status_code == 200 and arrived.status_code == 200
+    assert en_route.status_code == 200 and arrived.status_code == 400
     api_client.force_authenticate(customer)
-    assert api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "ARRIVED"}, format="json", **headers(organization)).status_code == 403
+    assert api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE"}, format="json", **headers(organization)).status_code == 403

@@ -168,6 +168,10 @@ class CustomerFamilyMember(models.Model):
 
 
 class PatientAddress(models.Model):
+    class LocationSource(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        DEVICE = "DEVICE", "Device location"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient = models.ForeignKey(PatientProfile, on_delete=models.PROTECT, related_name="addresses")
     label = models.CharField(max_length=80, default="Home")
@@ -177,6 +181,12 @@ class PatientAddress(models.Model):
     city = models.CharField(max_length=120)
     region = models.CharField(max_length=120)
     pin_code = models.CharField(max_length=6, validators=[pin_validator])
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_accuracy_meters = models.PositiveIntegerField(null=True, blank=True)
+    location_source = models.CharField(
+        max_length=12, choices=LocationSource.choices, default=LocationSource.MANUAL
+    )
     is_primary = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

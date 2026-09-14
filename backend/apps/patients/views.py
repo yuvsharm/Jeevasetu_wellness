@@ -177,7 +177,8 @@ class MyPatientProfileView(GenericAPIView):
                 setattr(patient, field, data[field])
         patient.save()
         address_fields = (
-            "address_line_1", "address_line_2", "landmark", "city", "region", "pin_code"
+            "address_line_1", "address_line_2", "landmark", "city", "region", "pin_code",
+            "latitude", "longitude", "location_accuracy_meters", "location_source",
         )
         if any(field in data for field in address_fields):
             address = patient.addresses.filter(is_active=True, is_primary=True).first()

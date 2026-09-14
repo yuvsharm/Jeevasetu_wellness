@@ -4,7 +4,6 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
-from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.urls import reverse
@@ -14,19 +13,19 @@ from apps.accounts.models import Role, RoleAssignment, User
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
+    AppointmentPayment,
     AppointmentRequest,
     AppointmentRequestAuditEvent,
     AppointmentReminder,
     ClinicOperatingHours,
     TherapyOption,
-    VisitVerification,
 )
 from apps.appointments.scheduling import save_scheduled_appointment
 from apps.appointments.scheduling import validate_schedule
 from apps.availability.models import ApprovalStatus, AvailabilityRule
 from apps.patients.models import PatientAddress, PatientProfile
 from apps.practitioners.models import PractitionerApplication, PractitionerCompetency, PractitionerProfile
-from apps.staff.models import StaffProfile
+from apps.staff.models import ServiceArea, StaffProfile
 from apps.tenancy.models import Clinic, ClinicMembership, Organization, OrganizationMembership
 
 pytestmark = pytest.mark.django_db
@@ -160,21 +159,6 @@ def headers(organization):
     return {"HTTP_X_ORGANIZATION_SLUG": organization.slug}
 
 
-def mark_arrival_verified(appointment):
-    now = timezone.now()
-    return VisitVerification.objects.create(
-        appointment=appointment,
-        organization=appointment.organization,
-        customer=appointment.patient.user,
-        physiotherapist=appointment.physiotherapist,
-        state=VisitVerification.State.VERIFIED,
-        otp_hash=make_password("test-only-visit-otp"),
-        issued_at=now,
-        expires_at=now + timedelta(minutes=15),
-        verified_at=now,
-    )
-
-
 def appointment_payload(
     clinic, patient, therapy, address, physiotherapist=None, status="DRAFT", start=None
 ):
@@ -282,7 +266,11 @@ def test_status_flow_and_final_state_reschedule_protection(api_client):
     statuses = []
     for new_status in ("CONFIRMED", "IN_PROGRESS", "COMPLETED"):
         if new_status == "IN_PROGRESS":
-            mark_arrival_verified(Appointment.objects.get(pk=appointment_id))
+            Appointment.objects.filter(pk=appointment_id).update(
+                assignment_status=Appointment.AssignmentStatus.ACCEPTED,
+                journey_status=Appointment.JourneyStatus.EN_ROUTE,
+                en_route_at=timezone.now(),
+            )
         result = api_client.post(
             reverse("schedule-status", args=[appointment_id]),
             {"status": new_status, "reason": "Approved workflow"},
@@ -377,8 +365,8 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
         mobile_number="9876543210", session_preference="SINGLE",
         preferred_date=start_at().date(), preferred_time=time(10),
         address="Shastri Nagar", city="Meerut", pin_code="250004",
-        commercial_snapshot={"duration_minutes": 45}, regular_amount="0.00",
-        discount_amount="0.00", final_amount="0.00",
+        commercial_snapshot={"duration_minutes": 45, "final_amount": "1234.00"},
+        regular_amount="1234.00", discount_amount="0.00", final_amount="1234.00",
     )
     second = TherapyOption.objects.create(
         organization=organization, name="Basti", slug="basti", default_duration_minutes=45,
@@ -407,6 +395,51 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
     assert AppointmentReminder.objects.filter(
         appointment=appointment, status=AppointmentReminder.Status.PENDING
     ).count() >= 1
+    en_route = api_client.post(
+        reverse("schedule-journey", args=[appointment.id]),
+        {"journey_status": "EN_ROUTE"}, format="json", **headers(organization),
+    )
+    started = api_client.post(
+        reverse("schedule-status", args=[appointment.id]),
+        {"status": "IN_PROGRESS"}, format="json", **headers(organization),
+    )
+    completed = api_client.post(
+        reverse("schedule-complete-and-confirm-payment", args=[appointment.id]),
+        {"therapy_delivered": True, "payment_received": True},
+        format="json", **headers(organization),
+    )
+    appointment.refresh_from_db()
+    payment = AppointmentPayment.objects.get(appointment=appointment)
+    assert (en_route.status_code, started.status_code, completed.status_code) == (200, 200, 200)
+    assert appointment.en_route_at and appointment.service_started_at and appointment.completed_at
+    source.refresh_from_db()
+    assert payment.amount_due == source.final_amount
+    assert payment.status == AppointmentPayment.Status.PAID
+    assert payment.updated_by == physio_user and payment.paid_at
+    assert appointment.audit_events.filter(
+        event=AppointmentAuditEvent.Event.JOURNEY_STATUS_CHANGED,
+        reason=Appointment.JourneyStatus.EN_ROUTE,
+    ).exists()
+    assert appointment.audit_events.filter(
+        event=AppointmentAuditEvent.Event.STATUS_CHANGED,
+        new_status=Appointment.Status.COMPLETED,
+    ).exists()
+    original_address = appointment.address_line_1
+    therapy.base_price = "1777.00"
+    therapy.save(update_fields=("base_price",))
+    api_client.force_authenticate(customer)
+    rebooked = api_client.post(
+        reverse("appointment-rebook", args=[appointment.id]),
+        {"preferred_date": start_at(days=3).date(), "preferred_time": "10:00"},
+        format="json", **headers(organization),
+    )
+    assert rebooked.status_code == 201
+    repeated = AppointmentRequest.objects.get(pk=rebooked.data["id"])
+    assert str(repeated.final_amount) == "1777.00"
+    assert repeated.preferred_practitioner_id is None
+    assert repeated.address == appointment.patient.addresses.get(is_primary=True).address_line_1
+    appointment.refresh_from_db()
+    assert appointment.address_line_1 == original_address
 
 
 def test_request_accept_then_exact_slot_assignment_is_idempotent_and_customer_synced(api_client):
@@ -519,6 +552,164 @@ def test_request_accept_then_exact_slot_assignment_is_idempotent_and_customer_sy
     assert Appointment.objects.filter(originating_request=source).count() == 1
 
 
+def test_request_eligibility_matches_canonical_service_area_when_pin_list_is_empty(api_client):
+    values = setup_domain("request-canonical-area")
+    organization, _, owner, _, _, physio, customer, _, _, therapy = values
+    physio.therapy_competencies.add(therapy)
+    meerut = ServiceArea.objects.create(
+        organization=organization, name="Meerut", pin_codes=[]
+    )
+    physio.service_areas.add(meerut)
+    source = AppointmentRequest.objects.create(
+        organization=organization,
+        creator=customer,
+        therapy=therapy,
+        patient_name="Asha Sharma",
+        age=28,
+        gender="FEMALE",
+        mobile_number="9876543210",
+        session_preference="SINGLE",
+        preferred_date=start_at().date(),
+        preferred_time=time(10),
+        address="Shastri Nagar",
+        city="  MEERUT  ",
+        pin_code="240001",
+        status=AppointmentRequest.Status.APPROVED,
+    )
+    api_client.force_authenticate(owner)
+
+    response = api_client.get(
+        reverse("appointment-request-eligible", args=[source.id]), **headers(organization)
+    )
+    item = next(value for value in response.data if value["id"] == str(physio.id))
+
+    assert response.status_code == 200
+    assert item["eligible"] is True
+    assert item["eligibility_reason"] == "Available for this requested time"
+
+    source.city = "Ghaziabad"
+    source.save(update_fields=("city",))
+    response = api_client.get(
+        reverse("appointment-request-eligible", args=[source.id]), **headers(organization)
+    )
+    item = next(value for value in response.data if value["id"] == str(physio.id))
+    assert item["eligible"] is False
+    assert item["eligibility_reason"] == "The selected Physiotherapist does not serve this area."
+
+
+def test_owner_offline_booking_creates_and_reuses_one_canonical_patient(api_client):
+    values = setup_domain("offline-booking")
+    organization, clinic, owner, _, _, physio, _, _, _, therapy = values
+    therapy.base_price = "2900.00"
+    therapy.save(update_fields=("base_price",))
+    physio.therapy_competencies.add(therapy)
+    meerut = ServiceArea.objects.create(
+        organization=organization, name="Meerut", pin_codes=["250004"]
+    )
+    physio.service_areas.add(meerut)
+    api_client.force_authenticate(owner)
+
+    payload = {
+        "mobile_number": "9876501111",
+        "patient_name": "Offline Customer",
+        "age": 41,
+        "gender": "FEMALE",
+        "clinic": str(clinic.id),
+        "therapies": [str(therapy.id)],
+        "physiotherapist": str(physio.id),
+        "preferred_date": start_at(days=4).date().isoformat(),
+        "preferred_time": "10:00",
+        "service_address": {
+            "address_line_1": "21 Civil Lines",
+            "address_line_2": "",
+            "landmark": "Near park",
+            "city": "Meerut",
+            "region": "Uttar Pradesh",
+            "pin_code": "250004",
+            "location_source": "MANUAL",
+        },
+        "booking_source": "CALL",
+        "operational_note": "Customer called the front desk.",
+        "payment_status": "PENDING",
+        "payment_reference": "",
+    }
+    created = api_client.post(
+        reverse("owner-offline-appointment-create"),
+        payload,
+        format="json",
+        **headers(organization),
+    )
+
+    assert created.status_code == 201, created.data
+    assert created.data["patient_reused"] is False
+    assert created.data["payment_amount_due"] == "2900.00"
+    patient = PatientProfile.objects.get(
+        organization=organization, mobile_number=payload["mobile_number"]
+    )
+    assert patient.user_id is None
+    assert patient.addresses.get(is_primary=True).address_line_1 == "21 Civil Lines"
+    appointment = Appointment.objects.get(pk=created.data["id"])
+    assert appointment.patient == patient
+    assert appointment.originating_request.patient_profile == patient
+    assert appointment.originating_request.booking_source == AppointmentRequest.BookingSource.CALL
+    assert appointment.payment.status == AppointmentPayment.Status.PENDING
+
+    payload.update({
+        "preferred_date": start_at(days=5).date().isoformat(),
+        "patient_name": "Ignored duplicate name",
+    })
+    payload.pop("service_address")
+    reused = api_client.post(
+        reverse("owner-offline-appointment-create"),
+        payload,
+        format="json",
+        **headers(organization),
+    )
+
+    assert reused.status_code == 201, reused.data
+    assert reused.data["patient_reused"] is True
+    assert reused.data["patient_id"] == str(patient.id)
+    assert PatientProfile.objects.filter(
+        organization=organization, mobile_number=payload["mobile_number"], is_active=True
+    ).count() == 1
+    assert Appointment.objects.filter(patient=patient).count() == 2
+
+
+def test_owner_request_list_is_paginated_eight_at_a_time(api_client):
+    values = setup_domain("owner-request-pages")
+    organization, _, owner, _, _, _, customer, _, _, therapy = values
+    for index in range(9):
+        AppointmentRequest.objects.create(
+            organization=organization,
+            creator=customer,
+            therapy=therapy,
+            patient_name=f"Customer {index}",
+            age=30,
+            gender="FEMALE",
+            mobile_number=f"98765012{index:02d}",
+            session_preference="SINGLE",
+            preferred_date=start_at(days=index + 2).date(),
+            preferred_time=time(10),
+            address="Civil Lines",
+            city="Meerut",
+            pin_code="250004",
+        )
+    api_client.force_authenticate(owner)
+
+    first = api_client.get(
+        reverse("appointment-owner-list"), {"page_size": 8}, **headers(organization)
+    )
+    second = api_client.get(
+        reverse("appointment-owner-list"), {"page_size": 8, "page": 2}, **headers(organization)
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.data["count"] == 9
+    assert len(first.data["results"]) == 8
+    assert first.data["next"] is not None
+    assert len(second.data["results"]) == 1
+
+
 def test_request_rejection_requires_customer_safe_structured_reason(api_client):
     values = setup_domain("request-reject")
     organization, _, owner, _, _, _, customer, _, _, therapy = values
@@ -627,7 +818,11 @@ def test_physiotherapist_only_sees_assigned_and_allowed_transitions(api_client):
         format="json",
         **headers(organization),
     )
-    mark_arrival_verified(Appointment.objects.get(pk=created.data["id"]))
+    Appointment.objects.filter(pk=created.data["id"]).update(
+        assignment_status=Appointment.AssignmentStatus.ACCEPTED,
+        journey_status=Appointment.JourneyStatus.EN_ROUTE,
+        en_route_at=timezone.now(),
+    )
     started = api_client.post(
         reverse("schedule-status", args=[created.data["id"]]),
         {"status": "IN_PROGRESS"},

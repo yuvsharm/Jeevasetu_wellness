@@ -190,6 +190,18 @@ class CommercialAuditEvent(models.Model):
 
 
 class AppointmentRequest(models.Model):
+    class BookingSource(models.TextChoices):
+        ONLINE = "ONLINE", "Online"
+        CALL = "CALL", "Call"
+        ADVERTISEMENT = "ADVERTISEMENT", "Advertisement"
+        REFERRAL = "REFERRAL", "Referral"
+        WALK_IN = "WALK_IN", "Walk-in"
+        OTHER = "OTHER", "Other"
+
+    class LocationSource(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        DEVICE = "DEVICE", "Device location"
+
     class RejectionCategory(models.TextChoices):
         NO_PRACTITIONER = "NO_PRACTITIONER", "No practitioner available"
         SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE", "Service unavailable"
@@ -221,6 +233,13 @@ class AppointmentRequest(models.Model):
         null=True,
         blank=True,
         on_delete=models.PROTECT,
+        related_name="appointment_requests",
+    )
+    patient_profile = models.ForeignKey(
+        "patients.PatientProfile",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="appointment_requests",
     )
     family_member = models.ForeignKey(
@@ -281,14 +300,24 @@ class AppointmentRequest(models.Model):
     doctor_reference = models.CharField(max_length=255, blank=True)
     address = models.CharField(max_length=500)
     city = models.CharField(max_length=120)
+    region = models.CharField(max_length=120, default="Uttar Pradesh")
     pin_code = models.CharField(
         max_length=6,
         validators=[RegexValidator(r"^[1-9]\d{5}$", "Enter a valid 6-digit PIN code.")],
     )
     landmark = models.CharField(max_length=255, blank=True, default="")
     google_map_link = models.URLField(max_length=500, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_accuracy_meters = models.PositiveIntegerField(null=True, blank=True)
+    location_source = models.CharField(
+        max_length=12, choices=LocationSource.choices, default=LocationSource.MANUAL
+    )
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     owner_remarks = models.TextField(max_length=1000, blank=True)
+    booking_source = models.CharField(
+        max_length=20, choices=BookingSource.choices, default=BookingSource.ONLINE
+    )
     rejection_category = models.CharField(
         max_length=32, choices=RejectionCategory.choices, blank=True
     )
@@ -558,6 +587,14 @@ class Appointment(models.Model):
     city = models.CharField(max_length=120)
     region = models.CharField(max_length=120)
     pin_code = models.CharField(max_length=6, validators=[RegexValidator(r"^[1-9]\d{5}$")])
+    service_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    service_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    service_location_accuracy_meters = models.PositiveIntegerField(null=True, blank=True)
+    service_location_source = models.CharField(
+        max_length=12,
+        choices=AppointmentRequest.LocationSource.choices,
+        default=AppointmentRequest.LocationSource.MANUAL,
+    )
     operational_notes = models.CharField(max_length=500, blank=True)
     manager_remarks = models.CharField(max_length=500, blank=True)
     assignment_status = models.CharField(
@@ -864,6 +901,31 @@ class AppointmentRatingModerationEvent(models.Model):
 
     class Meta:
         ordering = ("created_at",)
+
+
+class AppointmentPayment(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        PAID = "PAID", "Paid"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.OneToOneField(
+        Appointment, on_delete=models.PROTECT, related_name="payment"
+    )
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    amount_due = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    reference = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="updated_appointment_payments"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at",)
 
 
 class PractitionerPayment(models.Model):

@@ -13,7 +13,12 @@ def test_celery_uses_safe_infrastructure_defaults(settings):
     assert app.conf.worker_prefetch_multiplier == 1
     assert settings.CELERY_RESULT_BACKEND is None
     assert settings.CELERY_TASK_IGNORE_RESULT is True
-    assert settings.CELERY_BEAT_SCHEDULE == {}
+    assert settings.CELERY_BEAT_SCHEDULE == {
+        "dispatch-appointment-reminders": {
+            "task": "apps.appointments.tasks.dispatch_due_appointment_reminders",
+            "schedule": 60.0,
+        }
+    }
 
 
 def test_infrastructure_task_is_side_effect_free():

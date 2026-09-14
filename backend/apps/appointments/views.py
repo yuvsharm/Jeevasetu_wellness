@@ -30,6 +30,7 @@ from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
     AppointmentChangeRequest,
+    AppointmentPayment,
     AppointmentRequest,
     AppointmentRating,
     AppointmentRatingModerationEvent,
@@ -38,11 +39,11 @@ from apps.appointments.models import (
     PractitionerPayment,
     TherapyOption,
     TherapyPackage,
-    VisitVerification,
 )
 from apps.appointments.scheduling import (
     assign_physiotherapist,
     cancel_appointment,
+    complete_and_confirm_payment,
     record_rejected_lifecycle_action,
     reschedule_appointment,
     respond_to_assignment,
@@ -57,6 +58,8 @@ from apps.appointments.serializers import (
     AppointmentAuditSerializer,
     AppointmentCancellationSerializer,
     AppointmentChangeRequestSerializer,
+    AppointmentCompletionPaymentSerializer,
+    AppointmentPaymentSerializer,
     AppointmentDetailSerializer,
     AppointmentListSerializer,
     AppointmentRequestSerializer,
@@ -83,13 +86,13 @@ from apps.appointments.serializers import (
     CustomerAppointmentSerializer,
     CustomerAppointmentRequestSerializer,
     OwnerAppointmentUpdateSerializer,
+    OfflineAppointmentCreateSerializer,
     PhysiotherapistAppointmentSerializer,
     PhysiotherapistWorkloadSerializer,
     TherapyOptionSerializer,
     TherapyCommercialSerializer,
     TherapyPackageSerializer,
     UnassignmentSerializer,
-    VisitOtpSubmissionSerializer,
 )
 from apps.appointments.booking_verification import (
     issue_booking_otp_details,
@@ -102,12 +105,7 @@ def commercial_audit_payload(data):
     return json.loads(json.dumps(data, cls=DjangoJSONEncoder))
 from apps.appointments.commercial import calculate_quote
 from apps.appointments.analytics import build_owner_analytics, resolve_range
-from apps.patients.models import CustomerFamilyMember
-from apps.appointments.visit_verification import (
-    issue_visit_otp,
-    verify_visit_otp,
-    visit_verification_status,
-)
+from apps.patients.models import CustomerFamilyMember, PatientProfile
 from apps.availability.services import ensure_physiotherapist_available
 from apps.staff.models import StaffProfile
 
@@ -378,6 +376,7 @@ class CustomerAppointmentListView(HasTenant, generics.ListAPIView):
         ).select_related(
             "therapy", "family_member", "operational_appointment__physiotherapist__user",
             "operational_appointment__physiotherapist__practitioner_profile",
+            "operational_appointment__payment", "operational_appointment__rating",
         ).prefetch_related(
             "requested_therapies", "audit_events",
             "operational_appointment__physiotherapist__therapy_competencies",
@@ -395,6 +394,7 @@ class CustomerAppointmentDetailView(HasTenant, generics.RetrieveAPIView):
         ).select_related(
             "therapy", "family_member", "operational_appointment__physiotherapist__user",
             "operational_appointment__physiotherapist__practitioner_profile",
+            "operational_appointment__payment", "operational_appointment__rating",
         ).prefetch_related(
             "requested_therapies", "audit_events",
             "operational_appointment__physiotherapist__therapy_competencies",
@@ -419,7 +419,7 @@ class CustomerAppointmentRebookView(HasTenant, GenericAPIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        appointment = Appointment.objects.select_related("originating_request").filter(
+        appointment = Appointment.objects.select_related("originating_request", "patient", "clinic").filter(
             pk=pk, organization=request.organization,
             originating_request__creator=request.user,
             status=Appointment.Status.COMPLETED,
@@ -429,33 +429,82 @@ class CustomerAppointmentRebookView(HasTenant, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         source = appointment.originating_request
-        requested = list(source.requested_therapies.all())
-        duration = (1 + len(requested)) * 45
-        start = datetime.combine(serializer.validated_data["preferred_date"], serializer.validated_data["preferred_time"])
-        close = datetime.combine(serializer.validated_data["preferred_date"], time(18, 0))
-        if start.time() < time(9, 0) or start + timedelta(minutes=duration) > close:
-            raise ValidationError({"preferred_time": "The selected therapies must finish by 6:00 PM."})
+        snapshot_therapy_ids = source.commercial_snapshot.get("therapy_ids", [])
+        therapy_ids = list(dict.fromkeys(
+            [str(value) for value in snapshot_therapy_ids]
+            or [
+                str(source.therapy_id),
+                *[
+                    str(value)
+                    for value in source.requested_therapies.filter(
+                        is_offer_free_addon=False
+                    ).values_list("id", flat=True)
+                ],
+            ]
+        ))
+        therapies_by_id = {
+            str(value.id): value
+            for value in TherapyOption.objects.filter(id__in=therapy_ids)
+        }
+        requested = [
+            therapies_by_id[value]
+            for value in therapy_ids
+            if value != str(source.therapy_id) and value in therapies_by_id
+        ]
+        start = datetime.combine(
+            serializer.validated_data["preferred_date"],
+            serializer.validated_data["preferred_time"],
+            ZoneInfo(appointment.clinic.timezone or request.organization.timezone or "Asia/Kolkata"),
+        )
+        quote = calculate_quote(
+            organization=request.organization,
+            therapy_ids=therapy_ids,
+            family_member=source.family_member,
+            at=start,
+        )
+        validate_schedule(
+            clinic=appointment.clinic,
+            start=start,
+            duration_minutes=quote.duration_minutes,
+        )
+        primary = appointment.patient.addresses.filter(is_primary=True, is_active=True).first()
+        if primary is None:
+            raise ValidationError("Confirm a primary service address before booking again.")
         value = AppointmentRequest.objects.create(
             organization=request.organization, creator=request.user,
             family_member=source.family_member, therapy=source.therapy,
+            selected_offer_id=quote.offer_id, selected_package_id=quote.package_id,
+            commercial_snapshot=quote.snapshot(), regular_amount=quote.regular_amount,
+            discount_amount=quote.discount_amount, final_amount=quote.final_amount,
             preferred_practitioner=None, patient_name=source.patient_name, age=source.age,
             gender=source.gender, mobile_number=source.mobile_number,
             alternate_mobile=source.alternate_mobile, email=source.email,
-            session_preference=source.session_preference,
+            session_preference=AppointmentRequest.SessionPreference.SINGLE,
             preferred_date=serializer.validated_data["preferred_date"],
             preferred_time=serializer.validated_data["preferred_time"],
             problem_description=source.problem_description, pain_area=source.pain_area,
             problem_duration=source.problem_duration, doctor_reference=source.doctor_reference,
-            address=source.address, city=source.city, pin_code=source.pin_code,
-            landmark=source.landmark, google_map_link=source.google_map_link,
+            address=", ".join(filter(None, (primary.address_line_1, primary.address_line_2))),
+            city=primary.city, region=primary.region, pin_code=primary.pin_code,
+            landmark=primary.landmark, google_map_link="",
+            latitude=primary.latitude, longitude=primary.longitude,
+            location_accuracy_meters=primary.location_accuracy_meters,
+            location_source=primary.location_source,
         )
         value.requested_therapies.set(requested)
         return Response(AppointmentRequestSerializer(value, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
+class OwnerRequestPagination(PageNumberPagination):
+    page_size = 8
+    page_size_query_param = "page_size"
+    max_page_size = 8
+
+
 class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
     permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
-    serializer_class = AppointmentRequestSerializer
+    serializer_class = CustomerAppointmentRequestSerializer
+    pagination_class = OwnerRequestPagination
 
     def get_queryset(self):
         level, _ = actor_role_scope(self.request.user, self.request.organization)
@@ -463,11 +512,21 @@ class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
             raise PermissionDenied("Operations access is required.")
         queryset = AppointmentRequest.objects.filter(
             organization=self.request.organization
-        ).select_related("therapy", "creator")
+        ).select_related(
+            "therapy", "creator", "patient_profile", "family_member",
+            "operational_appointment__physiotherapist__user",
+            "operational_appointment__physiotherapist__practitioner_profile",
+            "operational_appointment__payment",
+        ).prefetch_related(
+            "requested_therapies", "audit_events",
+            "operational_appointment__physiotherapist__therapy_competencies",
+            "operational_appointment__physiotherapist__specializations",
+        )
         if level == Role.MANAGER:
             _, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
             queryset = queryset.filter(
-                Q(creator__patient_profiles__clinic_id__in=clinic_ids or ())
+                Q(patient_profile__clinic_id__in=clinic_ids or ())
+                | Q(creator__patient_profiles__clinic_id__in=clinic_ids or ())
                 | Q(creator=self.request.user)
             ).distinct()
         status_value = self.request.query_params.get("status", "")
@@ -484,9 +543,33 @@ class OwnerAppointmentListView(HasTenant, generics.ListAPIView):
         return queryset
 
 
+class OfflineAppointmentCreateView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    serializer_class = OfflineAppointmentCreateSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        existing = PatientProfile.objects.filter(
+            organization=request.organization,
+            mobile_number=serializer.validated_data["mobile_number"],
+            is_active=True,
+        ).exists()
+        appointment, patient, payment = serializer.save()
+        result = AppointmentDetailSerializer(appointment, context={"request": request}).data
+        result.update({
+            "patient_reused": existing,
+            "patient_id": str(patient.id),
+            "booking_source": appointment.originating_request.booking_source,
+            "payment_status": payment.status,
+            "payment_amount_due": str(payment.amount_due),
+        })
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
 class OwnerAppointmentDetailView(HasTenant, generics.RetrieveUpdateAPIView):
     permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
-    serializer_class = AppointmentRequestSerializer
+    serializer_class = CustomerAppointmentRequestSerializer
 
     def get_queryset(self):
         level, _ = actor_role_scope(self.request.user, self.request.organization)
@@ -494,13 +577,18 @@ class OwnerAppointmentDetailView(HasTenant, generics.RetrieveUpdateAPIView):
             raise PermissionDenied("Operations access is required.")
         return AppointmentRequest.objects.filter(
             organization=self.request.organization
-        ).select_related("therapy", "creator")
+        ).select_related(
+            "therapy", "creator", "patient_profile", "family_member",
+            "operational_appointment__physiotherapist__user",
+            "operational_appointment__physiotherapist__practitioner_profile",
+            "operational_appointment__payment",
+        ).prefetch_related("requested_therapies", "audit_events")
 
     def get_serializer_class(self):
         return (
             OwnerAppointmentUpdateSerializer
             if self.request.method in ("PUT", "PATCH")
-            else AppointmentRequestSerializer
+            else CustomerAppointmentRequestSerializer
         )
 
 
@@ -525,6 +613,8 @@ class OperationalScopeMixin(HasTenant):
             "physiotherapist__user",
             "originating_request",
             "assigned_by",
+            "payment",
+            "payment__updated_by",
         )
 
 
@@ -555,6 +645,8 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             queryset = queryset.filter(
                 Q(patient__full_name__icontains=search)
                 | Q(patient__patient_identifier__icontains=search)
+                | Q(patient__mobile_number__icontains=search)
+                | Q(originating_request__id__icontains=search)
                 | Q(physiotherapist__user__first_name__icontains=search)
                 | Q(physiotherapist__user__last_name__icontains=search)
                 | Q(assigned_by__first_name__icontains=search)
@@ -579,8 +671,6 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             queryset = queryset.filter(assignment_status=Appointment.AssignmentStatus.ACCEPTED)
         elif view == "en_route":
             queryset = queryset.filter(journey_status=Appointment.JourneyStatus.EN_ROUTE)
-        elif view == "arrived":
-            queryset = queryset.filter(journey_status=Appointment.JourneyStatus.ARRIVED).exclude(status=Appointment.Status.IN_PROGRESS)
         elif view == "started":
             queryset = queryset.filter(status=Appointment.Status.IN_PROGRESS)
         elif view == "completed":
@@ -591,7 +681,10 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             queryset = queryset.filter(scheduled_start__date__gte=date_from)
         if date_to:
             queryset = queryset.filter(scheduled_start__date__lte=date_to)
-        return queryset
+        ordering = self.request.query_params.get("ordering", "scheduled_start")
+        if ordering not in ("scheduled_start", "-scheduled_start", "created_at", "-created_at"):
+            ordering = "scheduled_start"
+        return queryset.order_by(ordering)
 
     def perform_create(self, serializer):
         level, clinic_ids = actor_role_scope(self.request.user, self.request.organization)
@@ -837,11 +930,11 @@ class AppointmentRequestDecisionView(HasTenant, GenericAPIView):
     def post(self, request, pk):
         source = AppointmentRequest.objects.filter(
             pk=pk, organization=request.organization
-        ).select_related("creator").first()
+        ).select_related("creator", "patient_profile").first()
         if source is None:
             raise NotFound("Appointment request is unavailable.")
         level, clinic_ids = actor_role_scope(request.user, request.organization)
-        patient = (
+        patient = source.patient_profile or (
             source.creator.patient_profiles.filter(
                 organization=request.organization, is_active=True
             ).first()
@@ -873,12 +966,14 @@ class AppointmentRequestEligiblePhysiotherapistView(HasTenant, GenericAPIView):
             pk=pk,
             organization=request.organization,
             status__in=(AppointmentRequest.Status.PENDING, AppointmentRequest.Status.APPROVED),
-        ).select_related("creator", "therapy").first()
-        if source is None or source.creator_id is None:
+        ).select_related("creator", "patient_profile", "therapy").first()
+        if source is None:
             raise NotFound("Appointment request is unavailable.")
-        patient = source.creator.patient_profiles.filter(
-            organization=request.organization, is_active=True
-        ).select_related("clinic").first()
+        patient = source.patient_profile
+        if patient is None and source.creator_id is not None:
+            patient = source.creator.patient_profiles.filter(
+                organization=request.organization, is_active=True
+            ).select_related("clinic").first()
         if patient is None:
             raise NotFound("Appointment request is unavailable.")
         level, clinic_ids = actor_role_scope(request.user, request.organization)
@@ -1037,7 +1132,7 @@ class AppointmentStatusView(HasTenant, GenericAPIView):
         if level is None and roles.filter(role=Role.PHYSIOTHERAPIST).exists():
             level = Role.PHYSIOTHERAPIST
         queryset = Appointment.objects.filter(organization=request.organization).select_related(
-            "clinic", "patient", "therapy", "physiotherapist__user"
+            "clinic", "patient", "therapy", "physiotherapist__user", "originating_request", "payment"
         )
         if level == Role.MANAGER:
             queryset = queryset.filter(clinic_id__in=clinic_ids or ())
@@ -1054,7 +1149,6 @@ class AppointmentStatusView(HasTenant, GenericAPIView):
         if level == Role.PHYSIOTHERAPIST and (appointment.status, new_status) not in (
             (Appointment.Status.CONFIRMED, Appointment.Status.IN_PROGRESS),
             (Appointment.Status.CONFIRMED, Appointment.Status.NO_SHOW),
-            (Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED),
         ):
             raise PermissionDenied("Physiotherapists cannot perform this status change.")
         try:
@@ -1072,6 +1166,40 @@ class AppointmentStatusView(HasTenant, GenericAPIView):
             else AppointmentDetailSerializer
         )
         return Response(response_serializer(appointment, context={"request": request}).data)
+
+
+class AppointmentCompletionPaymentView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
+    serializer_class = AppointmentCompletionPaymentSerializer
+
+    def post(self, request, pk):
+        appointment = Appointment.objects.filter(
+            pk=pk,
+            organization=request.organization,
+            physiotherapist__user=request.user,
+        ).select_related(
+            "clinic",
+            "patient",
+            "therapy",
+            "physiotherapist__user",
+            "originating_request",
+            "assigned_by",
+            "payment",
+            "payment__updated_by",
+        ).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appointment = complete_and_confirm_payment(appointment, actor=request.user)
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
+        return Response(
+            PhysiotherapistAppointmentSerializer(
+                appointment, context={"request": request}
+            ).data
+        )
 
 
 class AppointmentJourneyView(HasTenant, GenericAPIView):
@@ -1174,6 +1302,8 @@ class MyAssignedAppointmentListView(HasTenant, generics.ListAPIView):
             "physiotherapist__user",
             "originating_request",
             "assigned_by",
+            "payment",
+            "payment__updated_by",
         )
 
 
@@ -1186,7 +1316,7 @@ class CustomerOperationalAppointmentListView(HasTenant, generics.ListAPIView):
             Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)
         ).select_related(
             "clinic", "patient", "therapy", "physiotherapist__user", "originating_request",
-            "physiotherapist__practitioner_profile",
+            "physiotherapist__practitioner_profile", "payment", "payment__updated_by", "rating",
         ).prefetch_related(
             "originating_request__requested_therapies",
             "physiotherapist__therapy_competencies",
@@ -1234,100 +1364,6 @@ class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView
             raise ValidationError("An equivalent change request is already pending.") from error
 
 
-class CustomerVisitVerificationView(HasTenant, GenericAPIView):
-    permission_classes = (IsEnabledAuthenticated, IsCustomer)
-    serializer_class = CustomerAppointmentSerializer
-
-    def get_appointment(self, request, pk):
-        appointment = (
-            Appointment.objects.filter(
-                pk=pk,
-                organization=request.organization,
-            )
-            .filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user))
-            .select_related(
-                "organization",
-                "clinic",
-                "patient__user",
-                "physiotherapist__user",
-            )
-            .first()
-        )
-        if appointment is None:
-            raise NotFound("Visit verification is unavailable.")
-        return appointment
-
-    def get(self, request, pk):
-        appointment = self.get_appointment(request, pk)
-        return Response(visit_verification_status(appointment, actor=request.user))
-
-    def post(self, request, pk):
-        appointment = self.get_appointment(request, pk)
-        try:
-            verification, delivery = issue_visit_otp(appointment, customer=request.user)
-        except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
-        response = visit_verification_status(appointment, actor=request.user)
-        response.update(
-            {
-                "otp": delivery.otp,
-                "expires_at": delivery.expires_at,
-                "verification_id": str(verification.id),
-            }
-        )
-        return Response(response, status=status.HTTP_201_CREATED)
-
-
-class PhysiotherapistVisitVerificationView(HasTenant, GenericAPIView):
-    permission_classes = (IsEnabledAuthenticated, IsPhysiotherapist)
-    serializer_class = VisitOtpSubmissionSerializer
-
-    def get_appointment(self, request, pk):
-        appointment = (
-            Appointment.objects.filter(pk=pk, organization=request.organization)
-            .select_related(
-                "organization",
-                "clinic",
-                "patient__user",
-                "physiotherapist__user",
-            )
-            .first()
-        )
-        if appointment is None:
-            raise NotFound("Visit verification is unavailable.")
-        return appointment
-
-    def get(self, request, pk):
-        appointment = self.get_appointment(request, pk)
-        if (
-            appointment.physiotherapist is None
-            or appointment.physiotherapist.user_id != request.user.id
-        ):
-            raise NotFound("Visit verification is unavailable.")
-        return Response(visit_verification_status(appointment, actor=request.user))
-
-    def post(self, request, pk):
-        appointment = self.get_appointment(request, pk)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            verification = verify_visit_otp(
-                appointment,
-                physiotherapist_user=request.user,
-                otp=serializer.validated_data["otp"],
-            )
-        except DjangoValidationError as error:
-            raise ValidationError(str(error)) from error
-        return Response(
-            {
-                "status": "VERIFIED",
-                "verified_at": verification.verified_at,
-                "expires_at": None,
-                "failed_attempt_warning": verification.failed_attempt_count > 0,
-            }
-        )
-
-
 class AppointmentPhysiotherapistPhotoView(HasTenant, GenericAPIView):
     permission_classes = (IsEnabledAuthenticated,)
     serializer_class = CustomerAppointmentSerializer
@@ -1373,9 +1409,6 @@ class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
             appointment = Appointment.objects.select_for_update(of=("self",)).filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, completed_at__isnull=False, physiotherapist__isnull=False).filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user)).first()
             if appointment is None:
                 raise NotFound("Review is unavailable.")
-            verification = appointment.visit_verifications.order_by("-created_at").first()
-            if verification and verification.state != VisitVerification.State.VERIFIED:
-                raise ValidationError("The completed service was not validly verified.")
             if AppointmentRating.objects.filter(appointment=appointment).exists():
                 raise ValidationError("This appointment has already been reviewed.")
             serializer = self.get_serializer(data=request.data)
@@ -1467,16 +1500,24 @@ class PractitionerPaymentListView(HasTenant, generics.ListAPIView):
 
 class OperationsPaymentView(HasTenant, GenericAPIView):
     permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
-    serializer_class = PractitionerPaymentSerializer
+    serializer_class = AppointmentPaymentSerializer
 
     def post(self, request, pk):
         level, clinic_ids = actor_role_scope(request.user, request.organization)
-        appointment = Appointment.objects.filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        appointment = Appointment.objects.select_related("originating_request").filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
         if appointment is None or (level == Role.MANAGER and appointment.clinic_id not in (clinic_ids or ())):
             raise NotFound("Payment is unavailable.")
-        value, _ = PractitionerPayment.objects.get_or_create(appointment=appointment, defaults={"organization": request.organization, "physiotherapist": appointment.physiotherapist, "updated_by": request.user})
+        source = appointment.originating_request
+        amount_due = source.final_amount if source and source.final_amount is not None else 0
+        value, _ = AppointmentPayment.objects.get_or_create(
+            appointment=appointment,
+            defaults={"organization": request.organization, "amount_due": amount_due, "updated_by": request.user},
+        )
         serializer = self.get_serializer(value, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        value = serializer.save(updated_by=request.user, paid_at=timezone.now() if serializer.validated_data.get("status") == PractitionerPayment.Status.PAID else value.paid_at)
+        value = serializer.save(
+            updated_by=request.user,
+            paid_at=(timezone.now() if serializer.validated_data.get("status") == AppointmentPayment.Status.PAID and value.status != AppointmentPayment.Status.PAID else value.paid_at),
+        )
         AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event="PAYMENT_STATUS_CHANGED", reason=value.status)
         return Response(self.get_serializer(value).data)

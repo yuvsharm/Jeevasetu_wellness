@@ -10,6 +10,20 @@
   box-sizing: border-box;
 }
 
+:where(fieldset, label) {
+  min-width: 0;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]), select, textarea) {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+:where(input[type="file"].sr-only) {
+  width: 1px;
+}
+
 html {
   background: var(--background);
   scroll-behavior: smooth;

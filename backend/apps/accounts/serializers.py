@@ -124,6 +124,10 @@ class CustomerAddressSerializer(serializers.Serializer):
     city = serializers.CharField(max_length=120)
     region = serializers.CharField(max_length=120)
     pin_code = serializers.RegexField(r"^[1-9]\d{5}$")
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    location_accuracy_meters = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    location_source = serializers.ChoiceField(choices=("MANUAL", "DEVICE"), required=False)
 
 
 class CustomerRegistrationSerializer(serializers.Serializer):

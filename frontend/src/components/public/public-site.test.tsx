@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient,QueryClientProvider } from "@tanstack/react-query";
 
@@ -23,6 +23,9 @@ describe("public website", () => {
 
   it("provides keyboard-accessible mobile navigation", async () => {
     render(<PublicHeader />);
+    const customerAccess = screen.getByRole("navigation", { name: "Customer access" });
+    expect(within(customerAccess).getByRole("link", { name: "Login" })).toHaveAttribute("href", "/customer-login");
+    expect(within(customerAccess).getByRole("link", { name: "Register" })).toHaveAttribute("href", "/customer-register");
     const toggle = screen.getByRole("button", { name: /toggle navigation/i });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);
@@ -63,8 +66,10 @@ describe("public website", () => {
     expect(screen.getByRole("heading",{name:"7 Session Plan"})).toBeInTheDocument();
     expect(screen.getByText("Thoughtful home service")).toBeInTheDocument();
     const bookingLinks=screen.getAllByRole("link",{name:"Book Appointment"});
-    expect(bookingLinks).toHaveLength(1);
-    expect(bookingLinks[0]).toHaveAttribute("href","/customer-access?returnTo=%2Fbook-appointment");
+    expect(bookingLinks).toHaveLength(2);
+    for (const bookingLink of bookingLinks) expect(bookingLink).toHaveAttribute("href","/customer-access?returnTo=%2Fbook-appointment");
+    expect(screen.getAllByRole("link", { name: "Customer Login" }).length).toBeGreaterThanOrEqual(2);
+    for (const registerLink of screen.getAllByRole("link", { name: "Register" })) expect(registerLink).toHaveAttribute("href", "/customer-register");
     expect(screen.getByRole("link",{name:"Explore Therapies"})).toHaveAttribute("href","#therapies");
     const therapistsHeading=screen.getByRole("heading",{name:"Available Therapists"});
     expect(screen.getByRole("heading",{name:"Kati Basti"}).compareDocumentPosition(therapistsHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

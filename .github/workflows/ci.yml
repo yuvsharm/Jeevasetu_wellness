@@ -35,6 +35,10 @@ jobs:
           DJANGO_CSRF_TRUSTED_ORIGINS: https://app.example.test
           DATABASE_URL: postgresql://check_user:check_password@db.example.test:5432/check_db
           REDIS_URL: rediss://redis.example.test:6379/0
+          MSG91_ENABLED: "true"
+          MSG91_WIDGET_ID: ci-widget-id
+          MSG91_WIDGET_TOKEN: ci-widget-token
+          MSG91_AUTH_KEY: ci-auth-key
         run: python manage.py check --deploy --settings=config.settings.production
       - name: Validate OpenAPI schema
         run: python manage.py spectacular --settings=config.settings.test --validate --file openapi.yaml

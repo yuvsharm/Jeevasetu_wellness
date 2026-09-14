@@ -37,6 +37,10 @@ class PatientAddressSerializer(serializers.ModelSerializer):
             "city",
             "region",
             "pin_code",
+            "latitude",
+            "longitude",
+            "location_accuracy_meters",
+            "location_source",
             "is_primary",
             "is_active",
         )
@@ -268,6 +272,10 @@ class CustomerSelfProfileUpdateSerializer(serializers.Serializer):
     city = serializers.CharField(max_length=120, required=False)
     region = serializers.CharField(max_length=120, required=False)
     pin_code = serializers.RegexField(r"^[1-9]\d{5}$", required=False)
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    location_accuracy_meters = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    location_source = serializers.ChoiceField(choices=PatientAddress.LocationSource.choices, required=False)
 
     def validate_date_of_birth(self, value):
         from datetime import date

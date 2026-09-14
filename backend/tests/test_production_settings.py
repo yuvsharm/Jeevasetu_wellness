@@ -7,6 +7,9 @@ import pytest
 
 def load_production_settings(extra_environment, command=None):
     environment = os.environ.copy()
+    # This helper verifies the production default derived from REDIS_URL. Local Docker
+    # exports an explicit override that must not leak into the isolated subprocess.
+    environment.pop("AUTH_RATE_LIMIT_REDIS_URL", None)
     environment.update(extra_environment)
     environment["DJANGO_SETTINGS_MODULE"] = "config.settings.production"
     return subprocess.run(

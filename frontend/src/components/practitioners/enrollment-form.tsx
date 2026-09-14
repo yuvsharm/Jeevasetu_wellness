@@ -10,6 +10,8 @@ import { ClientApiError, requestJson } from "@/lib/api/client";
 import type { TherapyOption } from "@/lib/appointments/contracts";
 import type { PractitionerApplication } from "@/lib/practitioners/contracts";
 import { SecureDocumentCard } from "@/components/practitioners/secure-document-card";
+import { AddressCapture } from "@/components/location/address-capture";
+import { emptyServiceAddress, type ServiceAddress } from "@/lib/location/contracts";
 
 const steps = [
   "Personal",
@@ -85,6 +87,7 @@ function payload(data: Record<string, unknown>, step: number) {
   );
   return {
     ...editable,
+    current_address: [data.current_address, data.address_line_2, data.landmark].map((value) => String(value ?? "").trim()).filter(Boolean).join(", "),
     date_of_birth: data.date_of_birth || null,
     passing_year: data.passing_year || null,
     registration_expiry: data.registration_expiry || null,
@@ -306,6 +309,28 @@ export function EnrollmentForm() {
     setData((current) => ({ ...current, [name]: value }));
     setDirty(true);
   }
+  const applicationAddress: ServiceAddress = {
+    ...emptyServiceAddress(),
+    address_line_1: String(data.current_address ?? ""),
+    address_line_2: String(data.address_line_2 ?? ""),
+    landmark: String(data.landmark ?? ""),
+    city: String(data.city ?? ""),
+    region: String(data.state ?? ""),
+    pin_code: String(data.pin_code ?? ""),
+  };
+  function changeApplicationAddress(next: ServiceAddress) {
+    autosaveBlocked.current = false;
+    setData((current) => ({
+      ...current,
+      current_address: next.address_line_1,
+      address_line_2: next.address_line_2,
+      landmark: next.landmark,
+      city: next.city,
+      state: next.region,
+      pin_code: next.pin_code,
+    }));
+    setDirty(true);
+  }
   function retrySave() {
     autosaveBlocked.current = false;
     save.mutate(step);
@@ -472,12 +497,9 @@ export function EnrollmentForm() {
                   Separate languages with commas.
                 </span>
               </label>
-              <div className="sm:col-span-2">
-                {field("current_address", "Current address *")}
+              <div className="min-w-0 sm:col-span-2">
+                <AddressCapture value={applicationAddress} onChange={changeApplicationAddress} title="Private base address" />
               </div>
-              {field("city", "City *")}
-              {field("state", "State *")}
-              {field("pin_code", "PIN code *")}
             </fieldset>
           )}
           {step === 1 && (

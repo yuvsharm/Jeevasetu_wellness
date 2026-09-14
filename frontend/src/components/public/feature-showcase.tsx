@@ -19,7 +19,7 @@ export function FeatureCard({ feature, duplicate = false }: { feature: PublicFea
 export function FeatureShowcase() {
   const features = enabledPublicFeatures();
   return <section className="showcase-section" aria-labelledby="feature-showcase-title">
-    <div className="site-container"><p className="eyebrow">Experience JeevaSetu</p><div className="mt-4 grid gap-5 lg:grid-cols-[1fr_.8fr] lg:items-end"><h2 id="feature-showcase-title" className="font-serif text-4xl leading-tight text-[#103c27] sm:text-5xl">Home wellness meets a structured care journey.</h2><p className="max-w-xl text-base leading-7 text-[#5b6c63]">JeevaSetu connects home-service wellness and physiotherapy with clear booking, reviewed practitioners, visit verification, and thoughtful digital coordination.</p></div></div>
+    <div className="site-container"><p className="eyebrow">Experience JeevaSetu</p><div className="mt-4 grid gap-5 lg:grid-cols-[1fr_.8fr] lg:items-end"><h2 id="feature-showcase-title" className="font-serif text-4xl leading-tight text-[#103c27] sm:text-5xl">Home wellness meets a structured care journey.</h2><p className="max-w-xl text-base leading-7 text-[#5b6c63]">JeevaSetu connects home-service wellness and physiotherapy with clear booking, reviewed practitioners, and thoughtful digital coordination.</p></div></div>
     <div className="showcase-viewport mt-10" aria-label="JeevaSetu features"><div className="showcase-track"><div className="showcase-group">{features.map((feature) => <FeatureCard feature={feature} key={feature.slug}/>)}</div><div className="showcase-group" aria-hidden="true">{features.map((feature) => <FeatureCard feature={feature} duplicate key={`duplicate-${feature.slug}`}/>)}</div></div></div>
   </section>;
 }

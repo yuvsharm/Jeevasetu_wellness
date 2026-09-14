@@ -5,9 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { useSession } from "@/components/auth/session-provider";
+import { AddressCapture } from "@/components/location/address-capture";
 import { ClientApiError, requestJson } from "@/lib/api/client";
 import type { AppointmentRequest, CommercialCatalog, CommercialQuote } from "@/lib/appointments/contracts";
 import { activeRoles } from "@/lib/auth/roles";
+import { emptyServiceAddress, type ServiceAddress } from "@/lib/location/contracts";
 
 type FamilyMember = { id: string; full_name: string; age: number; gender: string; relationship: string };
 type AvailableSlot = { value: string; label: string };
@@ -37,6 +39,10 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   const [addingFamily, setAddingFamily] = useState(false);
   const [familyDraft, setFamilyDraft] = useState({ full_name: "", age: "", gender: "", relationship: "" });
   const [submitted, setSubmitted] = useState<AppointmentRequest | null>(null);
+  const [differentAddress, setDifferentAddress] = useState(false);
+  const [serviceAddress, setServiceAddress] = useState<ServiceAddress>(emptyServiceAddress());
+  const [savePrimaryAddress, setSavePrimaryAddress] = useState(false);
+  const [serviceAddressConfirmed, setServiceAddressConfirmed] = useState(false);
 
   const intended = `${pathname}${search.toString() ? `?${search.toString()}` : ""}`;
   useEffect(() => {
@@ -55,6 +61,11 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   const familyQuery = useQuery({
     queryKey: ["customer-family"],
     queryFn: () => requestJson<FamilyMember[]>("/api/customer/family"),
+    enabled: customer,
+  });
+  const profileQuery = useQuery({
+    queryKey: ["customer-profile"],
+    queryFn: () => requestJson<{address:ServiceAddress|null}>("/api/customer/profile"),
     enabled: customer,
   });
   const catalog = catalogQuery.data;
@@ -143,6 +154,7 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
         preferred_date: preferredDate,
         preferred_time: preferredTime,
         pain_area: painArea.trim(),
+        ...(differentAddress ? { service_address: serviceAddress, save_as_primary_address: savePrimaryAddress } : {}),
       }),
     }),
     onSuccess: setSubmitted,
@@ -172,6 +184,9 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   return <form className="card space-y-7 p-5 sm:p-8" onSubmit={(event) => { event.preventDefault(); submit.mutate(); }}>
     <div><p className="eyebrow">Authenticated booking</p><h2 className="mt-2 font-serif text-3xl text-[#103c27]">Choose care and a preferred slot</h2><p className="mt-2 text-sm text-[#5b6c63]">Your verified profile and primary service address will be used automatically.</p></div>
 
+    <section className="rounded-2xl border border-slate-200 p-4" aria-label="Booking service address"><h3 className="font-semibold text-[#163c2a]">Service address</h3>{profileQuery.isPending?<p className="mt-2 text-sm text-slate-600">Loading your primary service address…</p>:profileQuery.data?.address?<p className="mt-2 text-sm">{profileQuery.data.address.address_line_1}, {profileQuery.data.address.city}, {profileQuery.data.address.region} {profileQuery.data.address.pin_code}</p>:<p className="mt-2 text-sm text-amber-800">Your primary address could not be loaded.</p>}<label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={differentAddress} onChange={event=>{const checked=event.target.checked;setDifferentAddress(checked);setServiceAddressConfirmed(false);if(checked)setServiceAddress(profileQuery.data?.address??emptyServiceAddress());else setSavePrimaryAddress(false)}}/>Use a different location for this booking</label></section>
+    {differentAddress&&<><AddressCapture value={serviceAddress} onChange={setServiceAddress} title="One-time Service Address" onConfirmedChange={setServiceAddressConfirmed}/><label className="flex items-center gap-2"><input type="checkbox" checked={savePrimaryAddress} onChange={event=>setSavePrimaryAddress(event.target.checked)}/>Save this as my primary service address</label></>}
+
     {selectedOffer && <aside aria-label="Offer Summary" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-sm font-bold uppercase tracking-wide text-emerald-800">Offer: {selectedOffer.title}</p><p className="mt-1 text-xl font-bold text-[#103c27]">{offerBenefit}</p><p className="mt-1 font-semibold">Minimum required: {selectedOffer.minimum_therapy_count} eligible therapies</p><p className="mt-3">{eligibleSelectedCount} of {selectedOffer.minimum_therapy_count} therapies selected</p><p className={remainingTherapies ? "font-semibold text-amber-900" : "font-semibold text-emerald-800"}>{remainingTherapies ? `Select ${remainingTherapies} more eligible ${remainingTherapies === 1 ? "therapy" : "therapies"} to unlock this offer.` : `✓ Offer unlocked — ${offerBenefit.toLowerCase()} applied`}</p></aside>}
     <fieldset><legend className="font-semibold text-[#163c2a]">Therapy / therapies</legend><div className="mt-3 grid gap-3 sm:grid-cols-2">{catalog?.therapies.map((therapy) => { const selected = effectiveTherapies.includes(therapy.id); return <button type="button" key={therapy.id} aria-pressed={selected} onClick={() => { setSelectedTherapies(selected ? effectiveTherapies.filter((value) => value !== therapy.id) : [...effectiveTherapies, therapy.id]); setPreferredTime(""); }} className={`rounded-xl border p-4 text-left ${selected ? "border-emerald-700 bg-emerald-50" : "border-slate-200"}`}><span className="font-semibold">{therapy.name}</span><span className="mt-1 block text-sm text-slate-600">₹{Number(therapy.base_price ?? 0).toLocaleString("en-IN")}</span></button>; })}</div></fieldset>
 
@@ -197,7 +212,7 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
     {quoteQuery.isError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{queryErrorMessage(quoteQuery.error)}</p>}
     {quoteQuery.data && <div className="rounded-xl bg-[#f7f3e9] p-4"><p className="font-semibold text-[#163c2a]">{selectedNames.join(" + ")}</p><p className="mt-2 text-sm">Duration: {quoteQuery.data.duration_minutes} minutes</p><p className="mt-1 text-xl font-bold text-emerald-800">₹{Number(quoteQuery.data.final_amount).toLocaleString("en-IN")}</p>{Number(quoteQuery.data.discount_amount) > 0 && <p className="text-sm text-slate-600">You save ₹{Number(quoteQuery.data.discount_amount).toLocaleString("en-IN")}</p>}</div>}
     {(error || createFamily.error) && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error || (createFamily.error instanceof Error ? createFamily.error.message : "The patient could not be added.")}</p>}
-    <button disabled={submit.isPending || offerUnavailable || dateOutsideOfferWindow || !offerUnlocked || !effectiveTherapies.length || !preferredDate || !preferredTime || quoteQuery.isPending || quoteQuery.isError} className="button-primary w-full disabled:opacity-50">{submit.isPending ? "Booking…" : "Confirm Book Appointment"}</button>
+    <button disabled={submit.isPending || offerUnavailable || dateOutsideOfferWindow || !offerUnlocked || !effectiveTherapies.length || !preferredDate || !preferredTime || quoteQuery.isPending || quoteQuery.isError || (differentAddress&&!serviceAddressConfirmed)} className="button-primary w-full disabled:opacity-50">{submit.isPending ? "Booking…" : "Confirm Book Appointment"}</button>
     {submit.error instanceof ClientApiError && submit.error.fieldErrors && <ul className="text-sm text-red-700">{Object.values(submit.error.fieldErrors).map((value) => <li key={value}>{value}</li>)}</ul>}
   </form>;
 }

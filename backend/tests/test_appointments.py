@@ -153,6 +153,30 @@ def test_authenticated_booking_requires_customer_not_therapist_availability_or_s
     assert api_client.post(url, data, format="json", **headers).status_code == 400
 
 
+def test_authenticated_booking_snapshots_one_time_location_without_replacing_primary_by_default(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    primary = PatientAddress.objects.get(patient__user=customer, is_primary=True)
+    api_client.force_authenticate(customer)
+    address = {
+        "address_line_1": "42 Test Lane", "address_line_2": "Floor 2", "landmark": "Clock tower",
+        "city": "Meerut", "region": "Uttar Pradesh", "pin_code": "250001",
+        "latitude": "28.613900", "longitude": "77.209000",
+        "location_accuracy_meters": 171, "location_source": "DEVICE",
+    }
+    created = api_client.post(
+        reverse("quick-appointment-create"),
+        authenticated_payload(therapy, service_address=address),
+        format="json", **tenant(organization.slug),
+    )
+    assert created.status_code == 201
+    request_value = AppointmentRequest.objects.get(pk=created.data["id"])
+    assert request_value.address == "42 Test Lane Floor 2"
+    assert request_value.location_accuracy_meters == 171
+    assert request_value.location_source == "DEVICE"
+    primary.refresh_from_db()
+    assert primary.address_line_1 == "163 C Block"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_concurrent_customer_requests_allow_distinct_customers_and_deduplicate_retries():
     if connection.vendor != "postgresql":
@@ -395,7 +419,9 @@ def test_owner_searches_and_updates_tenant_requests(api_client):
         {"search": "Asha", "status": "PENDING"},
         **tenant(organization.slug),
     )
-    assert listed.status_code == 200 and len(listed.data) == 1
+    assert listed.status_code == 200
+    assert listed.data["count"] == 1
+    assert len(listed.data["results"]) == 1
     updated = api_client.patch(
         reverse("appointment-owner-detail", args=[request_value.id]),
         {"status": "APPROVED", "owner_remarks": "Confirmed by owner."},
@@ -421,7 +447,9 @@ def test_manager_searches_and_updates_tenant_requests(api_client):
         {"search": "Asha", "status": "PENDING"},
         **tenant(organization.slug),
     )
-    assert listed.status_code == 200 and len(listed.data) == 1
+    assert listed.status_code == 200
+    assert listed.data["count"] == 1
+    assert len(listed.data["results"]) == 1
     updated = api_client.patch(
         reverse("appointment-owner-detail", args=[request_value.id]),
         {"status": "APPROVED", "owner_remarks": "Confirmed by manager."},

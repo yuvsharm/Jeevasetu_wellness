@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
+import { OtpInput, OtpResendButton } from "@/components/auth/otp-input";
 import { requestJson } from "@/lib/api/client";
 import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
 
@@ -69,7 +70,7 @@ export function CustomerPasswordReset({context="customer"}:{context?:"customer"|
     {stage!=="mobile"&&<button type="button" disabled={busy} className="button-secondary" onClick={()=>{setStage("mobile");setAccessToken("");setOtp("");setPassword("");setConfirm("");setError("")}}>Change mobile number / Start again</button>}
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {stage === "mobile" && <><label className="grid gap-2 font-semibold text-slate-800">Mobile number<input inputMode="tel" autoComplete="tel" maxLength={13} value={mobile} onChange={(event) => setMobile(normalizeMobile(event.target.value))} className="min-h-12 rounded-xl border border-slate-300 px-4" required /></label><button disabled={busy || mobile.length !== 10} onClick={send} className="button-primary w-full disabled:opacity-50">{busy ? "Sending…" : "Send OTP"}</button></>}
-    {stage === "otp" && <><label className="grid gap-2 font-semibold text-slate-800">One-time password<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4 tracking-[0.4em]" /></label><button disabled={busy || otp.length !== 6} onClick={verify} className="button-primary w-full disabled:opacity-50">{busy ? "Verifying…" : "Verify mobile"}</button><button disabled={busy} onClick={send} className="button-secondary w-full">Resend OTP</button></>}
+    {stage === "otp" && <><OtpInput value={otp} onChange={setOtp} mobileNumber={mobile}/><button disabled={busy || otp.length !== 6} onClick={verify} className="button-primary w-full disabled:opacity-50">{busy ? "Verifying…" : "Verify mobile"}</button><OtpResendButton busy={busy} onResend={send}/></>}
     {stage === "password" && <form className="space-y-5" onSubmit={reset}><PasswordCreationFields password={password} confirmPassword={confirm} onPasswordChange={setPassword} onConfirmPasswordChange={setConfirm} passwordLabel="New password" confirmLabel="Confirm new password"/><button disabled={busy || !isStrongPassword(password) || password !== confirm} className="button-primary w-full disabled:opacity-50">{busy ? "Resetting…" : "Reset password"}</button></form>}
   </div>;
 }

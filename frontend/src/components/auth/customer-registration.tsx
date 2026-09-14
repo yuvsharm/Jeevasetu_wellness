@@ -5,19 +5,19 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { isStrongPassword, PasswordCreationFields } from "@/components/auth/password-creation-fields";
+import { OtpInput, OtpResendButton } from "@/components/auth/otp-input";
+import { AddressCapture } from "@/components/location/address-capture";
 import { requestJson } from "@/lib/api/client";
 import { loadOtpWidgetConfig, sendMsg91Otp, verifyMsg91Otp, type OtpWidgetConfig } from "@/lib/auth/msg91-widget";
+import { emptyServiceAddress, isCompleteServiceAddress } from "@/lib/location/contracts";
 
 type Details = {
   full_name: string; age: string; gender: string; mobile_number: string; email: string;
-  address_line_1: string; address_line_2: string; landmark: string; city: string;
-  region: string; pin_code: string;
 };
 type Stage = "details" | "otp" | "secure";
 
 const initial: Details = {
-  full_name: "", age: "", gender: "", mobile_number: "", email: "", address_line_1: "",
-  address_line_2: "", landmark: "", city: "Meerut", region: "Uttar Pradesh", pin_code: "",
+  full_name: "", age: "", gender: "", mobile_number: "", email: "",
 };
 
 function safeReturnTo(value: string | null) {
@@ -29,6 +29,8 @@ export function CustomerRegistration() {
   const search = useSearchParams();
   const returnTo = safeReturnTo(search.get("returnTo"));
   const [details, setDetails] = useState(initial);
+  const [address, setAddress] = useState({ ...emptyServiceAddress(), city: "Meerut", region: "Uttar Pradesh" });
+  const [addressConfirmed, setAddressConfirmed] = useState(false);
   const [stage, setStage] = useState<Stage>("details");
   const [verificationId, setVerificationId] = useState("");
   const [verificationToken, setVerificationToken] = useState("");
@@ -69,8 +71,10 @@ export function CustomerRegistration() {
     if (!/^\d{1,3}$/.test(details.age) || Number(details.age) > 120) return "Enter a valid age.";
     if (!details.gender) return "Select your gender.";
     if (!/^[6-9]\d{9}$/.test(details.mobile_number)) return "Enter a valid 10-digit Indian mobile number.";
-    if (details.address_line_1.trim().length < 5 || !details.city.trim() || !details.region.trim()) return "Enter your complete address.";
-    if (!/^[1-9]\d{5}$/.test(details.pin_code)) return "Enter a valid PIN code.";
+    if (!address.address_line_1.trim() || !address.city.trim() || !address.region.trim()) return "Enter your complete address.";
+    if (!/^[1-9]\d{5}$/.test(address.pin_code.trim())) return "Enter a valid PIN code.";
+    if (!isCompleteServiceAddress(address)) return "Enter your complete address.";
+    if (!addressConfirmed) return "Review and confirm your service address.";
     if (Number(details.age) < 18) return "A parent or legal guardian must register and add a minor as a family member.";
     return "";
   }
@@ -114,8 +118,7 @@ export function CustomerRegistration() {
         booking_verification_token: verificationToken, mobile_number: details.mobile_number,
         full_name: details.full_name, email: details.email, password, confirm_password: confirmPassword,
         age: Number(details.age), gender: details.gender,
-        address: { address_line_1: details.address_line_1, address_line_2: details.address_line_2,
-          landmark: details.landmark, city: details.city, region: details.region, pin_code: details.pin_code },
+        address,
       };
       const body=new FormData();body.append("payload",JSON.stringify(payload));if(photo)body.append("profile_photo",photo);
       await requestJson("/api/session/customer-register", {
@@ -140,19 +143,24 @@ export function CustomerRegistration() {
     </ol>
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {stage === "details" && <>
-      <div className="rounded-2xl border border-slate-200 p-4"><p className="font-semibold text-slate-800">Profile photo <span className="font-normal text-slate-500">(optional)</span></p><div className="mt-3 flex flex-wrap items-center gap-4">{photoPreview?<img src={photoPreview} alt="Selected profile preview" className="size-24 rounded-full object-cover"/>:<span className="flex size-24 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-800" aria-label="Profile initials">{details.full_name.trim().charAt(0).toUpperCase()||"C"}</span>}<div className="grid gap-2"><label className="button-secondary cursor-pointer">{photo?"Replace photo":"Choose photo"}<input aria-label="Profile photo" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={e=>choosePhoto(e.target.files?.[0]??null)}/></label>{photo&&<button type="button" className="text-left font-semibold text-red-700" onClick={()=>setPhoto(null)}>Remove selected photo</button>}<p className="text-xs text-slate-500">JPG, PNG or WebP, up to 2 MB. You can skip this.</p></div></div></div>
+      <div className="rounded-2xl border border-slate-200 p-4"><p className="font-semibold text-slate-800">Profile photo <span className="font-normal text-slate-500">(optional)</span></p><div className="mt-3 flex flex-wrap items-center gap-4">{photoPreview?<img src={photoPreview} alt="Selected profile preview" className="size-24 rounded-full object-cover"/>:<span className="flex size-24 items-center justify-center rounded-full bg-emerald-100 text-2xl font-bold text-emerald-800" aria-label="Profile initials">{details.full_name.trim().charAt(0).toUpperCase()||"C"}</span>}<div className="grid gap-2"><label className="button-secondary cursor-pointer">{photo?"Replace photo":"Choose photo"}<input aria-label="Profile photo" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only !w-px !max-w-px" onChange={e=>choosePhoto(e.target.files?.[0]??null)}/></label>{photo&&<button type="button" className="text-left font-semibold text-red-700" onClick={()=>setPhoto(null)}>Remove selected photo</button>}<p className="text-xs text-slate-500">JPG, PNG or WebP, up to 2 MB. You can skip this.</p></div></div></div>
       {input("full_name", "Full name")}
       <div className="grid gap-5 sm:grid-cols-2">{input("age", "Age", { type: "number" })}<label className="grid gap-2 font-semibold text-slate-800">Gender<select value={details.gender} onChange={(event) => update("gender", event.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-4 font-normal" required><option value="">Select gender</option><option value="FEMALE">Female</option><option value="MALE">Male</option><option value="OTHER">Other</option><option value="PREFER_NOT_TO_SAY">Prefer not to say</option></select></label></div>
       {input("mobile_number", "Mobile number", { type: "tel", maxLength: 10 })}{input("email", "Email (optional)", { type: "email" })}
-      {input("address_line_1", "Address")}{input("address_line_2", "Address line 2 (optional)")}{input("landmark", "Landmark (optional)")}
-      <div className="grid gap-5 sm:grid-cols-2">{input("city", "City")}{input("region", "State / region")}</div>{input("pin_code", "PIN code", { maxLength: 6 })}
+      <AddressCapture
+        value={address}
+        onChange={(next) => { setAddress(next); setError(""); }}
+        title="Service Address"
+        initiallyExpanded={false}
+        onConfirmedChange={(confirmed) => { setAddressConfirmed(confirmed); if (confirmed) setError(""); }}
+      />
       <button type="button" disabled={busy} onClick={send} className="button-primary w-full disabled:opacity-50">{busy ? "Sending…" : "Send OTP"}</button>
     </>}
     {stage === "otp" && <>
       <p className="text-sm text-slate-600">Enter the OTP sent to your mobile number.</p>
-      <label className="grid gap-2 font-semibold text-slate-800">One-time password<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))} className="min-h-12 rounded-xl border border-slate-300 px-4 tracking-[0.4em]" /></label>
+      <OtpInput value={otp} onChange={setOtp} mobileNumber={details.mobile_number}/>
       <button type="button" disabled={busy || otp.length !== 6} onClick={verifyMobile} className="button-primary w-full disabled:opacity-50">{busy ? "Verifying…" : "Verify Mobile"}</button>
-      <button type="button" disabled={busy} onClick={send} className="button-secondary w-full disabled:opacity-50">Resend OTP</button>
+      <OtpResendButton busy={busy} onResend={send}/>
       <button type="button" onClick={() => invalidateVerification()} className="min-h-11 w-full font-semibold text-emerald-800">Edit details</button>
     </>}
     {stage === "secure" && <form className="space-y-5" onSubmit={createAccount}>

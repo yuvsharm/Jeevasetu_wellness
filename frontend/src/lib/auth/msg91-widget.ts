@@ -20,20 +20,6 @@ let scriptPromise: Promise<void> | undefined;
 const widgetStates = new WeakMap<object, WidgetState>();
 const SDK_READY_TIMEOUT_MS = 5000;
 
-function describeCallbackValue(stage: string, value: unknown) {
-  if (process.env.NODE_ENV === "production") return;
-  const match = findAccessToken(value);
-  console.info("msg91_otp_callback", {
-    stage,
-    valueType: Array.isArray(value) ? "array" : typeof value,
-    topLevelKeys: value && typeof value === "object" && !Array.isArray(value)
-      ? Object.keys(value)
-      : [],
-    jwtLikeTokenFound: Boolean(match),
-    tokenPath: match?.path ?? "absent",
-  });
-}
-
 export async function loadOtpWidgetConfig(): Promise<OtpWidgetConfig> {
   const response = await fetch("/api/otp-widget/config", { cache: "no-store" });
   if (!response.ok) throw new Error("Mobile verification is temporarily unavailable.");
@@ -91,7 +77,6 @@ async function initialize(config: Extract<OtpWidgetConfig, { enabled: true }>) {
         const api = window as Msg91Window;
         if (!api.initSendOTP) throw new Error("MSG91 SDK is unavailable.");
         const success: Callback = (data) => {
-          describeCallbackValue("initialization_success", data);
           const accessToken = findAccessToken(data);
           if (accessToken) currentState.accessToken = accessToken.token;
           currentState.pendingSuccess?.(data);
@@ -155,7 +140,6 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
       5000,
     );
     const success: Callback = (data) => {
-      describeCallbackValue("verify_method_success", data);
       const token = state.accessToken ?? findAccessToken(data)?.token;
       if (token) {
         window.clearTimeout(timeout);
@@ -168,12 +152,7 @@ export async function verifyMsg91Otp(config: Extract<OtpWidgetConfig, { enabled:
     };
     state.pendingSuccess = success;
     state.pendingFailure = failure;
-    const returned = api.verifyOtp?.(otp, success, failure);
-    if (process.env.NODE_ENV !== "production") {
-      console.info("msg91_otp_verify_invoked", {
-        returnType: returned instanceof Promise ? "promise" : typeof returned,
-      });
-    }
+    api.verifyOtp?.(otp, success, failure);
   }).finally(() => {
     state.pendingSuccess = undefined;
     state.pendingFailure = undefined;

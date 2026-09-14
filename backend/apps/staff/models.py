@@ -39,6 +39,10 @@ class ServiceArea(models.Model):
 
 
 class StaffProfile(models.Model):
+    class LocationSource(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        DEVICE = "DEVICE", "Device location"
+
     class Gender(models.TextChoices):
         FEMALE = "FEMALE", "Female"
         MALE = "MALE", "Male"
@@ -91,6 +95,12 @@ class StaffProfile(models.Model):
     current_address = models.CharField(max_length=500)
     city = models.CharField(max_length=120)
     pin_code = models.CharField(max_length=6, validators=[RegexValidator(r"^[1-9]\d{5}$")])
+    base_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    base_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    base_location_accuracy_meters = models.PositiveIntegerField(null=True, blank=True)
+    base_location_source = models.CharField(
+        max_length=12, choices=LocationSource.choices, default=LocationSource.MANUAL
+    )
     service_areas = models.ManyToManyField(ServiceArea, blank=True, related_name="staff_profiles")
     availability = models.CharField(
         max_length=16, choices=Availability.choices, default=Availability.UNAVAILABLE

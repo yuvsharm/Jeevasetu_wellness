@@ -206,12 +206,6 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
 
 LOG_LEVEL = env("DJANGO_LOG_LEVEL", default="INFO")
 
-VISIT_OTP_EXPIRY_MINUTES = env.int("VISIT_OTP_EXPIRY_MINUTES", default=15)
-VISIT_OTP_WINDOW_BEFORE_MINUTES = env.int("VISIT_OTP_WINDOW_BEFORE_MINUTES", default=60)
-VISIT_OTP_WINDOW_AFTER_MINUTES = env.int("VISIT_OTP_WINDOW_AFTER_MINUTES", default=120)
-VISIT_OTP_MAX_ATTEMPTS = env.int("VISIT_OTP_MAX_ATTEMPTS", default=5)
-VISIT_OTP_RATE_LIMIT_ATTEMPTS = env.int("VISIT_OTP_RATE_LIMIT_ATTEMPTS", default=10)
-VISIT_OTP_RATE_LIMIT_WINDOW_SECONDS = env.int("VISIT_OTP_RATE_LIMIT_WINDOW_SECONDS", default=300)
 BOOKING_OTP_DELIVERY_BACKEND = env(
     "BOOKING_OTP_DELIVERY_BACKEND",
     default="apps.appointments.booking_verification.DevBookingOtpDelivery",
@@ -226,6 +220,8 @@ MSG91_WIDGET_TOKEN = env("MSG91_WIDGET_TOKEN", default="")
 MSG91_AUTH_KEY = env("MSG91_AUTH_KEY", default="")
 MSG91_VERIFY_URL = env("MSG91_VERIFY_URL", default="https://api.msg91.com/api/v5/widget/verifyAccessToken")
 MSG91_TIMEOUT_SECONDS = env.float("MSG91_TIMEOUT_SECONDS", default=5.0)
+PAYMENT_UPI_ID = env("PAYMENT_UPI_ID", default="")
+PAYMENT_PAYEE_NAME = env("PAYMENT_PAYEE_NAME", default="")
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
