@@ -69,5 +69,8 @@ def dispatch_due_appointment_reminders():
             reminder.status = AppointmentReminder.Status.SENT
             reminder.sent_at = now
             reminder.save(update_fields=("status", "sent_at", "updated_at"))
+            from apps.appointments.notification_events import notify_due_reminder
+
+            notify_due_reminder(reminder)
             sent += 1
     return sent

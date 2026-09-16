@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { requestJson } from "@/lib/api/client";
 import type { OperationalAppointment } from "@/lib/appointments/contracts";
@@ -26,6 +26,10 @@ export function PractitionerVisitWorkflow() {
   const [therapyDelivered, setTherapyDelivered] = useState(false);
   const [paymentReceived, setPaymentReceived] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [paymentQrAppointment, setPaymentQrAppointment] = useState<OperationalAppointment | null>(null);
+  const paymentQrCloseRef = useRef<HTMLButtonElement>(null);
+  const paymentQrTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const completionSubmissionRef = useRef(false);
 
   const query = useQuery({
     queryKey: ["assigned-appointments"],
@@ -46,10 +50,10 @@ export function PractitionerVisitWorkflow() {
     },
   });
   const journey = useMutation({
-    mutationFn: (id: string) =>
-      requestJson(`/api/schedule/${id}/journey`, {
+    mutationFn: (value: { id: string; journeyStatus: "EN_ROUTE" | "REACHED" }) =>
+      requestJson(`/api/schedule/${value.id}/journey`, {
         method: "POST",
-        body: JSON.stringify({ journey_status: "EN_ROUTE" }),
+        body: JSON.stringify({ journey_status: value.journeyStatus }),
       }),
     onSuccess: refresh,
   });
@@ -63,22 +67,39 @@ export function PractitionerVisitWorkflow() {
   });
   const completion = useMutation({
     mutationFn: (id: string) =>
-      requestJson(`/api/schedule/${id}/complete-and-confirm-payment`, {
+      requestJson<OperationalAppointment>(`/api/schedule/${id}/complete-and-confirm-payment`, {
         method: "POST",
         body: JSON.stringify({ therapy_delivered: true, payment_received: true }),
       }),
-    onSuccess: () => {
+    onSuccess: async (updatedAppointment) => {
+      client.setQueryData<OperationalAppointment[]>(["assigned-appointments"], (current) =>
+        current?.map((item) => item.id === updatedAppointment.id ? updatedAppointment : item),
+      );
       setConfirming(null);
       setTherapyDelivered(false);
       setPaymentReceived(false);
-      refresh();
+      await client.invalidateQueries({ queryKey: ["assigned-appointments"], refetchType: "active" });
     },
+    onSettled: () => { completionSubmissionRef.current = false; },
   });
 
   const openConfirmation = (id: string) => {
+    if (completion.isPending || completionSubmissionRef.current) return;
+    completion.reset();
     setTherapyDelivered(false);
     setPaymentReceived(false);
     setConfirming(id);
+  };
+  const submitCompletion = () => {
+    if (
+      !confirming
+      || !therapyDelivered
+      || !paymentReceived
+      || completion.isPending
+      || completionSubmissionRef.current
+    ) return;
+    completionSubmissionRef.current = true;
+    completion.mutate(confirming);
   };
   const copyUpiId = async () => {
     try {
@@ -89,6 +110,25 @@ export function PractitionerVisitWorkflow() {
       setCopyState("error");
     }
   };
+  const openPaymentQr = (item: OperationalAppointment, trigger: HTMLButtonElement) => {
+    paymentQrTriggerRef.current = trigger;
+    setCopyState("idle");
+    setPaymentQrAppointment(item);
+  };
+  const closePaymentQr = () => {
+    setPaymentQrAppointment(null);
+    window.setTimeout(() => paymentQrTriggerRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    if (!paymentQrAppointment) return;
+    paymentQrCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closePaymentQr();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [paymentQrAppointment]);
 
   const items =
     query.data?.slice().sort((a, b) => Date.parse(a.scheduled_start) - Date.parse(b.scheduled_start)) ??
@@ -158,6 +198,8 @@ export function PractitionerVisitWorkflow() {
                       ? "Appointment completed successfully"
                       : item.status === "IN_PROGRESS"
                         ? "THERAPY IN PROGRESS"
+                        : item.journey_status === "REACHED"
+                          ? "REACHED"
                         : item.journey_status === "EN_ROUTE"
                           ? "EN ROUTE"
                           : "THERAPIST ACCEPTED"
@@ -166,11 +208,19 @@ export function PractitionerVisitWorkflow() {
               </dl>
               <div className="mt-4 flex flex-wrap gap-2">
                 {item.status === "CONFIRMED" && item.journey_status === "NOT_STARTED" && (
-                  <button onClick={() => journey.mutate(item.id)} className="button-primary">
+                  <button onClick={() => journey.mutate({ id: item.id, journeyStatus: "EN_ROUTE" })} className="button-primary">
                     En Route
                   </button>
                 )}
                 {item.status === "CONFIRMED" && item.journey_status === "EN_ROUTE" && (
+                  <button
+                    onClick={() => journey.mutate({ id: item.id, journeyStatus: "REACHED" })}
+                    className="button-primary"
+                  >
+                    Reached
+                  </button>
+                )}
+                {item.status === "CONFIRMED" && item.journey_status === "REACHED" && (
                   <button
                     onClick={() => lifecycle.mutate({ id: item.id, status: "IN_PROGRESS" })}
                     className="button-primary"
@@ -201,8 +251,7 @@ export function PractitionerVisitWorkflow() {
               ) : (
                 <PaymentToOwner
                   item={item}
-                  copyState={copyState}
-                  onCopy={copyUpiId}
+                  onShowQr={(trigger) => openPaymentQr(item, trigger)}
                   onConfirm={() => openConfirmation(item.id)}
                   confirmationPending={completion.isPending}
                 />
@@ -275,6 +324,7 @@ export function PractitionerVisitWorkflow() {
                 <input
                   type="checkbox"
                   checked={therapyDelivered}
+                  disabled={completion.isPending}
                   onChange={(event) => setTherapyDelivered(event.target.checked)}
                   className="mt-1 size-5"
                 />
@@ -284,6 +334,7 @@ export function PractitionerVisitWorkflow() {
                 <input
                   type="checkbox"
                   checked={paymentReceived}
+                  disabled={completion.isPending}
                   onChange={(event) => setPaymentReceived(event.target.checked)}
                   className="mt-1 size-5"
                 />
@@ -301,20 +352,70 @@ export function PractitionerVisitWorkflow() {
               </button>
               <button
                 type="button"
-                onClick={() => completion.mutate(confirming)}
+                onClick={submitCompletion}
                 disabled={!therapyDelivered || !paymentReceived || completion.isPending}
                 className="button-primary"
               >
                 {completion.isPending ? "Confirming…" : "Confirm Completion & Payment"}
               </button>
             </div>
+            {completion.isError && <p role="alert" className="mt-3 text-red-700">{completion.error.message === "Something went wrong. Please try again." ? "Completion and payment could not be recorded. Please retry. If the problem continues, contact JeevaSetu support." : completion.error.message}</p>}
           </div>
         </div>
       )}
 
-      {(respond.error || journey.error || lifecycle.error || completion.error) && (
+      {paymentQrAppointment && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payment-qr-dialog-title"
+          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/50 p-3 sm:p-6"
+        >
+          <section className="relative my-auto w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl sm:p-6">
+            <button
+              ref={paymentQrCloseRef}
+              type="button"
+              aria-label="Close payment QR"
+              onClick={closePaymentQr}
+              className="absolute right-3 top-3 flex size-11 items-center justify-center rounded-full border bg-white text-2xl font-bold text-slate-700"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+            <h3 id="payment-qr-dialog-title" className="pr-12 text-xl font-bold">Payment to JeevaSetu / Owner</h3>
+            <p className="mt-2 text-sm text-slate-600">Scan only for this appointment.</p>
+            <p className="mt-3 text-2xl font-black text-emerald-900">Amount: {formatAmount(paymentQrAppointment.payment_amount_due)}</p>
+            <div className="mx-auto mt-4 w-full max-w-80 overflow-hidden rounded-2xl bg-white">
+              <div className="relative aspect-[1012/1181] w-full overflow-hidden">
+                <Image
+                  src={OWNER_QR_PATH}
+                  alt="JeevaSetu owner UPI payment QR code"
+                  width={1012}
+                  height={1601}
+                  loading="eager"
+                  unoptimized
+                  className="absolute inset-x-0 h-auto w-full max-w-none"
+                  style={{ top: "-35.56%" }}
+                  sizes="(max-width: 640px) calc(100vw - 3.5rem), 20rem"
+                />
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl bg-slate-50 p-3">
+              <span className="block text-xs font-bold uppercase tracking-wide text-slate-500">UPI ID</span>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                <code className="break-all text-base font-bold text-slate-950">{OWNER_UPI_ID}</code>
+                <button type="button" onClick={copyUpiId} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">Copy</button>
+              </div>
+              {copyState === "copied" && <p role="status" className="mt-1 text-sm font-semibold text-emerald-800">UPI ID copied.</p>}
+              {copyState === "error" && <p role="alert" className="mt-1 text-sm text-red-700">Copy is unavailable. Select the UPI ID above.</p>}
+            </div>
+            <p className="mt-3 text-sm font-semibold text-amber-900">Opening or scanning this QR does not confirm payment.</p>
+          </section>
+        </div>
+      )}
+
+      {(respond.error || journey.error || lifecycle.error) && (
         <p role="alert" className="mt-4 text-red-700">
-          {(respond.error || journey.error || lifecycle.error || completion.error)?.message}
+          {(respond.error || journey.error || lifecycle.error)?.message}
         </p>
       )}
     </section>
@@ -323,14 +424,12 @@ export function PractitionerVisitWorkflow() {
 
 function PaymentToOwner({
   item,
-  copyState,
-  onCopy,
+  onShowQr,
   onConfirm,
   confirmationPending,
 }: {
   item: OperationalAppointment;
-  copyState: "idle" | "copied" | "error";
-  onCopy: () => void;
+  onShowQr: (trigger: HTMLButtonElement) => void;
   onConfirm: () => void;
   confirmationPending: boolean;
 }) {
@@ -339,39 +438,7 @@ function PaymentToOwner({
       aria-label="Payment to JeevaSetu owner"
       className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-3 sm:p-5"
     >
-      <h4 className="text-lg font-bold text-slate-950">Payment to JeevaSetu / Owner</h4>
-      <p className="mt-1 text-sm text-slate-700">
-        Ask the customer to pay the owner directly and show the successful payment confirmation.
-      </p>
-      <p className="mt-3 text-xl font-black text-emerald-900">
-        Amount: {formatAmount(item.payment_amount_due)}
-      </p>
-      <div className="mt-4 flex justify-center rounded-2xl bg-white p-1 sm:p-3">
-        <Image
-          src={OWNER_QR_PATH}
-          alt="JeevaSetu owner UPI payment QR code"
-          width={1012}
-          height={1601}
-          loading="eager"
-          unoptimized
-          className="h-auto w-full max-w-80 object-contain"
-          sizes="(max-width: 640px) calc(100vw - 4rem), 20rem"
-        />
-      </div>
-      <div className="mt-4 rounded-xl bg-white p-3">
-        <span className="block text-xs font-bold uppercase tracking-wide text-slate-500">Owner UPI ID</span>
-        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-          <code className="break-all text-base font-bold text-slate-950">{OWNER_UPI_ID}</code>
-          <button type="button" onClick={onCopy} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">
-            Copy UPI ID
-          </button>
-        </div>
-        {copyState === "copied" && <p role="status" className="mt-1 text-sm font-semibold text-emerald-800">UPI ID copied.</p>}
-        {copyState === "error" && <p role="alert" className="mt-1 text-sm text-red-700">Copy is unavailable. Select the UPI ID above.</p>}
-      </div>
-      <p className="mt-3 text-sm font-semibold text-amber-900">
-        Displaying this QR does not confirm payment.
-      </p>
+      {item.payment_status === "PAID" ? <p className="font-bold text-emerald-900">Payment confirmed</p> : <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-lg font-black text-emerald-900">Payment pending · {formatAmount(item.payment_amount_due)}</p><button type="button" onClick={(event) => onShowQr(event.currentTarget)} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">Show Payment QR</button></div>}
       {item.status === "IN_PROGRESS" && (
         <button
           type="button"

@@ -194,6 +194,10 @@ class CustomerRebookSerializer(serializers.Serializer):
     preferred_time = serializers.TimeField()
 
 
+class OwnerAppointmentRebookSerializer(CustomerRebookSerializer):
+    physiotherapist = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all())
+
+
 class AppointmentRequestSerializer(serializers.ModelSerializer):
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
     requested_therapy_names = serializers.SerializerMethodField()
@@ -465,6 +469,8 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     payment_confirmed_by = serializers.SerializerMethodField()
     payment_qr_available = serializers.SerializerMethodField()
     requested_therapy_names = serializers.SerializerMethodField()
+    patient_mobile = serializers.CharField(source="patient.mobile_number", read_only=True)
+    patient_email = serializers.SerializerMethodField()
 
     class Meta:
         model = Appointment
@@ -473,15 +479,19 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "originating_request",
             "patient_identifier",
             "patient_name",
+            "patient_mobile",
+            "patient_email",
             "therapy_name",
             "requested_therapy_names",
             "clinic_name",
+            "clinic",
             "scheduled_start",
             "scheduled_end",
             "duration_minutes",
             "status",
             "physiotherapist_name",
             "assignment_status",
+            "assignment_rejection_reason",
             "address_line_1",
             "address_line_2",
             "landmark",
@@ -500,6 +510,7 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             "payment_paid_at",
             "payment_confirmed_by",
             "payment_qr_available",
+            "updated_at",
         )
 
     def get_payment_status(self, value):
@@ -532,6 +543,9 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         if source is None:
             return [value.therapy.name]
         return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
+
+    def get_patient_email(self, value):
+        return value.patient.email or (value.patient.user.email if value.patient.user_id else "")
 
 
 class AppointmentDetailSerializer(AppointmentListSerializer):
@@ -986,10 +1000,12 @@ class ConvertRequestSerializer(AppointmentWriteSerializer):
 class AssignmentSerializer(serializers.Serializer):
     physiotherapist = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all())
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    expected_updated_at = serializers.DateTimeField(required=False)
 
 
 class UnassignmentSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255, trim_whitespace=True)
+    expected_updated_at = serializers.DateTimeField(required=False)
 
     def validate_reason(self, value):
         if len(value) < 3:
@@ -1038,7 +1054,9 @@ class AppointmentCompletionPaymentSerializer(serializers.Serializer):
 
 
 class JourneyUpdateSerializer(serializers.Serializer):
-    journey_status = serializers.ChoiceField(choices=(Appointment.JourneyStatus.EN_ROUTE,))
+    journey_status = serializers.ChoiceField(
+        choices=(Appointment.JourneyStatus.EN_ROUTE, Appointment.JourneyStatus.REACHED)
+    )
 
 
 class AvailabilityQuerySerializer(serializers.Serializer):

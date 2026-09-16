@@ -260,7 +260,95 @@ def decide_appointment_request(
         previous_status=previous_status, new_status=source.status,
         physiotherapist=physiotherapist,
     )
+    from apps.appointments.notification_events import notify_assignment
+
+    notify_assignment(appointment)
     return source, appointment
+
+
+@transaction.atomic
+def rebook_closed_appointment(
+    appointment, *, preferred_date, preferred_time, physiotherapist, actor
+):
+    appointment = Appointment.objects.select_for_update().select_related(
+        "originating_request", "patient", "clinic"
+    ).get(pk=appointment.pk)
+    if (
+        appointment.status not in Appointment.FINAL_STATUSES
+        and appointment.scheduled_end >= timezone.now()
+    ):
+        raise ValidationError("Only a closed or past appointment can be booked again.")
+    source = appointment.originating_request
+    if source is None:
+        raise ValidationError("Use Book for Customer for this direct operational appointment.")
+    therapy_ids = [source.therapy_id, *source.requested_therapies.values_list("id", flat=True)]
+    start = datetime.combine(
+        preferred_date,
+        preferred_time,
+        ZoneInfo(appointment.clinic.timezone or appointment.organization.timezone or "Asia/Kolkata"),
+    )
+    from apps.appointments.commercial import calculate_quote
+
+    quote = calculate_quote(
+        organization=appointment.organization,
+        therapy_ids=therapy_ids,
+        family_member=source.family_member,
+        at=start,
+    )
+    repeated = AppointmentRequest.objects.create(
+        organization=appointment.organization,
+        creator=source.creator,
+        patient_profile=appointment.patient,
+        family_member=source.family_member,
+        therapy=source.therapy,
+        selected_offer_id=quote.offer_id,
+        selected_package_id=quote.package_id,
+        commercial_snapshot=quote.snapshot(),
+        regular_amount=quote.regular_amount,
+        discount_amount=quote.discount_amount,
+        final_amount=quote.final_amount,
+        patient_name=source.patient_name,
+        age=source.age,
+        gender=source.gender,
+        mobile_number=appointment.patient.mobile_number,
+        alternate_mobile=source.alternate_mobile,
+        email=appointment.patient.email or source.email,
+        session_preference=AppointmentRequest.SessionPreference.SINGLE,
+        preferred_date=preferred_date,
+        preferred_time=preferred_time,
+        problem_description=source.problem_description,
+        pain_area=source.pain_area,
+        problem_duration=source.problem_duration,
+        doctor_reference=source.doctor_reference,
+        address=", ".join(filter(None, (appointment.address_line_1, appointment.address_line_2))),
+        city=appointment.city,
+        region=appointment.region,
+        pin_code=appointment.pin_code,
+        landmark=appointment.landmark,
+        latitude=appointment.service_latitude,
+        longitude=appointment.service_longitude,
+        location_accuracy_meters=appointment.service_location_accuracy_meters,
+        location_source=appointment.service_location_source,
+    )
+    repeated.requested_therapies.set(source.requested_therapies.all())
+    _, new_appointment = decide_appointment_request(
+        repeated,
+        actor=actor,
+        action="ACCEPT_ASSIGN",
+        physiotherapist=physiotherapist,
+    )
+    for value in (appointment, new_appointment):
+        AppointmentAuditEvent.objects.create(
+            appointment=value,
+            organization=value.organization,
+            actor=actor,
+            event=AppointmentAuditEvent.Event.REBOOKED,
+            new_status=new_appointment.status,
+            new_start=new_appointment.scheduled_start,
+            new_physiotherapist=new_appointment.physiotherapist,
+            reason="A new appointment was created from a prior closed appointment.",
+        )
+    return new_appointment
 
 
 @transaction.atomic
@@ -304,12 +392,20 @@ def save_scheduled_appointment(appointment, *, actor, event, reason=""):
         new_physiotherapist=appointment.physiotherapist,
         reason=reason,
     )
+    if appointment.physiotherapist_id and appointment.assigned_at:
+        from apps.appointments.notification_events import notify_assignment
+
+        notify_assignment(appointment)
     return appointment
 
 
 @transaction.atomic
-def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
+def assign_physiotherapist(
+    appointment, *, physiotherapist, actor, reason="", expected_updated_at=None
+):
     appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if expected_updated_at and appointment.updated_at != expected_updated_at:
+        raise ValidationError("This appointment changed. Refresh it before assigning a therapist.")
     if (
         appointment.status in Appointment.FINAL_STATUSES
         or appointment.status == Appointment.Status.IN_PROGRESS
@@ -363,12 +459,17 @@ def assign_physiotherapist(appointment, *, physiotherapist, actor, reason=""):
         new_physiotherapist=physiotherapist,
         reason=reason,
     )
+    from apps.appointments.notification_events import notify_assignment
+
+    notify_assignment(appointment)
     return appointment
 
 
 @transaction.atomic
-def unassign_physiotherapist(appointment, *, actor, reason):
+def unassign_physiotherapist(appointment, *, actor, reason, expected_updated_at=None):
     appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
+    if expected_updated_at and appointment.updated_at != expected_updated_at:
+        raise ValidationError("This appointment changed. Refresh it before removing the therapist.")
     if (
         appointment.status in Appointment.FINAL_STATUSES
         or appointment.status == Appointment.Status.IN_PROGRESS
@@ -402,6 +503,9 @@ def unassign_physiotherapist(appointment, *, actor, reason):
         previous_physiotherapist=previous,
         reason=reason.strip()[:255],
     )
+    from apps.appointments.notification_events import notify_unassigned
+
+    notify_unassigned(appointment, previous_physiotherapist=previous)
     return appointment
 
 
@@ -463,6 +567,9 @@ def respond_to_assignment(appointment, *, actor, accept, reason=""):
     from apps.appointments.tasks import reconcile_appointment_reminders
 
     reconcile_appointment_reminders(appointment)
+    from apps.appointments.notification_events import notify_assignment_response
+
+    notify_assignment_response(appointment, accepted=accept)
     return appointment
 
 
@@ -473,26 +580,34 @@ def update_journey(appointment, *, actor, journey_status):
         raise ValidationError("This visit is unavailable.")
     if appointment.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
         raise ValidationError("Accept the service request before updating the journey.")
-    if appointment.status not in (Appointment.Status.SCHEDULED, Appointment.Status.CONFIRMED):
+    if appointment.status != Appointment.Status.CONFIRMED:
         raise ValidationError("Journey updates are unavailable for this visit.")
     allowed = {
         Appointment.JourneyStatus.NOT_STARTED: (Appointment.JourneyStatus.EN_ROUTE,),
-        Appointment.JourneyStatus.EN_ROUTE: (),
-        Appointment.JourneyStatus.ARRIVED: (),  # Retained only for historical records.
+        Appointment.JourneyStatus.EN_ROUTE: (Appointment.JourneyStatus.REACHED,),
+        Appointment.JourneyStatus.REACHED: (),
     }
     if journey_status not in allowed[appointment.journey_status]:
         raise ValidationError("This journey transition is not permitted.")
     now = timezone.now()
     appointment.journey_status = journey_status
     fields = ["journey_status", "updated_at"]
-    appointment.en_route_at = now
-    fields.append("en_route_at")
+    if journey_status == Appointment.JourneyStatus.EN_ROUTE:
+        appointment.en_route_at = now
+        fields.append("en_route_at")
+    else:
+        appointment.arrived_at = now
+        fields.append("arrived_at")
     appointment.save(update_fields=fields)
     AppointmentAuditEvent.objects.create(appointment=appointment, organization=appointment.organization, actor=actor, event=AppointmentAuditEvent.Event.JOURNEY_STATUS_CHANGED, reason=journey_status)
+    if journey_status == Appointment.JourneyStatus.REACHED:
+        from apps.appointments.notification_events import notify_reached
+
+        notify_reached(appointment)
     return appointment
 
 @transaction.atomic
-def transition_status(appointment, *, new_status, actor, reason=""):
+def transition_status(appointment, *, new_status, actor, reason="", emit_notification=True):
     appointment = Appointment.objects.select_for_update().get(pk=appointment.pk)
     if appointment.status == new_status and new_status == Appointment.Status.COMPLETED:
         return appointment
@@ -518,8 +633,8 @@ def transition_status(appointment, *, new_status, actor, reason=""):
     if new_status == Appointment.Status.IN_PROGRESS:
         if appointment.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
             raise ValidationError("The Physiotherapist must accept this appointment first.")
-        if appointment.journey_status != Appointment.JourneyStatus.EN_ROUTE:
-            raise ValidationError("Mark the appointment En Route before starting the session.")
+        if appointment.journey_status != Appointment.JourneyStatus.REACHED:
+            raise ValidationError("Mark the appointment Reached before starting the session.")
     previous = appointment.status
     appointment.status = new_status
     now = timezone.now()
@@ -556,6 +671,10 @@ def transition_status(appointment, *, new_status, actor, reason=""):
         new_status=new_status,
         reason=reason,
     )
+    from apps.appointments.notification_events import notify_status_transition
+
+    if emit_notification:
+        notify_status_transition(appointment, new_status=new_status)
     return appointment
 
 
@@ -580,6 +699,7 @@ def complete_and_confirm_payment(appointment, *, actor):
         new_status=Appointment.Status.COMPLETED,
         actor=actor,
         reason="Therapy delivered and customer payment confirmation verified.",
+        emit_notification=False,
     )
     payment = AppointmentPayment.objects.select_for_update().get(appointment=appointment)
     if payment.status == AppointmentPayment.Status.PAID:
@@ -598,6 +718,9 @@ def complete_and_confirm_payment(appointment, *, actor):
         new_status=payment.status,
         reason="Customer showed successful owner payment confirmation.",
     )
+    from apps.appointments.notification_events import notify_completion_and_payment
+
+    notify_completion_and_payment(appointment)
     return appointment
 
 
@@ -748,6 +871,9 @@ def reschedule_appointment(
             from apps.appointments.tasks import reconcile_appointment_reminders
 
             reconcile_appointment_reminders(appointment)
+            from apps.appointments.notification_events import notify_rescheduled
+
+            notify_rescheduled(appointment)
             return appointment
     except ValidationError as error:
         record_rejected_lifecycle_action(
@@ -836,6 +962,9 @@ def cancel_appointment(
             from apps.appointments.tasks import reconcile_appointment_reminders
 
             reconcile_appointment_reminders(appointment)
+            from apps.appointments.notification_events import notify_cancelled
+
+            notify_cancelled(appointment)
             return appointment
     except ValidationError as error:
         record_rejected_lifecycle_action(

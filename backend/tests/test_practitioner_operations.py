@@ -2,7 +2,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.accounts.models import Role
+from apps.accounts.models import Notification, Role
 from apps.appointments.models import (
     Appointment,
     AppointmentAuditEvent,
@@ -64,13 +64,15 @@ def test_appointment_payment_is_operations_controlled_and_visible_to_assigned_pr
     assert item["payment_paid_at"] is not None
 
 
-def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once(api_client):
+def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once(
+    api_client, django_capture_on_commit_callbacks
+):
     values = setup_domain("therapist-owner-payment")
     organization, _, owner, manager, physio_user, _, customer, *_ = values
     appointment = create_scheduled(api_client, values)
     appointment.status = Appointment.Status.IN_PROGRESS
     appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
-    appointment.journey_status = Appointment.JourneyStatus.EN_ROUTE
+    appointment.journey_status = Appointment.JourneyStatus.REACHED
     appointment.service_started_at = timezone.now()
     appointment.save(
         update_fields=(
@@ -95,12 +97,13 @@ def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once
         format="json",
         **headers(organization),
     )
-    result = api_client.post(
-        url,
-        {"therapy_delivered": True, "payment_received": True},
-        format="json",
-        **headers(organization),
-    )
+    with django_capture_on_commit_callbacks(execute=True):
+        result = api_client.post(
+            url,
+            {"therapy_delivered": True, "payment_received": True},
+            format="json",
+            **headers(organization),
+        )
     duplicate = api_client.post(
         url,
         {"therapy_delivered": True, "payment_received": True},
@@ -123,6 +126,16 @@ def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once
         new_status=Appointment.Status.COMPLETED,
         actor=physio_user,
     ).count() == 1
+    completion_notifications = Notification.objects.filter(
+        notification_type="THERAPY_COMPLETED_PAYMENT_CONFIRMED"
+    )
+    assert completion_notifications.filter(recipient=customer).count() == 1
+    assert completion_notifications.filter(recipient=owner).count() == 1
+    assert completion_notifications.filter(recipient=physio_user).count() == 1
+    owner_message = completion_notifications.get(recipient=owner).message
+    assert appointment.patient.full_name in owner_message
+    assert physio_user.get_full_name() in owner_message
+    assert "₹1777.00" in owner_message
     assert appointment.audit_events.filter(
         event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
         previous_status=AppointmentPayment.Status.PENDING,
@@ -159,7 +172,7 @@ def test_completion_payment_confirmation_rejects_customer_unassigned_and_cross_t
     appointment = create_scheduled(api_client, values)
     appointment.status = Appointment.Status.IN_PROGRESS
     appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
-    appointment.journey_status = Appointment.JourneyStatus.EN_ROUTE
+    appointment.journey_status = Appointment.JourneyStatus.REACHED
     appointment.service_started_at = timezone.now()
     appointment.save(
         update_fields=(
@@ -221,7 +234,7 @@ def test_offer_hides_patient_details_until_acceptance_and_journey_is_owned(api_c
     accepted = next(item for item in after.data if item["id"] == str(appointment.id))
     assert accepted["patient_name"] == appointment.patient.full_name
     en_route = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE"}, format="json", **headers(organization))
-    arrived = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "ARRIVED"}, format="json", **headers(organization))
-    assert en_route.status_code == 200 and arrived.status_code == 400
+    reached = api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "REACHED"}, format="json", **headers(organization))
+    assert en_route.status_code == 200 and reached.status_code == 200
     api_client.force_authenticate(customer)
     assert api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE"}, format="json", **headers(organization)).status_code == 403

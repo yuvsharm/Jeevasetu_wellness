@@ -157,6 +157,9 @@ def submit_application(application, *, actor):
             else PractitionerAuditEvent.Action.SUBMITTED
         ),
     )
+    from apps.practitioners.notification_events import notify_application_submitted
+
+    notify_application_submitted(application)
     return application
 
 
@@ -197,6 +200,9 @@ def review_application(application, *, actor, action, reason=""):
         application.rejection_reason = reason.strip()[:500]
     application.save()
     record_event(application, actor=actor, action=event, metadata={"reason": reason.strip()[:255]})
+    from apps.practitioners.notification_events import notify_application_decision
+
+    notify_application_decision(application)
     return application
 
 
@@ -317,6 +323,9 @@ def approve_application(application, *, actor):
         update_fields=("status", "reviewed_by", "reviewed_at", "approved_profile", "updated_at")
     )
     record_event(locked, actor=actor, action=PractitionerAuditEvent.Action.APPROVED)
+    from apps.practitioners.notification_events import notify_application_decision
+
+    notify_application_decision(locked)
     return locked
 
 

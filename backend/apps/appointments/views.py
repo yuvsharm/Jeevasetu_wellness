@@ -46,6 +46,7 @@ from apps.appointments.scheduling import (
     complete_and_confirm_payment,
     record_rejected_lifecycle_action,
     reschedule_appointment,
+    rebook_closed_appointment,
     respond_to_assignment,
     transition_status,
     update_journey,
@@ -66,6 +67,7 @@ from apps.appointments.serializers import (
     AppointmentRequestDecisionSerializer,
     AuthenticatedAppointmentRequestSerializer,
     CustomerRebookSerializer,
+    OwnerAppointmentRebookSerializer,
     AppointmentRatingSerializer,
     PublicReviewSerializer,
     ReviewModerationSerializer,
@@ -314,6 +316,12 @@ class AppointmentCreateView(HasTenant, generics.CreateAPIView):
     permission_classes = (IsEnabledAuthenticated, IsCustomer)
     serializer_class = AuthenticatedAppointmentRequestSerializer
 
+    def perform_create(self, serializer):
+        value = serializer.save()
+        from apps.appointments.notification_events import notify_booking_request
+
+        notify_booking_request(value)
+
 
 class QuickAppointmentCreateView(AppointmentCreateView):
     """Compatibility alias for the authenticated customer booking endpoint."""
@@ -492,6 +500,9 @@ class CustomerAppointmentRebookView(HasTenant, GenericAPIView):
             location_source=primary.location_source,
         )
         value.requested_therapies.set(requested)
+        from apps.appointments.notification_events import notify_booking_request
+
+        notify_booking_request(value)
         return Response(AppointmentRequestSerializer(value, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -609,6 +620,7 @@ class OperationalScopeMixin(HasTenant):
         return queryset.select_related(
             "clinic",
             "patient",
+            "patient__user",
             "therapy",
             "physiotherapist__user",
             "originating_request",
@@ -655,7 +667,30 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
             )
         view = self.request.query_params.get("view")
         today = timezone.localdate()
-        if view == "today":
+        now = timezone.now()
+        attention = Q(status__in=(
+            Appointment.Status.DRAFT,
+            Appointment.Status.PENDING_ASSIGNMENT,
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+        )) & (
+            Q(physiotherapist__isnull=True)
+            | Q(assignment_status__in=(
+                Appointment.AssignmentStatus.UNASSIGNED,
+                Appointment.AssignmentStatus.REJECTED,
+            ))
+        )
+        if view == "active":
+            queryset = queryset.exclude(status__in=Appointment.FINAL_STATUSES).filter(
+                Q(scheduled_end__gte=now) | Q(status=Appointment.Status.IN_PROGRESS)
+            ).exclude(attention)
+        elif view == "attention":
+            queryset = queryset.filter(attention)
+        elif view == "history":
+            queryset = queryset.filter(
+                Q(status__in=Appointment.FINAL_STATUSES) | Q(scheduled_end__lt=now)
+            )
+        elif view == "today":
             queryset = queryset.filter(scheduled_start__date=today)
         elif view == "upcoming":
             queryset = queryset.filter(scheduled_start__date__gt=today).exclude(
@@ -666,7 +701,7 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
         elif view == "pending":
             queryset = queryset.filter(status__in=(Appointment.Status.DRAFT, Appointment.Status.PENDING_ASSIGNMENT, Appointment.Status.SCHEDULED))
         elif view == "awaiting_therapist":
-            queryset = queryset.filter(assignment_status__in=(Appointment.AssignmentStatus.UNASSIGNED, Appointment.AssignmentStatus.PENDING))
+            queryset = queryset.filter(assignment_status__in=(Appointment.AssignmentStatus.UNASSIGNED, Appointment.AssignmentStatus.PENDING, Appointment.AssignmentStatus.REJECTED))
         elif view == "accepted":
             queryset = queryset.filter(assignment_status=Appointment.AssignmentStatus.ACCEPTED)
         elif view == "en_route":
@@ -811,6 +846,7 @@ class AppointmentAssignmentView(OperationalScopeMixin, GenericAPIView):
                 physiotherapist=physiotherapist,
                 actor=request.user,
                 reason=serializer.validated_data.get("reason", ""),
+                expected_updated_at=serializer.validated_data.get("expected_updated_at"),
             )
         except Exception as error:
             raise ValidationError(str(error)) from error
@@ -828,11 +864,47 @@ class AppointmentUnassignmentView(OperationalScopeMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
         try:
             appointment = unassign_physiotherapist(
-                appointment, actor=request.user, reason=serializer.validated_data["reason"]
+                appointment,
+                actor=request.user,
+                reason=serializer.validated_data["reason"],
+                expected_updated_at=serializer.validated_data.get("expected_updated_at"),
             )
         except DjangoValidationError as error:
             raise ValidationError(str(error)) from error
         return Response(AppointmentDetailSerializer(appointment, context={"request": request}).data)
+
+
+class OwnerAppointmentRebookView(OperationalScopeMixin, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsOwner)
+    serializer_class = OwnerAppointmentRebookSerializer
+
+    def post(self, request, pk):
+        appointment = self.scoped_queryset().filter(pk=pk).first()
+        if appointment is None:
+            raise NotFound("Appointment is unavailable.")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        physiotherapist = serializer.validated_data["physiotherapist"]
+        if (
+            physiotherapist.organization_id != request.organization.id
+            or physiotherapist.clinic_id != appointment.clinic_id
+            or physiotherapist.staff_type != Role.PHYSIOTHERAPIST
+        ):
+            raise ValidationError("The selected Physiotherapist is unavailable.")
+        try:
+            value = rebook_closed_appointment(
+                appointment,
+                preferred_date=serializer.validated_data["preferred_date"],
+                preferred_time=serializer.validated_data["preferred_time"],
+                physiotherapist=physiotherapist,
+                actor=request.user,
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
+        return Response(
+            AppointmentDetailSerializer(value, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class AppointmentAssignmentResponseView(HasTenant, GenericAPIView):
@@ -1229,6 +1301,7 @@ class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
         clinic_id = query.validated_data["clinic"]
         start = query.validated_data["scheduled_start"]
         duration = query.validated_data["duration_minutes"]
+        exclude_appointment = request.query_params.get("exclude_appointment")
         clinic = self.request.organization.clinics.filter(pk=clinic_id, is_active=True).first()
         if clinic is None:
             raise NotFound("Clinic is unavailable.")
@@ -1241,7 +1314,12 @@ class AvailablePhysiotherapistView(OperationalScopeMixin, GenericAPIView):
             status__in=Appointment.BLOCKING_STATUSES,
             scheduled_start__lt=end,
             scheduled_end__gt=start,
-        ).values_list("physiotherapist_id", flat=True)
+        )
+        if exclude_appointment:
+            if not self.scoped_queryset().filter(pk=exclude_appointment, clinic=clinic).exists():
+                raise NotFound("Appointment is unavailable.")
+            busy = busy.exclude(pk=exclude_appointment)
+        busy = busy.values_list("physiotherapist_id", flat=True)
         profiles = (
             StaffProfile.objects.filter(
                 organization=request.organization,
@@ -1405,16 +1483,53 @@ class CustomerAppointmentRatingView(HasTenant, GenericAPIView):
     serializer_class = AppointmentRatingSerializer
 
     def post(self, request, pk):
-        with transaction.atomic():
-            appointment = Appointment.objects.select_for_update(of=("self",)).filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, completed_at__isnull=False, physiotherapist__isnull=False).filter(Q(originating_request__creator=request.user) | Q(patient__user=request.user)).first()
-            if appointment is None:
-                raise NotFound("Review is unavailable.")
-            if AppointmentRating.objects.filter(appointment=appointment).exists():
-                raise ValidationError("This appointment has already been reviewed.")
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            value = serializer.save(appointment=appointment, organization=request.organization, customer=request.user, physiotherapist=appointment.physiotherapist)
-            AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event=AppointmentAuditEvent.Event.RATING_SUBMITTED)
+        try:
+            with transaction.atomic():
+                appointment = (
+                    Appointment.objects.select_for_update(of=("self",))
+                    .filter(
+                        pk=pk,
+                        organization=request.organization,
+                        status=Appointment.Status.COMPLETED,
+                        completed_at__isnull=False,
+                        assignment_status=Appointment.AssignmentStatus.ACCEPTED,
+                        physiotherapist__isnull=False,
+                    )
+                    .filter(
+                        Q(originating_request__creator=request.user)
+                        | Q(patient__user=request.user)
+                    )
+                    .first()
+                )
+                if appointment is None:
+                    raise NotFound("Review is unavailable.")
+                if AppointmentRating.objects.filter(appointment=appointment).exists():
+                    raise ValidationError(
+                        "Feedback has already been submitted for this appointment."
+                    )
+                serializer = self.get_serializer(data=request.data)
+                serializer.is_valid(raise_exception=True)
+                value = serializer.save(
+                    appointment=appointment,
+                    organization=request.organization,
+                    customer=request.user,
+                    physiotherapist=appointment.physiotherapist,
+                )
+                AppointmentAuditEvent.objects.create(
+                    appointment=appointment,
+                    organization=request.organization,
+                    actor=request.user,
+                    event=AppointmentAuditEvent.Event.RATING_SUBMITTED,
+                )
+                from apps.appointments.notification_events import notify_rating_submitted
+
+                notify_rating_submitted(value)
+        except IntegrityError as error:
+            # The appointment row lock serializes normal requests and the database
+            # one-to-one constraint remains the final guard for concurrent inserts.
+            raise ValidationError(
+                "Feedback has already been submitted for this appointment."
+            ) from error
         return Response(self.get_serializer(value).data, status=status.HTTP_201_CREATED)
 
 
@@ -1448,14 +1563,11 @@ class ReviewOperationsListView(HasTenant, generics.ListAPIView):
 
 
 class ReviewModerationView(HasTenant, GenericAPIView):
-    permission_classes = (IsEnabledAuthenticated, IsOwnerOrManager)
+    permission_classes = (IsEnabledAuthenticated, IsOwner)
     serializer_class = ReviewModerationSerializer
 
     def post(self, request, pk):
-        level, clinic_ids = actor_role_scope(request.user, request.organization)
         queryset = AppointmentRating.objects.filter(pk=pk, organization=request.organization)
-        if level == Role.MANAGER and clinic_ids is not None:
-            queryset = queryset.filter(appointment__clinic_id__in=clinic_ids)
         review = queryset.first()
         if review is None:
             raise NotFound("Review is unavailable.")
@@ -1513,6 +1625,7 @@ class OperationsPaymentView(HasTenant, GenericAPIView):
             appointment=appointment,
             defaults={"organization": request.organization, "amount_due": amount_due, "updated_by": request.user},
         )
+        previous_status = value.status
         serializer = self.get_serializer(value, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         value = serializer.save(
@@ -1520,4 +1633,8 @@ class OperationsPaymentView(HasTenant, GenericAPIView):
             paid_at=(timezone.now() if serializer.validated_data.get("status") == AppointmentPayment.Status.PAID and value.status != AppointmentPayment.Status.PAID else value.paid_at),
         )
         AppointmentAuditEvent.objects.create(appointment=appointment, organization=request.organization, actor=request.user, event="PAYMENT_STATUS_CHANGED", reason=value.status)
+        if previous_status != AppointmentPayment.Status.PAID and value.status == AppointmentPayment.Status.PAID:
+            from apps.appointments.notification_events import notify_payment_confirmed
+
+            notify_payment_confirmed(appointment)
         return Response(self.get_serializer(value).data)

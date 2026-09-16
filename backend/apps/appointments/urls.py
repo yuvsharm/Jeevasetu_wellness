@@ -14,6 +14,7 @@ from apps.appointments.views import (
     AppointmentRescheduleView,
     AppointmentStatusView,
     AppointmentUnassignmentView,
+    OwnerAppointmentRebookView,
     AvailablePhysiotherapistView,
     BookingOtpIssueView,
     BookingOtpVerifyView,
@@ -90,6 +91,11 @@ urlpatterns = [
         "schedule/<uuid:pk>/complete-and-confirm-payment/",
         AppointmentCompletionPaymentView.as_view(),
         name="schedule-complete-and-confirm-payment",
+    ),
+    path(
+        "schedule/<uuid:pk>/rebook/",
+        OwnerAppointmentRebookView.as_view(),
+        name="schedule-owner-rebook",
     ),
     path("schedule/<uuid:pk>/journey/", AppointmentJourneyView.as_view(), name="schedule-journey"),
     path(

@@ -509,7 +509,7 @@ class Appointment(models.Model):
     class JourneyStatus(models.TextChoices):
         NOT_STARTED = "NOT_STARTED", "Not started"
         EN_ROUTE = "EN_ROUTE", "En route"
-        ARRIVED = "ARRIVED", "Arrived"
+        REACHED = "REACHED", "Reached"
 
     class AssignmentStatus(models.TextChoices):
         UNASSIGNED = "UNASSIGNED", "Unassigned"
@@ -701,6 +701,7 @@ class AppointmentAuditEvent(models.Model):
         LOCATION_SHARED = "LOCATION_SHARED", "Location shared"
         RATING_SUBMITTED = "RATING_SUBMITTED", "Rating submitted"
         PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED", "Payment status changed"
+        REBOOKED = "REBOOKED", "Booked again"
 
     class Outcome(models.TextChoices):
         SUCCEEDED = "SUCCEEDED", "Succeeded"

@@ -14,6 +14,7 @@ urlpatterns = [
     path("api/v1/learning/", include("apps.practitioners.learning_urls")),
     path("admin/", admin.site.urls),
     path("api/v1/auth/", include("apps.accounts.urls")),
+    path("api/v1/notifications/", include("apps.accounts.notification_urls")),
     path("api/v1/access/", include("apps.accounts.access_urls")),
     path("api/v1/health/live/", LivenessView.as_view(), name="health-live"),
     path("api/v1/tenancy/", include("apps.tenancy.urls")),

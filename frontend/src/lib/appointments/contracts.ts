@@ -19,8 +19,12 @@ export type OperationalAppointment = {
   originating_request?: string | null;
   requested_at?: string | null;
   created_at?: string;
+  updated_at?: string;
+  clinic?: string;
   patient_identifier: string;
   patient_name: string;
+  patient_mobile?: string;
+  patient_email?: string;
   therapy_name: string;
   clinic_name: string;
   scheduled_start: string;
@@ -32,7 +36,6 @@ export type OperationalAppointment = {
   assigned_manager_name?: string | null;
   assignment_rejection_reason?: string;
   manager_remarks?: string;
-  patient_mobile?: string;
   patient_age?: number | null;
   patient_gender?: string;
   problem_description?: string;
@@ -55,7 +58,7 @@ export type OperationalAppointment = {
   physiotherapist_photo_url?: string | null;
   reschedule_count?: number;
   cancellation_category?: "CUSTOMER_REQUEST" | "PHYSIOTHERAPIST_UNAVAILABLE" | "CLINIC_OPERATIONAL_ISSUE" | "SCHEDULING_CONFLICT" | "DUPLICATE_APPOINTMENT" | "OTHER" | "";
-  journey_status?: "NOT_STARTED" | "EN_ROUTE";
+  journey_status?: "NOT_STARTED" | "EN_ROUTE" | "REACHED";
   en_route_at?: string | null;
   service_started_at?: string | null;
   completed_at?: string | null;
@@ -112,6 +115,9 @@ export type AppointmentAuditEvent = {
   new_status: string;
   previous_start: string | null;
   new_start: string | null;
+  previous_physiotherapist_name?: string | null;
+  new_physiotherapist_name?: string | null;
+  reason?: string;
   reason_category: string;
   override_used: boolean;
   rejection_code: string;

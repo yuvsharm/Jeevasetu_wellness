@@ -28,6 +28,22 @@ describe("AppShell", () => {
     expect(screen.getAllByText("Bookings & Dispatch")[0].closest("span[aria-disabled]"))
       .toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("Content")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Notifications/ })).not.toBeInTheDocument();
+  });
+
+  it("shows notification-category badges rather than workload counts in owner navigation", async () => {
+    navigationState.pathname = "/owner";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      unread_count: 6,
+      category_counts: { APPOINTMENTS: 2, PRACTITIONERS: 3, REVIEWS: 1 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const ownerSession: Session = { ...session, user: { ...session.user, roles: ["OWNER"] }, access: { ...session.access, roles: [{ ...session.access.roles[0], role: "OWNER" }] } };
+    render(<AppShell session={ownerSession} role="OWNER" title="Owner operations"><p>Owner content</p></AppShell>);
+    expect(await screen.findByRole("button", { name: /Notifications, 6 unread/ })).toBeInTheDocument();
+    expect(screen.getAllByLabelText("2 unread")).toHaveLength(1);
+    expect(screen.getAllByLabelText("3 unread")).toHaveLength(1);
+    expect(screen.getAllByLabelText("1 unread")).toHaveLength(1);
+    navigationState.pathname = "/manager";
   });
 
   it("opens mobile navigation and the profile menu with keyboard-accessible buttons", async () => {
@@ -47,6 +63,25 @@ describe("AppShell", () => {
     render(<AppShell session={customerSession} role="CUSTOMER" title="My appointments"><p>Content</p></AppShell>);
     expect(screen.getByRole("link", { name: "Offers & Packages" })).toHaveAttribute("href", "/customer/offers");
     expect(screen.queryByText("Practitioner Application")).not.toBeInTheDocument();
+  });
+
+  it("limits the customer appointments badge to unread appointment notifications", async () => {
+    navigationState.pathname = "/customer";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => new Response(JSON.stringify(
+      String(input).includes("/api/notifications")
+        ? { unread_count: 5, category_counts: { APPOINTMENTS: 2, PAYMENTS: 2, REVIEWS: 1 } }
+        : { full_name: "Maya Manager", photo_url: "" },
+    ), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const customerSession: Session = {
+      ...session,
+      user: { ...session.user, roles: ["CUSTOMER"] },
+      access: { ...session.access, roles: [{ ...session.access.roles[0], role: "CUSTOMER" }] },
+    };
+    render(<AppShell session={customerSession} role="CUSTOMER" title="My appointments"><p>Content</p></AppShell>);
+    expect(await screen.findByRole("button", { name: /Notifications, 5 unread/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /My Appointments/ })[0]).toHaveTextContent("2");
+    expect(screen.queryByLabelText("5 unread", { selector: "span" })).not.toBeInTheDocument();
+    navigationState.pathname = "/manager";
   });
 
   it("scrolls and focuses an owner section without a page navigation", async () => {

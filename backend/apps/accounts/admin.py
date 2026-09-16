@@ -3,11 +3,28 @@ from django.contrib.auth.admin import UserAdmin
 
 from apps.accounts.models import (
     AuthenticationAuditEvent,
+    Notification,
     PasswordResetRequest,
     RoleAssignment,
     RoleAuditEvent,
     User,
 )
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ("title", "recipient", "recipient_role", "organization", "read_at", "created_at")
+    list_filter = ("recipient_role", "category", "notification_type", "read_at")
+    readonly_fields = tuple(field.name for field in Notification._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(User)

@@ -11,7 +11,7 @@ describe("customer reviews",()=>{
   beforeEach(()=>vi.restoreAllMocks());
 
   it("uses accessible stars and previews before one-time submission",async()=>{
-    const fetchMock=vi.spyOn(global,"fetch").mockImplementation(async(input)=>String(input).includes("/rating")?new Response(JSON.stringify({...review,appointment:"appointment-1",status_display:"Pending Review"}),{status:201}):new Response(JSON.stringify([{id:"appointment-1",status:"COMPLETED",therapy_name:"Physiotherapy",scheduled_start:"2026-08-22T10:00:00Z",rating:null}]),{status:200}));
+    const fetchMock=vi.spyOn(global,"fetch").mockImplementation(async(input)=>String(input).includes("/rating")?new Response(JSON.stringify({...review,appointment:"appointment-1",status_display:"Pending Review"}),{status:201}):new Response(JSON.stringify([{id:"appointment-1",status:"COMPLETED",assignment_status:"ACCEPTED",therapy_name:"Physiotherapy",physiotherapist_name:"Priya",scheduled_start:"2026-08-22T10:00:00Z",rating:null}]),{status:200}));
     renderQuery(<CustomerRatingPanel/>);
     fireEvent.click(await screen.findByRole("radio",{name:"5 stars"}));
     fireEvent.change(screen.getByLabelText("Comment"),{target:{value:"Excellent professional service"}});
@@ -29,12 +29,25 @@ describe("customer reviews",()=>{
     expect(screen.getByText(/Priya/)).toBeInTheDocument();
   });
 
-  it("requires a reason before enabling hide",async()=>{
+  it("lets an owner change public visibility while preserving review content",async()=>{
     vi.spyOn(global,"fetch").mockResolvedValue(new Response(JSON.stringify({results:[review]}),{status:200}));
     renderQuery(<ReviewModerationPanel/>);
-    const hide=await screen.findByRole("button",{name:"Hide / Reject"});
+    expect(await screen.findByText("Publicly visible: No")).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"Make publicly visible"})).toBeEnabled();
+    const hide=screen.getByRole("button",{name:"Keep private"});
     expect(hide).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Reason to hide/reject"),{target:{value:"Private information"}});
+    fireEvent.change(screen.getByLabelText("Reason to hide"),{target:{value:"Private information"}});
     expect(hide).toBeEnabled();
+  });
+
+  it("persists submitted feedback state and therapist identity after reload",async()=>{
+    vi.spyOn(global,"fetch").mockImplementation(async()=>new Response(JSON.stringify([{id:"appointment-1",status:"COMPLETED",assignment_status:"ACCEPTED",therapy_name:"Physiotherapy",physiotherapist_name:"Priya",scheduled_start:"2026-08-22T10:00:00Z",rating:{...review,appointment:"appointment-1",status_display:"Pending Review"}}]),{status:200}));
+    const {unmount}=renderQuery(<CustomerRatingPanel/>);
+    expect(await screen.findByText("Feedback submitted")).toBeInTheDocument();
+    expect(screen.getByText("Physiotherapy · Priya")).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:/submit|review submission/i})).not.toBeInTheDocument();
+    unmount();
+    renderQuery(<CustomerRatingPanel/>);
+    expect(await screen.findByText("Feedback submitted")).toBeInTheDocument();
   });
 });

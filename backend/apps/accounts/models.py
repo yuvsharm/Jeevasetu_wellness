@@ -281,3 +281,53 @@ class AuthenticationAuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.event}:{self.outcome}:{self.id}"
+
+
+class Notification(models.Model):
+    class Category(models.TextChoices):
+        APPOINTMENTS = "APPOINTMENTS", "Appointments"
+        PRACTITIONERS = "PRACTITIONERS", "Practitioners"
+        PAYMENTS = "PAYMENTS", "Payments"
+        REVIEWS = "REVIEWS", "Reviews"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "tenancy.Organization", on_delete=models.PROTECT, related_name="notifications"
+    )
+    recipient = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="notifications"
+    )
+    recipient_role = models.CharField(max_length=32, choices=Role.choices)
+    notification_type = models.CharField(max_length=64)
+    category = models.CharField(max_length=24, choices=Category.choices)
+    title = models.CharField(max_length=160)
+    message = models.CharField(max_length=500, blank=True)
+    related_object_type = models.CharField(max_length=64)
+    related_object_id = models.CharField(max_length=64)
+    target_url = models.CharField(max_length=500)
+    action_required = models.BooleanField(default=False)
+    dedupe_key = models.CharField(max_length=255)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("organization", "recipient", "recipient_role", "dedupe_key"),
+                name="acct_notification_dedupe_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=("organization", "recipient", "recipient_role", "read_at", "created_at"),
+                name="acct_notif_inbox_idx",
+            ),
+            models.Index(
+                fields=("organization", "recipient", "recipient_role", "category", "read_at"),
+                name="acct_notif_category_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.recipient_id}:{self.notification_type}:{self.id}"

@@ -268,7 +268,7 @@ def test_status_flow_and_final_state_reschedule_protection(api_client):
         if new_status == "IN_PROGRESS":
             Appointment.objects.filter(pk=appointment_id).update(
                 assignment_status=Appointment.AssignmentStatus.ACCEPTED,
-                journey_status=Appointment.JourneyStatus.EN_ROUTE,
+                journey_status=Appointment.JourneyStatus.REACHED,
                 en_route_at=timezone.now(),
             )
         result = api_client.post(
@@ -399,6 +399,14 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
         reverse("schedule-journey", args=[appointment.id]),
         {"journey_status": "EN_ROUTE"}, format="json", **headers(organization),
     )
+    too_early = api_client.post(
+        reverse("schedule-status", args=[appointment.id]),
+        {"status": "IN_PROGRESS"}, format="json", **headers(organization),
+    )
+    reached = api_client.post(
+        reverse("schedule-journey", args=[appointment.id]),
+        {"journey_status": "REACHED"}, format="json", **headers(organization),
+    )
     started = api_client.post(
         reverse("schedule-status", args=[appointment.id]),
         {"status": "IN_PROGRESS"}, format="json", **headers(organization),
@@ -410,8 +418,8 @@ def test_request_accept_and_assign_is_atomic_and_schedules_reminders(api_client)
     )
     appointment.refresh_from_db()
     payment = AppointmentPayment.objects.get(appointment=appointment)
-    assert (en_route.status_code, started.status_code, completed.status_code) == (200, 200, 200)
-    assert appointment.en_route_at and appointment.service_started_at and appointment.completed_at
+    assert (en_route.status_code, too_early.status_code, reached.status_code, started.status_code, completed.status_code) == (200, 400, 200, 200, 200)
+    assert appointment.en_route_at and appointment.arrived_at and appointment.service_started_at and appointment.completed_at
     source.refresh_from_db()
     assert payment.amount_due == source.final_amount
     assert payment.status == AppointmentPayment.Status.PAID
@@ -820,7 +828,7 @@ def test_physiotherapist_only_sees_assigned_and_allowed_transitions(api_client):
     )
     Appointment.objects.filter(pk=created.data["id"]).update(
         assignment_status=Appointment.AssignmentStatus.ACCEPTED,
-        journey_status=Appointment.JourneyStatus.EN_ROUTE,
+        journey_status=Appointment.JourneyStatus.REACHED,
         en_route_at=timezone.now(),
     )
     started = api_client.post(

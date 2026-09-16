@@ -44,11 +44,11 @@ describe("TherapyGrid imagery", () => {
       id: "offer-1", title: "September special", promotional_text: "Choose your care",
       offer_type: "FIXED_DISCOUNT", discount_value: "800.00", fixed_price: null,
       minimum_therapy_count: 5, eligible_therapy_names: ["Abhyang", "Basti", "Nasya", "Shirodhara", "Potli Massage"],
-      valid_from: "2020-01-01T00:00:00.000Z", valid_until: "2099-01-01T00:00:00.000Z",
+      valid_from: "2020-01-01T00:00:00.000Z", valid_until: "2098-12-31T18:30:00.000Z",
     }] }), { status: 200 }));
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CommercialOffers /></QueryClientProvider>);
     expect(await screen.findByText("₹800 OFF")).toBeInTheDocument();
     expect(screen.getByText("Choose any 5 eligible therapies")).toBeInTheDocument();
-    expect(screen.getByText(/Valid 1 Jan 2020.*1 Jan 2099/)).toBeInTheDocument();
+    expect(screen.getByText(/Valid 1 Jan 2020.*31 Dec 2098/)).toBeInTheDocument();
   });
 });
