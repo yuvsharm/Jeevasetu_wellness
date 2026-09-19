@@ -9,12 +9,23 @@ import type { NotificationItem, NotificationPage, NotificationSummary } from "@/
 
 const POLL_INTERVAL_MS = 45_000;
 
+function notificationTarget(item: NotificationItem) {
+  if (item.notification_type === "RATING_REMINDER" && !item.target_url.includes("#")) {
+    return `${item.target_url}#rating`;
+  }
+  return item.target_url;
+}
+
 export function NotificationBell({ role, onSummary }: {
   role: Extract<Role, "OWNER" | "CUSTOMER" | "PHYSIOTHERAPIST">;
   onSummary: (summary: NotificationSummary) => void;
 }) {
   const router = useRouter();
   const panelRef = useRef<HTMLDivElement>(null);
+  const refreshVersionRef = useRef(0);
+  const locallyReadIdsRef = useRef(new Set<string>());
+  const summaryRef = useRef<NotificationSummary>({ unread_count: 0, category_counts: {} });
+  const openingIdRef = useRef<string | null>(null);
   const [open, setOpen] = useState(false);
   const [summary, setSummary] = useState<NotificationSummary>({ unread_count: 0, category_counts: {} });
   const [items, setItems] = useState<NotificationItem[]>([]);
@@ -27,27 +38,32 @@ export function NotificationBell({ role, onSummary }: {
       unread_count: typeof value?.unread_count === "number" ? value.unread_count : 0,
       category_counts: value?.category_counts ?? {},
     };
+    summaryRef.current = safe;
     setSummary(safe);
     onSummary(safe);
   }, [onSummary]);
 
   const refreshCount = useCallback(async () => {
+    const version = refreshVersionRef.current;
     try {
-      applySummary(await requestJson<NotificationSummary>(`/api/notifications/unread-count?${query}`));
+      const next = await requestJson<NotificationSummary>(`/api/notifications/unread-count?${query}`);
+      if (version === refreshVersionRef.current) applySummary(next);
     } catch {
       // A background refresh must not interrupt the authenticated workspace.
     }
   }, [applySummary, query]);
 
   const refreshList = useCallback(async () => {
+    const version = refreshVersionRef.current;
     setLoading(true);
     setError("");
     try {
       const page = await requestJson<NotificationPage>(`/api/notifications?${query}`);
-      setItems(page.results);
+      if (version !== refreshVersionRef.current) return;
+      setItems(page.results.filter((item) => !item.is_read && !locallyReadIdsRef.current.has(item.id)));
       applySummary(page);
     } catch {
-      setError("Notifications could not be loaded. Try again.");
+      if (version === refreshVersionRef.current) setError("Notifications could not be loaded. Try again.");
     } finally {
       setLoading(false);
     }
@@ -74,25 +90,30 @@ export function NotificationBell({ role, onSummary }: {
   }, [open, refreshList]);
 
   async function openNotification(item: NotificationItem) {
+    if (openingIdRef.current) return;
+    openingIdRef.current = item.id;
     setError("");
     try {
       if (!item.is_read) {
         await requestJson<NotificationItem>(`/api/notifications/${encodeURIComponent(item.id)}/read?${query}`, { method: "POST" });
-        const nextItems = items.map((value) => value.id === item.id ? { ...value, is_read: true } : value);
-        setItems(nextItems);
+        locallyReadIdsRef.current.add(item.id);
+        refreshVersionRef.current += 1;
+        setItems((current) => current.filter((value) => value.id !== item.id));
+        const current = summaryRef.current;
         applySummary({
-          unread_count: Math.max(0, summary.unread_count - 1),
+          unread_count: Math.max(0, current.unread_count - 1),
           category_counts: {
-            ...summary.category_counts,
-            [item.category]: Math.max(0, (summary.category_counts[item.category] ?? 0) - 1),
+            ...current.category_counts,
+            [item.category]: Math.max(0, (current.category_counts[item.category] ?? 0) - 1),
           },
         });
       }
       setOpen(false);
-      router.push(item.target_url);
-      router.refresh();
+      router.push(notificationTarget(item));
     } catch {
       setError("This notification could not be opened. Try again.");
+    } finally {
+      openingIdRef.current = null;
     }
   }
 
@@ -114,9 +135,9 @@ export function NotificationBell({ role, onSummary }: {
       <div className="max-h-[min(27rem,calc(100vh-10rem))] overflow-y-auto overscroll-contain">
         {loading && <p role="status" className="p-6 text-center text-sm text-slate-600">Loading notifications…</p>}
         {!loading && error && <div className="p-4 text-sm text-red-700"><p role="alert">{error}</p><button type="button" onClick={() => void refreshList()} className="mt-2 min-h-11 rounded-lg border border-red-200 px-3 font-semibold">Retry</button></div>}
-        {!loading && !error && items.length === 0 && <p className="p-8 text-center text-sm text-slate-600">You’re all caught up.</p>}
-        {!loading && items.map((item) => <button key={item.id} type="button" onClick={() => void openNotification(item)} className={`block min-h-16 w-full border-b border-slate-100 px-4 py-3 text-left hover:bg-emerald-50 ${item.is_read ? "bg-white text-slate-600" : "bg-emerald-50/60 text-slate-950"}`}>
-          <span className="flex items-start gap-2"><span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${item.is_read ? "bg-slate-300" : "bg-emerald-600"}`} /><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{item.title}</span><span className="mt-1 block break-words text-sm leading-5">{item.message}</span><time aria-label="Notification event time" dateTime={item.created_at} className="mt-1 block text-right text-xs">{new Date(item.created_at).toLocaleString()}</time></span></span>
+        {!loading && !error && items.length === 0 && <p className="p-8 text-center text-sm text-slate-600">No new notifications</p>}
+        {!loading && items.map((item) => <button key={item.id} type="button" onClick={() => void openNotification(item)} className="block min-h-16 w-full border-b border-slate-100 bg-emerald-50/60 px-4 py-3 text-left text-slate-950 hover:bg-emerald-50">
+          <span className="flex items-start gap-2"><span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-emerald-600" /><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{item.title}</span><span className="mt-1 block break-words text-sm leading-5">{item.message}</span><time aria-label="Notification event time" dateTime={item.created_at} className="mt-1 block text-right text-xs">{new Date(item.created_at).toLocaleString()}</time></span></span>
         </button>)}
       </div>
     </section>}

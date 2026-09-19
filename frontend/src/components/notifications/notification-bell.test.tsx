@@ -40,11 +40,12 @@ describe("NotificationBell", () => {
   });
 
   it("opens without clearing unread, distinguishes state, then marks only the selected item and follows its deep link", async () => {
+    let read = false;
     const backend = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = String(input);
-      if (url.includes("/read?")) return response({ ...notification, is_read: true, read_at: "2026-09-15T10:01:00Z" });
-      if (url.startsWith("/api/notifications?")) return response({ ...summary, count: 1, next: null, previous: null, results: [notification] });
-      return response(summary);
+      if (url.includes("/read?")) { read = true; return response({ ...notification, is_read: true, read_at: "2026-09-15T10:01:00Z" }); }
+      if (url.startsWith("/api/notifications?")) return response({ ...summary, unread_count: read ? 0 : 1, count: read ? 0 : 1, next: null, previous: null, results: read ? [] : [notification] });
+      return response(read ? { unread_count: 0, category_counts: {} } : summary);
     });
     const onSummary = vi.fn();
     render(<NotificationBell role="CUSTOMER" onSummary={onSummary} />);
@@ -58,8 +59,43 @@ describe("NotificationBell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /Appointment confirmed/ }));
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/customer/appointments/appointment-1"));
+    expect(screen.queryByRole("dialog", { name: "Notifications" })).not.toBeInTheDocument();
     expect(onSummary).toHaveBeenLastCalledWith(expect.objectContaining({ unread_count: 0 }));
     expect(backend.mock.calls.filter(([input, init]) => String(input).includes("/read?") && init?.method === "POST")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: /Notifications, 0 unread/i }));
+    expect(await screen.findByText("No new notifications")).toBeInTheDocument();
+  });
+
+  it("adds the stable rating anchor for an older stored rating notification target", async () => {
+    const ratingNotification = { ...notification, notification_type: "RATING_REMINDER", title: "Rate your therapist" };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => String(input).includes("/read?")
+      ? response({ ...ratingNotification, is_read: true })
+      : String(input).startsWith("/api/notifications?")
+        ? response({ ...summary, count: 1, next: null, previous: null, results: [ratingNotification] })
+        : response(summary));
+    render(<NotificationBell role="CUSTOMER" onSummary={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Notifications, 1 unread/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Rate your therapist/i }));
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/customer/appointments/appointment-1#rating"));
+  });
+
+  it("does not let an older count response restore the badge after a notification is read", async () => {
+    let resolveStaleCount!: (value: Response) => void;
+    const staleCount = new Promise<Response>((resolve) => { resolveStaleCount = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/unread-count?")) return staleCount;
+      if (url.includes("/read?")) return response({ ...notification, is_read: true });
+      return response({ ...summary, count: 1, next: null, previous: null, results: [notification] });
+    });
+    render(<NotificationBell role="CUSTOMER" onSummary={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /Notifications, 0 unread/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Appointment confirmed/i }));
+    expect(await screen.findByRole("button", { name: /Notifications, 0 unread/i })).toBeInTheDocument();
+
+    resolveStaleCount(await response(summary));
+    await act(async () => { await staleCount; await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /Notifications, 0 unread/i })).toBeInTheDocument();
   });
 
   it("renders empty and recoverable error states", async () => {
@@ -71,7 +107,7 @@ describe("NotificationBell", () => {
     });
     const { unmount } = render(<NotificationBell role="OWNER" onSummary={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: /Notifications, 0 unread/i }));
-    expect(await screen.findByText("You’re all caught up.")).toBeInTheDocument();
+    expect(await screen.findByText("No new notifications")).toBeInTheDocument();
     unmount();
 
     failList = true;

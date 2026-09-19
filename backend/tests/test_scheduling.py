@@ -555,6 +555,16 @@ def test_request_accept_then_exact_slot_assignment_is_idempotent_and_customer_sy
     api_client.force_authenticate(customer)
     detail = api_client.get(reverse("appointment-mine-detail", args=[source.id]), **headers(organization))
     assert detail.data["appointment"]["assignment_status"] == "REJECTED"
+    appointment_target = api_client.get(
+        reverse("appointment-mine-detail", args=[appointment.id]), **headers(organization)
+    )
+    assert appointment_target.status_code == 200
+    assert appointment_target.data["id"] == str(source.id)
+    api_client.force_authenticate(owner)
+    assert api_client.get(
+        reverse("appointment-mine-detail", args=[appointment.id]), **headers(organization)
+    ).status_code == 403
+    api_client.force_authenticate(customer)
     assert detail.data["appointment"]["physiotherapist_name"] is None
     assert detail.data["timeline"][-1]["key"] == "REASSIGNMENT"
     assert Appointment.objects.filter(originating_request=source).count() == 1

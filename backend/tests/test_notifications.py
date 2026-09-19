@@ -49,6 +49,11 @@ def create_notification(organization, recipient, role, *, key="test:one", catego
 def test_list_and_bell_count_do_not_mark_notifications_read(api_client):
     organization, _, owner, *_ = setup_domain("notification-list")
     value = create_notification(organization, owner, Role.OWNER)
+    historical = create_notification(
+        organization, owner, Role.OWNER, key="test:read-history"
+    )
+    historical.read_at = timezone.now()
+    historical.save(update_fields=("read_at",))
     api_client.force_authenticate(owner)
 
     count = api_client.get(reverse("notification-unread-count"), {"role": Role.OWNER}, **headers(organization))
@@ -56,7 +61,8 @@ def test_list_and_bell_count_do_not_mark_notifications_read(api_client):
 
     value.refresh_from_db()
     assert count.status_code == 200 and count.data["unread_count"] == 1
-    assert listing.status_code == 200 and listing.data["results"][0]["is_read"] is False
+    assert listing.status_code == 200 and listing.data["count"] == 1
+    assert [item["id"] for item in listing.data["results"]] == [str(value.id)]
     assert value.read_at is None
 
 
@@ -72,6 +78,10 @@ def test_individual_read_persists_and_does_not_clear_another_notification(api_cl
 
     assert response.status_code == 200 and response.data["is_read"] is True
     assert first.read_at is not None and second.read_at is None
+    listing = api_client.get(
+        reverse("notification-list"), {"role": Role.OWNER}, **headers(organization)
+    )
+    assert [item["id"] for item in listing.data["results"]] == [str(second.id)]
 
 
 def test_notification_access_is_user_role_and_tenant_scoped(api_client):

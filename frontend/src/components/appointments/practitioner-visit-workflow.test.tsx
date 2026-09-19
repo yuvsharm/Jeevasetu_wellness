@@ -4,17 +4,39 @@ import userEvent from "@testing-library/user-event";
 import { afterEach } from "vitest";
 import { PractitionerVisitWorkflow } from "./practitioner-visit-workflow";
 
-const offer = { id: "visit-1", patient_name: "Service request", therapy_name: "Physiotherapy", duration_minutes: 60, scheduled_start: "2026-08-12T10:00:00Z", city: "Meerut", region: "Uttar Pradesh", assignment_status: "PENDING", status: "SCHEDULED", journey_status: "NOT_STARTED" };
+const offer = { id: "visit-1", patient_name: "Meera Relative", patient_age: 67, patient_mobile: "9876543210", therapy_name: "Physiotherapy", requested_therapy_names: ["Physiotherapy", "Kati Basti"], duration_minutes: 60, scheduled_start: "2026-08-12T10:00:00Z", address_line_1: "163 C Block", address_line_2: "First floor", landmark: "Near park", city: "Meerut", region: "Uttar Pradesh", pin_code: "250004", assignment_status: "PENDING", status: "SCHEDULED", journey_status: "NOT_STARTED" };
 function mount() { return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><PractitionerVisitWorkflow /></QueryClientProvider>); }
 afterEach(() => vi.restoreAllMocks());
 
-it("shows a minimal offer and requires a structured decline reason", async () => {
+it("shows the assigned patient, booking contact, and full address before acceptance", async () => {
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => init?.method === "POST" ? new Response(JSON.stringify(offer), { status: 200 }) : new Response(JSON.stringify([offer]), { status: 200 }));
-  mount(); expect(await screen.findByText("New Service Request")).toBeInTheDocument(); expect(screen.queryByText(/mobile/i)).not.toBeInTheDocument();
+  mount(); expect(await screen.findByRole("heading", { name: "Meera Relative" })).toBeInTheDocument();
+  expect(screen.getByText("Meera Relative · Age 67")).toBeInTheDocument();
+  expect(screen.getByText("9876543210")).toBeInTheDocument();
+  expect(screen.getByText("163 C Block, First floor, Near park, Meerut, Uttar Pradesh, 250004")).toBeInTheDocument();
+  expect(screen.getByText("Physiotherapy, Kati Basti · 60 minutes")).toBeInTheDocument();
+  expect(screen.getByText("AWAITING ACCEPTANCE")).toBeInTheDocument();
+  expect(screen.queryByText("VISIT-1")).not.toBeInTheDocument();
+  expect(screen.getByText("Patient").closest("dl")).toHaveClass("sm:grid-cols-2");
+  expect(screen.getByText("Service address").parentElement).toHaveClass("sm:col-span-2");
   await userEvent.click(screen.getByRole("button", { name: "Decline" }));
   await userEvent.selectOptions(screen.getByRole("combobox", { name: "Reason" }), "too far");
   await userEvent.click(screen.getByRole("button", { name: "Confirm rejection" }));
   expect(fetchMock).toHaveBeenCalledWith("/api/schedule/visit-1/assignment-response", expect.objectContaining({ body: JSON.stringify({ id: "visit-1", accept: false, reason: "too far" }) }));
+});
+
+it.each([
+  ["pending", { assignment_status: "PENDING", status: "SCHEDULED" }],
+  ["accepted", { assignment_status: "ACCEPTED", status: "CONFIRMED" }],
+  ["active", { assignment_status: "ACCEPTED", status: "IN_PROGRESS", journey_status: "REACHED" }],
+  ["completed", { assignment_status: "ACCEPTED", status: "COMPLETED", payment_status: "PAID" }],
+])("keeps canonical service identity on %s cards", async (_label, state) => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify([{ ...offer, ...state }]), { status: 200 }));
+  mount();
+  expect(await screen.findByRole("heading", { name: "Meera Relative" })).toBeInTheDocument();
+  expect(screen.getByText("Meera Relative · Age 67")).toBeInTheDocument();
+  expect(screen.getByText("9876543210")).toBeInTheDocument();
+  expect(screen.getByText("163 C Block, First floor, Near park, Meerut, Uttar Pradesh, 250004")).toBeInTheDocument();
 });
 
 it("requires Reached between En Route and starting therapy",async()=>{

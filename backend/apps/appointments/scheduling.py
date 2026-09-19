@@ -681,7 +681,7 @@ def transition_status(appointment, *, new_status, actor, reason="", emit_notific
 @transaction.atomic
 def complete_and_confirm_payment(appointment, *, actor):
     appointment = (
-        Appointment.objects.select_for_update()
+        Appointment.objects.select_for_update(of=("self",))
         .select_related("physiotherapist__user", "originating_request")
         .get(pk=appointment.pk)
     )

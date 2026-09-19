@@ -137,18 +137,22 @@ export function PractitionerVisitWorkflow() {
   const render = (item: OperationalAppointment) => {
     const completed = item.status === "COMPLETED";
     const paid = item.payment_status === "PAID";
+    const serviceDetailsVisible = item.assignment_status === "PENDING" || item.assignment_status === "ACCEPTED";
+    const serviceAddress = [
+      item.address_line_1,
+      item.address_line_2,
+      item.landmark,
+      item.city,
+      item.region,
+      item.pin_code,
+    ].filter(Boolean).join(", ");
     return (
       <article key={item.id} className="min-w-0 rounded-2xl border bg-white p-4 sm:p-5">
         <p className="text-xs font-semibold text-emerald-800">
-          Booking {item.id.slice(0, 8).toUpperCase()} ·{" "}
           {completed ? "APPOINTMENT COMPLETED" : item.status.replaceAll("_", " ")}
         </p>
         <h3 className="font-bold">
-          {item.assignment_status === "PENDING"
-            ? "New Service Request"
-            : item.assignment_status === "REJECTED"
-              ? "Rejected assignment"
-              : item.patient_name}
+          {serviceDetailsVisible ? item.patient_name : "Rejected assignment"}
         </h3>
         <p>
           {(item.requested_therapy_names?.length
@@ -160,6 +164,30 @@ export function PractitionerVisitWorkflow() {
         <p>
           {new Date(item.scheduled_start).toLocaleString()} · {item.city || "Service area pending"}
         </p>
+
+        {serviceDetailsVisible && (
+          <dl className="mt-4 grid min-w-0 gap-2 text-sm sm:grid-cols-2">
+            <Info label="Patient" value={`${item.patient_name}${item.patient_age != null ? ` · Age ${item.patient_age}` : " · Age unavailable"}`} />
+            <Info label="Registered contact" value={item.patient_mobile || "Not provided"} />
+            <Info label="Service address" value={serviceAddress || "Not provided"} wide />
+            <Info
+              label="Status"
+              value={
+                item.assignment_status === "PENDING"
+                  ? "AWAITING ACCEPTANCE"
+                  : completed
+                    ? "Appointment completed successfully"
+                    : item.status === "IN_PROGRESS"
+                      ? "THERAPY IN PROGRESS"
+                      : item.journey_status === "REACHED"
+                        ? "REACHED"
+                        : item.journey_status === "EN_ROUTE"
+                          ? "EN ROUTE"
+                          : "THERAPIST ACCEPTED"
+              }
+            />
+          </dl>
+        )}
 
         {item.assignment_status === "PENDING" ? (
           <div className="mt-4 flex flex-wrap gap-2">
@@ -175,37 +203,6 @@ export function PractitionerVisitWorkflow() {
         ) : (
           item.assignment_status === "ACCEPTED" && (
             <>
-              <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-                <Info label="Customer" value={`${item.patient_name} · ${item.patient_age ?? "Age unavailable"}`} />
-                <Info label="Contact" value={item.patient_mobile || "Not provided"} />
-                <Info
-                  label="Service address"
-                  value={[
-                    item.address_line_1,
-                    item.address_line_2,
-                    item.landmark,
-                    item.city,
-                    item.region,
-                    item.pin_code,
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}
-                />
-                <Info
-                  label="Status"
-                  value={
-                    completed
-                      ? "Appointment completed successfully"
-                      : item.status === "IN_PROGRESS"
-                        ? "THERAPY IN PROGRESS"
-                        : item.journey_status === "REACHED"
-                          ? "REACHED"
-                        : item.journey_status === "EN_ROUTE"
-                          ? "EN ROUTE"
-                          : "THERAPIST ACCEPTED"
-                  }
-                />
-              </dl>
               <div className="mt-4 flex flex-wrap gap-2">
                 {item.status === "CONFIRMED" && item.journey_status === "NOT_STARTED" && (
                   <button onClick={() => journey.mutate({ id: item.id, journeyStatus: "EN_ROUTE" })} className="button-primary">
@@ -457,9 +454,9 @@ function formatAmount(amount?: string | null) {
   return amount ? `₹${amount}` : "Amount unavailable";
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div>
+    <div className={wide ? "min-w-0 sm:col-span-2" : "min-w-0"}>
       <dt className="font-bold">{label}</dt>
       <dd className="break-words">{value}</dd>
     </div>

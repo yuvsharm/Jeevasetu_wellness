@@ -214,7 +214,7 @@ def notify_status_transition(appointment, *, new_status):
             message="Share feedback about your completed therapy session.",
             related_object_type="appointment",
             related_object_id=appointment.id,
-            target_url=f"/customer/appointments/{appointment.id}",
+            target_url=f"/customer/appointments/{appointment.id}#rating",
             action_required=True,
             dedupe_key=f"appointment:{appointment.id}:rating-reminder",
         )
@@ -300,7 +300,7 @@ def notify_completion_and_payment(appointment):
         message="Share feedback about your completed therapy session.",
         related_object_type="appointment",
         related_object_id=appointment.id,
-        target_url=f"/customer/appointments/{appointment.id}",
+        target_url=f"/customer/appointments/{appointment.id}#rating",
         action_required=True,
         dedupe_key=f"appointment:{appointment.id}:rating-reminder",
     )

@@ -12,6 +12,7 @@ htmlcov/
 venv/
 node_modules/
 .next/
+.next-dev/
 out/
 coverage/
 *.tsbuildinfo

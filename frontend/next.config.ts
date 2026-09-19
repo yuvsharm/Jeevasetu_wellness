@@ -8,6 +8,9 @@ export default function nextConfig(phase: string): NextConfig {
     .filter(Boolean);
 
   return {
+    // Keep the long-running dev compiler isolated from `next build`, which
+    // replaces the production output directory while local UAT is running.
+    distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
     output: "standalone",
     poweredByHeader: false,
     reactStrictMode: true,

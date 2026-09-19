@@ -1,4 +1,7 @@
+from datetime import time, timedelta
+
 import pytest
+
 from django.urls import reverse
 from django.utils import timezone
 
@@ -8,7 +11,9 @@ from apps.appointments.models import (
     AppointmentAuditEvent,
     AppointmentPayment,
     AppointmentRating,
+    AppointmentRequest,
 )
+from apps.patients.models import CustomerFamilyMember
 from tests.test_appointment_operations import create_scheduled
 from tests.test_scheduling import add_actor, headers, setup_domain
 
@@ -220,15 +225,93 @@ def test_completion_payment_confirmation_rejects_customer_unassigned_and_cross_t
     assert appointment.payment.status == AppointmentPayment.Status.PENDING
 
 
-def test_offer_hides_patient_details_until_acceptance_and_journey_is_owned(api_client):
+def test_completion_creates_missing_payment_and_enables_one_time_customer_rating(
+    api_client, django_capture_on_commit_callbacks
+):
+    values = setup_domain("completion-rating-regression")
+    organization, _, owner, _, physio_user, _, customer, *_ = values
+    appointment = create_scheduled(api_client, values)
+    appointment.status = Appointment.Status.IN_PROGRESS
+    appointment.assignment_status = Appointment.AssignmentStatus.ACCEPTED
+    appointment.journey_status = Appointment.JourneyStatus.REACHED
+    appointment.service_started_at = timezone.now()
+    appointment.save(
+        update_fields=(
+            "status",
+            "assignment_status",
+            "journey_status",
+            "service_started_at",
+        )
+    )
+    assert not AppointmentPayment.objects.filter(appointment=appointment).exists()
+
+    api_client.force_authenticate(physio_user)
+    with django_capture_on_commit_callbacks(execute=True):
+        completed = api_client.post(
+            reverse("schedule-complete-and-confirm-payment", args=[appointment.id]),
+            {"therapy_delivered": True, "payment_received": True},
+            format="json",
+            **headers(organization),
+        )
+
+    appointment.refresh_from_db()
+    payment = AppointmentPayment.objects.get(appointment=appointment)
+    assert completed.status_code == 200
+    assert appointment.status == Appointment.Status.COMPLETED
+    assert appointment.completed_at is not None
+    assert payment.status == AppointmentPayment.Status.PAID
+    assert payment.paid_at is not None
+    notifications = Notification.objects.filter(
+        related_object_id=appointment.id,
+        notification_type="THERAPY_COMPLETED_PAYMENT_CONFIRMED",
+    )
+    assert notifications.filter(recipient=customer).count() == 1
+    assert notifications.filter(recipient=owner).count() == 1
+    assert notifications.filter(recipient=physio_user).count() == 1
+    rating_reminder = Notification.objects.get(
+        related_object_id=appointment.id,
+        notification_type="RATING_REMINDER",
+        recipient=customer,
+    )
+    assert rating_reminder.target_url == f"/customer/appointments/{appointment.id}#rating"
+
+    api_client.force_authenticate(customer)
+    customer_items = api_client.get(
+        reverse("schedule-customer-me"), **headers(organization)
+    )
+    customer_item = next(item for item in customer_items.data if item["id"] == str(appointment.id))
+    assert customer_item["status"] == Appointment.Status.COMPLETED
+    assert customer_item["rating"] is None
+    rating_url = reverse("schedule-customer-rating", args=[appointment.id])
+    assert api_client.post(
+        rating_url,
+        {"stars": 5, "comment": ""},
+        format="json",
+        **headers(organization),
+    ).status_code == 201
+    assert api_client.post(
+        rating_url,
+        {"stars": 4, "comment": "Duplicate rating"},
+        format="json",
+        **headers(organization),
+    ).status_code == 400
+    assert AppointmentRating.objects.filter(
+        appointment=appointment,
+        customer=customer,
+        physiotherapist=appointment.physiotherapist,
+    ).count() == 1
+
+
+def test_offer_shows_service_details_before_acceptance_and_journey_is_owned(api_client):
     values = setup_domain("journey-flow")
     organization, _, _, _, physio_user, _, customer, *_ = values
     appointment = create_scheduled(api_client, values)
     api_client.force_authenticate(physio_user)
     before = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
     offer = next(item for item in before.data if item["id"] == str(appointment.id))
-    assert offer["patient_name"] == "Service request"
-    assert offer["patient_mobile"] == "" and offer["address_line_1"] == ""
+    assert offer["patient_name"] == appointment.patient.full_name
+    assert offer["patient_mobile"] == appointment.patient.mobile_number
+    assert offer["address_line_1"] == appointment.address_line_1
     api_client.post(reverse("schedule-assignment-response", args=[appointment.id]), {"accept": True}, format="json", **headers(organization))
     after = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
     accepted = next(item for item in after.data if item["id"] == str(appointment.id))
@@ -238,3 +321,125 @@ def test_offer_hides_patient_details_until_acceptance_and_journey_is_owned(api_c
     assert en_route.status_code == 200 and reached.status_code == 200
     api_client.force_authenticate(customer)
     assert api_client.post(reverse("schedule-journey", args=[appointment.id]), {"journey_status": "EN_ROUTE"}, format="json", **headers(organization)).status_code == 403
+
+
+def test_owner_and_assigned_therapist_use_booking_recipient_contact_and_address_without_mixing(api_client):
+    values = setup_domain("booking-recipient-identity")
+    organization, clinic, owner, _, physio_user, physio, customer, patient, _, therapy = values
+    family = CustomerFamilyMember.objects.create(
+        organization=organization,
+        customer=customer,
+        full_name="Meera Relative",
+        age=67,
+        gender="FEMALE",
+        relationship="Mother",
+    )
+
+    def make_booking(*, recipient_name, recipient_age, family_member, day_offset, address_line):
+        preferred_date = timezone.localdate() + timedelta(days=day_offset)
+        source = AppointmentRequest.objects.create(
+            organization=organization,
+            creator=customer,
+            patient_profile=patient,
+            family_member=family_member,
+            therapy=therapy,
+            patient_name=recipient_name,
+            age=recipient_age,
+            gender="FEMALE",
+            mobile_number=patient.mobile_number,
+            session_preference=AppointmentRequest.SessionPreference.SINGLE,
+            preferred_date=preferred_date,
+            preferred_time=time(10),
+            address=address_line,
+            landmark="Near canonical landmark",
+            city="Meerut",
+            region="Uttar Pradesh",
+            pin_code="250004",
+            status=AppointmentRequest.Status.APPROVED,
+        )
+        start = timezone.now() + timedelta(days=day_offset)
+        return source, Appointment.objects.create(
+            organization=organization,
+            clinic=clinic,
+            originating_request=source,
+            patient=patient,
+            therapy=therapy,
+            physiotherapist=physio,
+            scheduled_start=start,
+            scheduled_end=start + timedelta(minutes=45),
+            duration_minutes=45,
+            status=Appointment.Status.SCHEDULED,
+            assignment_status=Appointment.AssignmentStatus.PENDING,
+            address_line_1=address_line,
+            landmark="Near canonical landmark",
+            city="Meerut",
+            region="Uttar Pradesh",
+            pin_code="250004",
+            assigned_by=owner,
+            assigned_at=timezone.now(),
+            created_by=owner,
+            updated_by=owner,
+        )
+
+    _, self_appointment = make_booking(
+        recipient_name=patient.full_name,
+        recipient_age=patient.age,
+        family_member=None,
+        day_offset=2,
+        address_line="Self visit address",
+    )
+    family_source, family_appointment = make_booking(
+        recipient_name=family.full_name,
+        recipient_age=family.age,
+        family_member=family,
+        day_offset=3,
+        address_line="Family visit address",
+    )
+
+    api_client.force_authenticate(owner)
+    owner_list = api_client.get(reverse("appointment-owner-list"), **headers(organization))
+    owner_family = next(
+        item for item in owner_list.data["results"] if item["id"] == str(family_source.id)
+    )
+    assert owner_family["patient_name"] == family.full_name
+    assert owner_family["mobile_number"] == patient.mobile_number
+    assert owner_family["address"] == "Family visit address"
+
+    api_client.force_authenticate(physio_user)
+    pending = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
+    self_item = next(item for item in pending.data if item["id"] == str(self_appointment.id))
+    family_item = next(item for item in pending.data if item["id"] == str(family_appointment.id))
+    assert self_item["patient_name"] == patient.full_name
+    assert family_item["patient_name"] == family.full_name
+    assert family_item["patient_name"] != patient.full_name
+    assert self_item["patient_mobile"] == family_item["patient_mobile"] == patient.mobile_number
+    assert self_item["address_line_1"] == "Self visit address"
+    assert family_item["address_line_1"] == "Family visit address"
+    assert family_item["patient_age"] == family.age
+
+    for status in (
+        Appointment.Status.CONFIRMED,
+        Appointment.Status.IN_PROGRESS,
+        Appointment.Status.COMPLETED,
+    ):
+        Appointment.objects.filter(pk=family_appointment.pk).update(
+            assignment_status=Appointment.AssignmentStatus.ACCEPTED,
+            status=status,
+        )
+        state = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
+        item = next(value for value in state.data if value["id"] == str(family_appointment.id))
+        assert item["patient_name"] == family.full_name
+        assert item["patient_mobile"] == patient.mobile_number
+        assert item["address_line_1"] == "Family visit address"
+
+    unrelated_user = add_actor(organization, clinic, Role.PHYSIOTHERAPIST, "unrelated-identity")
+    api_client.force_authenticate(unrelated_user)
+    unrelated = api_client.get(reverse("schedule-assigned-me"), **headers(organization))
+    assert unrelated.status_code == 200 and unrelated.data == []
+
+    foreign_organization = setup_domain("booking-recipient-foreign")[0]
+    api_client.force_authenticate(physio_user)
+    cross_tenant = api_client.get(
+        reverse("schedule-assigned-me"), **headers(foreign_organization)
+    )
+    assert cross_tenant.status_code == 403

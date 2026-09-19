@@ -7,7 +7,7 @@ export type AppointmentRequest = {
   id: string; therapy: string; requested_therapies?: string[]; requested_therapy_names?: string[]; requested_duration_minutes?: number; family_member?: string | null; selected_package?:string|null; selected_offer?:string|null; commercial_snapshot?:CommercialQuote; regular_amount?:string|null; discount_amount?:string|null; final_amount?:string|null; therapy_name: string; preferred_practitioner: string | null; patient_name: string; age: number; gender: string;
   mobile_number: string; alternate_mobile: string; email: string; session_preference: string;
   preferred_date: string; preferred_time: string; problem_description: string; pain_area: string;
-  problem_duration: string; doctor_reference: string; address: string; city: string; pin_code: string;
+  problem_duration: string; doctor_reference: string; address: string; city: string; region?: string; pin_code: string;
   landmark: string; google_map_link: string; status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   owner_remarks: string; rejection_category?: string; rejection_customer_reason?: string; created_at: string; updated_at: string;
   family_member_name?:string; appointment?:OperationalAppointment|null;

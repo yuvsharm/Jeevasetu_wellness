@@ -454,7 +454,7 @@ class CancelAppointmentSerializer(serializers.Serializer):
 
 class AppointmentListSerializer(serializers.ModelSerializer):
     patient_identifier = serializers.CharField(source="patient.patient_identifier", read_only=True)
-    patient_name = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name = serializers.SerializerMethodField()
     therapy_name = serializers.CharField(source="therapy.name", read_only=True)
     clinic_name = serializers.CharField(source="clinic.name", read_only=True)
     physiotherapist_name = serializers.CharField(
@@ -469,7 +469,7 @@ class AppointmentListSerializer(serializers.ModelSerializer):
     payment_confirmed_by = serializers.SerializerMethodField()
     payment_qr_available = serializers.SerializerMethodField()
     requested_therapy_names = serializers.SerializerMethodField()
-    patient_mobile = serializers.CharField(source="patient.mobile_number", read_only=True)
+    patient_mobile = serializers.SerializerMethodField()
     patient_email = serializers.SerializerMethodField()
 
     class Meta:
@@ -544,6 +544,14 @@ class AppointmentListSerializer(serializers.ModelSerializer):
             return [value.therapy.name]
         return [source.therapy.name, *source.requested_therapies.values_list("name", flat=True)]
 
+    def get_patient_name(self, value):
+        source = getattr(value, "originating_request", None)
+        return source.patient_name if source and source.patient_name else value.patient.full_name
+
+    def get_patient_mobile(self, value):
+        source = getattr(value, "originating_request", None)
+        return source.mobile_number if source and source.mobile_number else value.patient.mobile_number
+
     def get_patient_email(self, value):
         return value.patient.email or (value.patient.user.email if value.patient.user_id else "")
 
@@ -576,9 +584,9 @@ class AppointmentDetailSerializer(AppointmentListSerializer):
 
 class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
     patient_name = serializers.SerializerMethodField()
-    patient_mobile = serializers.CharField(source="patient.mobile_number", read_only=True)
-    patient_age = serializers.IntegerField(source="patient.age", read_only=True, allow_null=True)
-    patient_gender = serializers.CharField(source="patient.gender", read_only=True)
+    patient_mobile = serializers.SerializerMethodField()
+    patient_age = serializers.SerializerMethodField()
+    patient_gender = serializers.SerializerMethodField()
     problem_description = serializers.CharField(
         source="originating_request.problem_description", read_only=True, default=""
     )
@@ -614,9 +622,46 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
         )
 
     def get_patient_name(self, value):
-        if value.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+        if value.assignment_status not in (
+            Appointment.AssignmentStatus.PENDING,
+            Appointment.AssignmentStatus.ACCEPTED,
+        ):
             return "Service request"
-        return value.patient.full_name
+        return super().get_patient_name(value)
+
+    def get_patient_mobile(self, value):
+        if value.assignment_status not in (
+            Appointment.AssignmentStatus.PENDING,
+            Appointment.AssignmentStatus.ACCEPTED,
+        ):
+            return ""
+        return super().get_patient_mobile(value)
+
+    def get_patient_age(self, value):
+        if value.assignment_status not in (
+            Appointment.AssignmentStatus.PENDING,
+            Appointment.AssignmentStatus.ACCEPTED,
+        ):
+            return None
+        source = getattr(value, "originating_request", None)
+        if source and source.age is not None:
+            return source.age
+        if value.patient.date_of_birth:
+            today = timezone.localdate()
+            return today.year - value.patient.date_of_birth.year - (
+                (today.month, today.day)
+                < (value.patient.date_of_birth.month, value.patient.date_of_birth.day)
+            )
+        return value.patient.age
+
+    def get_patient_gender(self, value):
+        if value.assignment_status not in (
+            Appointment.AssignmentStatus.PENDING,
+            Appointment.AssignmentStatus.ACCEPTED,
+        ):
+            return ""
+        source = getattr(value, "originating_request", None)
+        return source.gender if source and source.gender else value.patient.gender
 
     def get_reminders(self, value):
         return [
@@ -630,7 +675,10 @@ class PhysiotherapistAppointmentSerializer(AppointmentListSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        if instance.assignment_status != Appointment.AssignmentStatus.ACCEPTED:
+        if instance.assignment_status not in (
+            Appointment.AssignmentStatus.PENDING,
+            Appointment.AssignmentStatus.ACCEPTED,
+        ):
             for field in (
                 "patient_identifier", "patient_mobile", "patient_age", "patient_gender",
                 "problem_description", "pain_area", "google_map_link",
@@ -1132,6 +1180,8 @@ class AppointmentRatingSerializer(serializers.ModelSerializer):
 
     def validate_comment(self, value):
         value = value.strip()
+        if not value:
+            return ""
         if len(value) < 3:
             raise serializers.ValidationError("Please share at least 3 characters about your experience.")
         return value

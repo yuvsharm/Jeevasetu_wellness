@@ -48,12 +48,11 @@ class NotificationListView(NotificationScopeMixin, GenericAPIView):
     pagination_class = NotificationPagination
 
     def get(self, request):
-        queryset = self.scoped_queryset()
-        unread_count = queryset.filter(read_at__isnull=True).count()
+        queryset = self.scoped_queryset().filter(read_at__isnull=True)
+        unread_count = queryset.count()
         category_counts = {
             row["category"]: row["count"]
-            for row in queryset.filter(read_at__isnull=True)
-            .values("category").annotate(count=Count("id"))
+            for row in queryset.values("category").annotate(count=Count("id"))
         }
         page = self.paginate_queryset(queryset)
         paginator = self.paginator

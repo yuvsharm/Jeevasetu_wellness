@@ -329,6 +329,31 @@ def test_customer_cannot_book_for_another_customers_family_member(api_client):
     assert response.status_code == 400
     assert "family_member" in response.data
 
+
+def test_authenticated_family_booking_keeps_relative_as_recipient_and_customer_as_contact(api_client):
+    organization, customer, therapy = setup_identity(Role.CUSTOMER)
+    family = CustomerFamilyMember.objects.create(
+        organization=organization,
+        customer=customer,
+        full_name="Meera Relative",
+        age=67,
+        gender="FEMALE",
+        relationship="Mother",
+    )
+    api_client.force_authenticate(customer)
+    created = api_client.post(
+        reverse("quick-appointment-create"),
+        authenticated_payload(therapy, family_member=str(family.id)),
+        format="json",
+        **tenant(organization.slug),
+    )
+    assert created.status_code == 201
+    assert created.data["patient_name"] == family.full_name
+    assert created.data["age"] == family.age
+    assert str(created.data["family_member"]) == str(family.id)
+    assert created.data["mobile_number"] == "9876543210"
+    assert created.data["address"] == "163 C Block"
+
 def test_failed_authenticated_booking_does_not_create_verification(api_client):
     organization, customer, therapy = setup_identity(Role.CUSTOMER)
     api_client.force_authenticate(customer)

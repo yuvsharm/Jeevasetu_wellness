@@ -409,6 +409,16 @@ class CustomerAppointmentDetailView(HasTenant, generics.RetrieveAPIView):
             "operational_appointment__physiotherapist__specializations",
         )
 
+    def get_object(self):
+        queryset = self.filter_queryset(self.get_queryset())
+        value = queryset.filter(
+            Q(pk=self.kwargs["pk"]) | Q(operational_appointment__pk=self.kwargs["pk"])
+        ).first()
+        if value is None:
+            raise NotFound("Appointment is unavailable.")
+        self.check_object_permissions(self.request, value)
+        return value
+
 
 class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.UpdateAPIView):
     serializer_class = CancelAppointmentSerializer
