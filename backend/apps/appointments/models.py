@@ -907,6 +907,7 @@ class AppointmentRatingModerationEvent(models.Model):
 class AppointmentPayment(models.Model):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
+        VERIFICATION_PENDING = "VERIFICATION_PENDING", "Verification pending"
         PAID = "PAID", "Paid"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -915,7 +916,7 @@ class AppointmentPayment(models.Model):
     )
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
     amount_due = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING)
     paid_at = models.DateTimeField(null=True, blank=True)
     reference = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=500, blank=True)

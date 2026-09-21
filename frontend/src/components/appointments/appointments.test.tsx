@@ -62,9 +62,10 @@ describe("appointment workflow", () => {
       const url = String(input);
       if (url === "/api/commercial/public") return new Response(JSON.stringify(catalog), { status: 200 });
       if (url === "/api/customer/family") return new Response(JSON.stringify([]), { status: 200 });
+      if (url === "/api/customer/profile") return new Response(JSON.stringify({ address: { address_line_1: "163 C Block", city: "Meerut", region: "Uttar Pradesh", pin_code: "250004" } }), { status: 200 });
       if (url === "/api/commercial/quote") return new Response(JSON.stringify({ therapy_ids: [therapy.id], therapy_names: [therapy.name], therapy_prices: {}, package_id: null, package_name: "", offer_id: null, offer_title: "", session_count: 1, regular_amount: "1900.00", discount_amount: "0.00", final_amount: "1900.00", free_benefits: [], duration_minutes: 45 }), { status: 200 });
       if (url.startsWith("/api/availability/customer-slots?")) return new Response(JSON.stringify([{ value: "10:00", label: "10:00" }]), { status: 200 });
-      if (url === "/api/appointment-requests") return new Response(JSON.stringify({ id: "request-1", status: "PENDING", preferred_date: bookingDate, preferred_time: "10:00" }), { status: 201 });
+      if (url === "/api/appointment-requests") return new Response(JSON.stringify({ id: "request-1", status: "PENDING", preferred_date: bookingDate, preferred_time: "10:00", patient_name: "Asha Sharma", therapy_name: "Kati Basti", requested_therapy_names: ["Kati Basti"], address: "163 C Block", city: "Meerut", region: "Uttar Pradesh", pin_code: "250004", final_amount: "1900.00", appointment: { id: "appointment-1", payment_status: "PENDING", payment_amount_due: "1900.00" } }), { status: 201 });
       return new Response(JSON.stringify({}), { status: 200 });
     });
     renderWithQuery(<BookingForm initialTherapy={therapy.id} />, true);
@@ -73,9 +74,12 @@ describe("appointment workflow", () => {
     await screen.findByRole("option", { name: "10:00" });
     fireEvent.change(screen.getByLabelText("Available time slot"), { target: { value: "10:00" } });
     fireEvent.change(screen.getByLabelText("Pain area (optional)"), { target: { value: "Lower back" } });
-    const confirmButton = screen.getByRole("button", { name: "Confirm Book Appointment" });
+    const confirmButton = screen.getByRole("button", { name: "Review Booking" });
     await waitFor(() => expect(confirmButton).toBeEnabled());
     fireEvent.click(confirmButton);
+    expect(await screen.findByRole("heading", { name: "Check the visit before payment" })).toBeInTheDocument();
+    expect(screen.queryByText("Payment is non-refundable.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Proceed to Payment" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/appointment-requests", expect.objectContaining({ method: "POST" })));
     const call = fetchMock.mock.calls.find(([input]) => String(input) === "/api/appointment-requests");
     const body = JSON.parse(String(call?.[1]?.body));
@@ -83,9 +87,11 @@ describe("appointment workflow", () => {
     expect(body).not.toHaveProperty("mobile_number");
     expect(body).not.toHaveProperty("booking_verification_token");
     expect(body).not.toHaveProperty("otp");
-    const confirmation = await screen.findByRole("status");
-    expect(confirmation).toHaveTextContent("Booking request submitted successfully.");
-    expect(confirmation).toHaveTextContent("Awaiting confirmation");
+    expect(await screen.findByRole("heading", { name: "Complete payment" })).toBeInTheDocument();
+    expect(screen.getByText("Payment is non-refundable.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "I Have Paid" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand and accept/ }));
+    expect(screen.getByRole("button", { name: "I Have Paid" })).toBeEnabled();
   });
 
   it("shows a clear message when clinic hours are not configured", async () => {

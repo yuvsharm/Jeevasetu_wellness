@@ -12,6 +12,7 @@ from apps.appointments.models import Appointment, AppointmentRating, Appointment
 from apps.appointments.notification_events import (
     notify_cancelled,
     notify_payment_confirmed,
+    notify_payment_submitted,
     notify_rating_submitted,
     notify_reached,
     notify_rescheduled,
@@ -137,7 +138,7 @@ def test_notification_persistence_failure_does_not_rollback_business_state(monke
     assert not Notification.objects.filter(dedupe_key="failure:isolation").exists()
 
 
-def test_customer_booking_creates_customer_notification_only_after_success(api_client):
+def test_customer_booking_waits_for_payment_submission_before_notifying_operations(api_client):
     organization, customer, therapy = setup_identity(Role.CUSTOMER)
     api_client.force_authenticate(customer)
     url = reverse("quick-appointment-create")
@@ -145,7 +146,7 @@ def test_customer_booking_creates_customer_notification_only_after_success(api_c
     duplicate = api_client.post(url, authenticated_payload(therapy), format="json", **tenant(organization.slug))
 
     assert created.status_code == 201 and duplicate.status_code == 400
-    assert Notification.objects.filter(recipient=customer, notification_type="BOOKING_RECEIVED").count() == 1
+    assert not Notification.objects.filter(recipient=customer, notification_type="BOOKING_RECEIVED").exists()
 
 
 def test_assignment_and_response_emit_intended_role_notifications(api_client):
@@ -185,6 +186,7 @@ def test_reschedule_cancel_status_payment_and_rating_event_notifications():
     notify_cancelled(appointment)
     notify_status_transition(appointment, new_status=Appointment.Status.IN_PROGRESS)
     notify_status_transition(appointment, new_status=Appointment.Status.COMPLETED)
+    notify_payment_submitted(appointment)
     notify_payment_confirmed(appointment)
     rating = AppointmentRating.objects.create(
         appointment=appointment, organization=organization, customer=customer,
@@ -196,7 +198,9 @@ def test_reschedule_cancel_status_payment_and_rating_event_notifications():
     assert Notification.objects.filter(recipient=customer, notification_type="APPOINTMENT_CANCELLED").exists()
     assert Notification.objects.filter(recipient=customer, notification_type="APPOINTMENT_IN_PROGRESS").exists()
     assert Notification.objects.filter(recipient=owner, notification_type="APPOINTMENT_COMPLETED").exists()
-    assert Notification.objects.filter(recipient=physio.user, notification_type="PAYMENT_CONFIRMED").exists()
+    assert Notification.objects.filter(recipient=owner, notification_type="PAYMENT_SUBMITTED").exists()
+    assert Notification.objects.filter(recipient=customer, notification_type="PAYMENT_CONFIRMED").exists()
+    assert not Notification.objects.filter(recipient=physio.user, notification_type="PAYMENT_CONFIRMED").exists()
     assert Notification.objects.filter(recipient=physio.user, notification_type="RATING_SUBMITTED").exists()
 
 

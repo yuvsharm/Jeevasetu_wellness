@@ -132,15 +132,14 @@ def test_assigned_therapist_atomically_completes_and_confirms_owner_payment_once
         actor=physio_user,
     ).count() == 1
     completion_notifications = Notification.objects.filter(
-        notification_type="THERAPY_COMPLETED_PAYMENT_CONFIRMED"
+        notification_type="APPOINTMENT_COMPLETED"
     )
     assert completion_notifications.filter(recipient=customer).count() == 1
     assert completion_notifications.filter(recipient=owner).count() == 1
-    assert completion_notifications.filter(recipient=physio_user).count() == 1
+    assert completion_notifications.filter(recipient=physio_user).count() == 0
     owner_message = completion_notifications.get(recipient=owner).message
     assert appointment.patient.full_name in owner_message
-    assert physio_user.get_full_name() in owner_message
-    assert "₹1777.00" in owner_message
+    assert "₹1777.00" not in owner_message
     assert appointment.audit_events.filter(
         event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
         previous_status=AppointmentPayment.Status.PENDING,
@@ -263,11 +262,11 @@ def test_completion_creates_missing_payment_and_enables_one_time_customer_rating
     assert payment.paid_at is not None
     notifications = Notification.objects.filter(
         related_object_id=appointment.id,
-        notification_type="THERAPY_COMPLETED_PAYMENT_CONFIRMED",
+        notification_type="APPOINTMENT_COMPLETED",
     )
     assert notifications.filter(recipient=customer).count() == 1
     assert notifications.filter(recipient=owner).count() == 1
-    assert notifications.filter(recipient=physio_user).count() == 1
+    assert notifications.filter(recipient=physio_user).count() == 0
     rating_reminder = Notification.objects.get(
         related_object_id=appointment.id,
         notification_type="RATING_REMINDER",
@@ -404,6 +403,15 @@ def test_owner_and_assigned_therapist_use_booking_recipient_contact_and_address_
     assert owner_family["patient_name"] == family.full_name
     assert owner_family["mobile_number"] == patient.mobile_number
     assert owner_family["address"] == "Family visit address"
+
+    api_client.force_authenticate(customer)
+    customer_list = api_client.get(reverse("appointment-mine"), **headers(organization))
+    customer_family = next(
+        item for item in customer_list.data if item["id"] == str(family_source.id)
+    )
+    assert customer_family["account_holder_name"] == patient.full_name
+    assert customer_family["patient_name"] == family.full_name
+    assert customer_family["family_member_name"] == family.full_name
 
     api_client.force_authenticate(physio_user)
     pending = api_client.get(reverse("schedule-assigned-me"), **headers(organization))

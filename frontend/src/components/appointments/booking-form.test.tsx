@@ -21,7 +21,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/auth/session-provider", () => ({
   useSession: () => ({
     data: {
-      user: { id: "customer-1" },
+      user: { id: "customer-1", first_name: "Asha", last_name: "Sharma" },
       access: { roles: [{ role: "CUSTOMER", is_active: true }] },
     },
     isPending: false,
@@ -68,6 +68,10 @@ function renderBooking(fetchImplementation: typeof fetch, initialOffer = "offer-
 describe("offer booking", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-01T06:00:00+05:30"));
     replace.mockReset();
@@ -75,15 +79,20 @@ describe("offer booking", () => {
   afterEach(() => vi.useRealTimers());
 
   it("prefills only the qualifying therapy count and submits the exact returned slot", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const submittedRequest = {
+      id: "request-1", preferred_date: "2026-09-08", preferred_time: "10:00:00", status: "PENDING", created_at: "2026-09-02T10:26:29.750193Z",
+      account_holder_name: "Asha Sharma", patient_name: "Asha Sharma", therapy_name: "Abhyang", requested_therapy_names: ["Abhyang", "Basti", "Shirodhara", "Nasya", "Potli Massage"], address: "163 C Block", landmark: "Near Park", city: "Meerut", region: "Uttar Pradesh", pin_code: "250004", final_amount: "400.00",
+      appointment: { id: "appointment-1", payment_status: "PENDING", payment_amount_due: "400.00" },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/commercial/public") return new Response(JSON.stringify(catalog));
       if (url === "/api/customer/family") return new Response(JSON.stringify([]));
       if (url.startsWith("/api/availability/customer-slots")) return new Response(JSON.stringify([{ value: "10:00", label: "10:00" }]));
       if (url === "/api/commercial/quote") return new Response(JSON.stringify(discountedQuote));
-      if (url === "/api/appointment-requests") return new Response(JSON.stringify({
-        id: "request-1", preferred_date: "2026-09-03", preferred_time: "10:00:00", status: "PENDING", created_at: "2026-09-02T10:26:29.750193Z",
-      }), { status: 201 });
+      if (url === "/api/appointment-requests") return new Response(JSON.stringify(submittedRequest), { status: 201 });
+      if (url === "/api/schedule/my-appointments/appointment-1/payment-submission") return new Response(JSON.stringify({ ...submittedRequest.appointment, payment_status: "VERIFICATION_PENDING" }));
+      if (url === "/api/appointment-requests/request-1") return new Response(JSON.stringify({ ...submittedRequest, appointment: { ...submittedRequest.appointment, payment_status: "VERIFICATION_PENDING" } }));
       return new Response(JSON.stringify({}), { status: 200 });
     });
     renderBooking(fetchMock as typeof fetch);
@@ -95,12 +104,46 @@ describe("offer booking", () => {
     expect(date).toHaveAttribute("max", "2026-09-15");
     fireEvent.change(date, { target: { value: "2026-09-08" } });
     fireEvent.change(await screen.findByLabelText("Available time slot"), { target: { value: "10:00" } });
-    const confirm = screen.getByRole("button", { name: "Confirm Book Appointment" });
+    const confirm = screen.getByRole("button", { name: "Review Booking" });
     await waitFor(() => expect(confirm).toBeEnabled());
     fireEvent.click(confirm);
-    expect(await screen.findByText("Booking request submitted successfully.")).toBeInTheDocument();
-    expect(screen.getByText("Booking Submitted At")).toBeInTheDocument();
-    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/appointment-requests");
+    expect(await screen.findByRole("heading", { name: "Check the visit before payment" })).toBeInTheDocument();
+    expect(screen.getByText("Asha Sharma")).toBeInTheDocument();
+    expect(screen.getByText("08 Sep 2026 · 10:00 AM")).toBeInTheDocument();
+    expect(screen.queryByText("Payment is non-refundable.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Proceed to Payment" }));
+    expect(await screen.findByRole("heading", { name: "Complete payment" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "JeevaSetu owner UPI payment QR code" })).toBeInTheDocument();
+    expect(screen.getByText("7351150555@ptsbi")).toBeInTheDocument();
+    expect(screen.getByText("Payment is non-refundable.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await screen.findByText("UPI ID copied.")).toBeInTheDocument();
+    const paidButton = screen.getByRole("button", { name: "I Have Paid" });
+    expect(paidButton).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand and accept/ }));
+    expect(paidButton).toBeEnabled();
+    fireEvent.click(paidButton);
+    expect(await screen.findByRole("heading", { name: "Congratulations! Your Therapy is Just One Step Away from Your Doorstep" })).toBeInTheDocument();
+    expect(screen.getByText("Payment details received successfully.")).toBeInTheDocument();
+    expect(screen.getByText("Your preferred therapy slot has been secured and our care team is completing the final confirmation.")).toBeInTheDocument();
+    expect(screen.getByText("Account Holder").parentElement).toHaveTextContent("Asha Sharma");
+    expect(screen.getByText("Therapy Recipient").parentElement).toHaveTextContent("Asha Sharma");
+    expect(screen.getByText("Date").parentElement).toHaveTextContent("08 Sep 2026");
+    expect(screen.getByText("Time").parentElement).toHaveTextContent("10:00 AM");
+    expect(screen.getByText("Amount").parentElement).toHaveTextContent("₹400");
+    expect(screen.getByText("Service Address").parentElement?.parentElement).toHaveTextContent("163 C Block, Near Park, Meerut, Uttar Pradesh, 250004");
+    const progress = screen.getByRole("list", { name: "Booking progress" });
+    expect(progress).toHaveTextContent("Payment Details Received");
+    expect(progress).toHaveTextContent("Final Confirmation");
+    expect(progress).toHaveTextContent("Therapist Assigned");
+    expect(progress).toHaveTextContent("Therapy at Your Doorstep");
+    expect(screen.getByText("We’ll notify you as soon as your therapist is assigned.")).toBeInTheDocument();
+    expect(screen.queryByText("Payment verification pending")).not.toBeInTheDocument();
+    expect(screen.queryByText(/submitted to the Owner for verification/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/does not mark the payment as paid/i)).not.toBeInTheDocument();
+    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/appointment-requests") as unknown as
+      | [RequestInfo | URL, RequestInit?]
+      | undefined;
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       therapy: "therapy-1", requested_therapies: ["therapy-2", "therapy-3", "therapy-4", "therapy-5"], selected_offer: "offer-1",
       preferred_date: "2026-09-08", preferred_time: "10:00",
@@ -128,7 +171,7 @@ describe("offer booking", () => {
     fireEvent.click(screen.getByRole("button", { name: /Unrelated Therapy/ }));
     fireEvent.click(screen.getByRole("button", { name: /Leg Massage/ }));
     expect(screen.getByText("2 of 5 therapies selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Confirm Book Appointment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Review Booking" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /Shirodhara/ }));
     fireEvent.click(screen.getByRole("button", { name: /Nasya/ }));

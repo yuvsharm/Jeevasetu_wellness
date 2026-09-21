@@ -27,7 +27,9 @@ def _when(appointment):
 
 
 def _context(appointment):
-    return f"{appointment.patient.full_name} · {appointment.therapy.name} · {_when(appointment)}"
+    source = appointment.originating_request
+    recipient = source.patient_name if source and source.patient_name else appointment.patient.full_name
+    return f"{recipient} · {appointment.therapy.name} · {_when(appointment)}"
 
 
 def notify_booking_request(value):
@@ -240,89 +242,34 @@ def notify_reached(appointment):
     )
 
 
-def _payment_amount(appointment):
-    payment = getattr(appointment, "payment", None)
-    if payment is not None:
-        return payment.amount_due
-    source = appointment.originating_request
-    return source.final_amount if source and source.final_amount is not None else 0
-
-
-def _therapist_name(appointment):
-    if appointment.physiotherapist_id is None:
-        return "Unassigned therapist"
-    user = appointment.physiotherapist.user
-    return user.get_full_name() or user.get_username()
-
-
-def notify_completion_and_payment(appointment):
-    amount = _payment_amount(appointment)
-    shared = dict(
-        organization=appointment.organization,
-        category=Notification.Category.PAYMENTS,
-        notification_type="THERAPY_COMPLETED_PAYMENT_CONFIRMED",
-        title="Therapy completed and payment confirmed",
-        related_object_type="appointment",
-        related_object_id=appointment.id,
-        dedupe_key=f"appointment:{appointment.id}:completed-payment-confirmed",
-    )
-    notify_owners(
-        **shared,
-        message=(
-            f"{appointment.patient.full_name} · {_therapist_name(appointment)} · "
-            f"₹{amount:.2f} confirmed."
-        ),
-        target_url="/owner/payments",
-    )
-    notify_user(
-        **shared,
-        recipient=_customer(appointment),
-        recipient_role=Role.CUSTOMER,
-        message=f"Your therapy was completed and payment of ₹{amount:.2f} was confirmed.",
-        target_url=f"/customer/appointments/{appointment.id}",
-        action_required=True,
-    )
-    if appointment.physiotherapist_id:
-        notify_user(
-            **shared,
-            recipient=appointment.physiotherapist.user,
-            recipient_role=Role.PHYSIOTHERAPIST,
-            message=f"Therapy completion and payment of ₹{amount:.2f} were recorded.",
-            target_url="/physiotherapist/appointments",
-        )
-    notify_user(
-        organization=appointment.organization,
-        recipient=_customer(appointment),
-        recipient_role=Role.CUSTOMER,
-        notification_type="RATING_REMINDER",
-        category=Notification.Category.REVIEWS,
-        title="Rate your therapist",
-        message="Share feedback about your completed therapy session.",
-        related_object_type="appointment",
-        related_object_id=appointment.id,
-        target_url=f"/customer/appointments/{appointment.id}#rating",
-        action_required=True,
-        dedupe_key=f"appointment:{appointment.id}:rating-reminder",
-    )
-
-
 def notify_payment_confirmed(appointment):
     common = dict(
         organization=appointment.organization,
         category=Notification.Category.PAYMENTS,
         notification_type="PAYMENT_CONFIRMED",
-        title="Payment confirmed",
-        message=f"Payment was confirmed for {_context(appointment)}.",
+        title="Payment confirmed · Appointment booked",
+        message=f"Your payment was verified and your appointment is booked for {_when(appointment)}.",
         related_object_type="appointment",
         related_object_id=appointment.id,
         dedupe_key=f"appointment:{appointment.id}:payment:paid",
     )
-    notify_owners(**common, target_url="/owner/payments")
     notify_user(**common, recipient=_customer(appointment), recipient_role=Role.CUSTOMER,
                 target_url=f"/customer/appointments/{appointment.id}")
-    if appointment.physiotherapist_id:
-        notify_user(**common, recipient=appointment.physiotherapist.user,
-                    recipient_role=Role.PHYSIOTHERAPIST, target_url="/physiotherapist/appointments")
+
+
+def notify_payment_submitted(appointment):
+    notify_owners(
+        organization=appointment.organization,
+        category=Notification.Category.PAYMENTS,
+        notification_type="PAYMENT_SUBMITTED",
+        title="Payment submitted for verification",
+        message=f"{_context(appointment)}.",
+        related_object_type="appointment",
+        related_object_id=appointment.id,
+        target_url="/owner/payments",
+        action_required=True,
+        dedupe_key=f"appointment:{appointment.id}:payment:verification-pending",
+    )
 
 
 def notify_rating_submitted(rating):

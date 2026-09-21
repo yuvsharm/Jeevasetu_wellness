@@ -549,6 +549,9 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         return source.patient_name if source and source.patient_name else value.patient.full_name
 
     def get_patient_mobile(self, value):
+        registered = getattr(getattr(value.patient, "user", None), "mobile_number", "")
+        if registered:
+            return registered
         source = getattr(value, "originating_request", None)
         return source.mobile_number if source and source.mobile_number else value.patient.mobile_number
 
@@ -859,6 +862,7 @@ class CustomerAppointmentSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(path) if request else path
 
 class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
+    account_holder_name = serializers.SerializerMethodField()
     family_member_name = serializers.CharField(
         source="family_member.full_name", read_only=True, default=""
     )
@@ -867,8 +871,16 @@ class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
 
     class Meta(AppointmentRequestSerializer.Meta):
         fields = AppointmentRequestSerializer.Meta.fields + (
-            "family_member_name", "appointment", "timeline"
+            "account_holder_name", "family_member_name", "appointment", "timeline"
         )
+
+    def get_account_holder_name(self, value):
+        profile = value.patient_profile
+        if profile and profile.full_name:
+            return profile.full_name
+        if value.creator_id:
+            return value.creator.get_full_name() or value.creator.get_username()
+        return value.patient_name
 
     def get_appointment(self, value):
         try:
@@ -879,7 +891,22 @@ class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
 
     def get_timeline(self, value):
         result = [{"key": "SUBMITTED", "label": "Request submitted", "at": value.created_at}]
-        result.append({"key": "REVIEW", "label": "Under Owner review", "at": value.created_at})
+        try:
+            appointment = value.operational_appointment
+        except Appointment.DoesNotExist:
+            appointment = None
+        payment = getattr(appointment, "payment", None) if appointment else None
+        if payment is not None:
+            result.append({"key": "PAYMENT_REQUIRED", "label": "Payment required", "at": payment.created_at})
+            if payment.status in (
+                AppointmentPayment.Status.VERIFICATION_PENDING,
+                AppointmentPayment.Status.PAID,
+            ):
+                result.append({"key": "PAYMENT_SUBMITTED", "label": "Payment submitted for verification", "at": payment.updated_at})
+            if payment.status == AppointmentPayment.Status.PAID:
+                result.append({"key": "PAYMENT_CONFIRMED", "label": "Payment confirmed · Appointment booked", "at": payment.paid_at})
+        else:
+            result.append({"key": "REVIEW", "label": "Under Owner review", "at": value.created_at})
         accepted = value.audit_events.filter(
             event__in=(
                 AppointmentRequestAuditEvent.Event.ACCEPTED,
@@ -897,14 +924,10 @@ class CustomerAppointmentRequestSerializer(AppointmentRequestSerializer):
             return result
         if value.status == AppointmentRequest.Status.APPROVED:
             result.append({"key": "ACCEPTED", "label": "Request accepted", "at": getattr(accepted, "created_at", value.updated_at)})
-        try:
-            appointment = value.operational_appointment
-        except Appointment.DoesNotExist:
+        if appointment is None:
             return result
-        result.extend((
-            {"key": "ASSIGNED", "label": "Therapist assigned", "at": appointment.assigned_at},
-            {"key": "CONFIRMED", "label": "Appointment confirmed", "at": appointment.created_at},
-        ))
+        if appointment.assigned_at:
+            result.append({"key": "ASSIGNED", "label": "Therapist assigned", "at": appointment.assigned_at})
         if appointment.assignment_status == Appointment.AssignmentStatus.REJECTED:
             result.append({"key": "REASSIGNMENT", "label": "Therapist reassignment in progress", "at": appointment.assignment_responded_at})
             return result
@@ -1091,13 +1114,11 @@ class AppointmentStatusSerializer(serializers.Serializer):
 
 class AppointmentCompletionPaymentSerializer(serializers.Serializer):
     therapy_delivered = serializers.BooleanField()
-    payment_received = serializers.BooleanField()
+    payment_received = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
-        if not attrs["therapy_delivered"] or not attrs["payment_received"]:
-            raise serializers.ValidationError(
-                "Confirm both therapy delivery and customer payment confirmation."
-            )
+        if not attrs["therapy_delivered"]:
+            raise serializers.ValidationError("Confirm that the therapy was delivered.")
         return attrs
 
 

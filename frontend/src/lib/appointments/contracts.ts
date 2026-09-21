@@ -10,7 +10,7 @@ export type AppointmentRequest = {
   problem_duration: string; doctor_reference: string; address: string; city: string; region?: string; pin_code: string;
   landmark: string; google_map_link: string; status: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   owner_remarks: string; rejection_category?: string; rejection_customer_reason?: string; created_at: string; updated_at: string;
-  family_member_name?:string; appointment?:OperationalAppointment|null;
+  account_holder_name?:string; family_member_name?:string; appointment?:OperationalAppointment|null;
   timeline?:Array<{key:string;label:string;at:string|null}>;
 };
 
@@ -64,7 +64,7 @@ export type OperationalAppointment = {
   completed_at?: string | null;
   rating_stars?: number | null;
   rating_comment?: string;
-  payment_status?: "PENDING" | "PAID" | null;
+  payment_status?: "PENDING" | "VERIFICATION_PENDING" | "PAID" | null;
   payment_amount_due?: string | null;
   payment_paid_at?: string | null;
   payment_confirmed_by?: string;

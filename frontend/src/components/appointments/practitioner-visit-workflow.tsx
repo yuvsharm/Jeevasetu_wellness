@@ -27,6 +27,7 @@ export function PractitionerVisitWorkflow() {
   const [paymentReceived, setPaymentReceived] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [paymentQrAppointment, setPaymentQrAppointment] = useState<OperationalAppointment | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const paymentQrCloseRef = useRef<HTMLButtonElement>(null);
   const paymentQrTriggerRef = useRef<HTMLButtonElement | null>(null);
   const completionSubmissionRef = useRef(false);
@@ -69,7 +70,7 @@ export function PractitionerVisitWorkflow() {
     mutationFn: (id: string) =>
       requestJson<OperationalAppointment>(`/api/schedule/${id}/complete-and-confirm-payment`, {
         method: "POST",
-        body: JSON.stringify({ therapy_delivered: true, payment_received: true }),
+        body: JSON.stringify({ therapy_delivered: true }),
       }),
     onSuccess: async (updatedAppointment) => {
       client.setQueryData<OperationalAppointment[]>(["assigned-appointments"], (current) =>
@@ -138,6 +139,7 @@ export function PractitionerVisitWorkflow() {
     const completed = item.status === "COMPLETED";
     const paid = item.payment_status === "PAID";
     const serviceDetailsVisible = item.assignment_status === "PENDING" || item.assignment_status === "ACCEPTED";
+    const detailsOpen = Boolean(expanded[item.id]);
     const serviceAddress = [
       item.address_line_1,
       item.address_line_2,
@@ -165,8 +167,11 @@ export function PractitionerVisitWorkflow() {
           {new Date(item.scheduled_start).toLocaleString()} · {item.city || "Service area pending"}
         </p>
 
-        {serviceDetailsVisible && (
-          <dl className="mt-4 grid min-w-0 gap-2 text-sm sm:grid-cols-2">
+        {serviceDetailsVisible && <button type="button" onClick={()=>setExpanded(current=>({...current,[item.id]:!current[item.id]}))} className="mt-3 min-h-11 font-bold text-emerald-800 underline">{detailsOpen?"Hide Details":"See More / View Details"}</button>}
+
+        {serviceDetailsVisible && detailsOpen && (
+          <dl className="mt-4 grid max-h-72 min-w-0 gap-2 overflow-y-auto rounded-xl bg-slate-50 p-3 text-sm sm:grid-cols-2">
+            <Info label="Therapies" value={(item.requested_therapy_names?.length?item.requested_therapy_names:[item.therapy_name]).join(", ")} wide />
             <Info label="Patient" value={`${item.patient_name}${item.patient_age != null ? ` · Age ${item.patient_age}` : " · Age unavailable"}`} />
             <Info label="Registered contact" value={item.patient_mobile || "Not provided"} />
             <Info label="Service address" value={serviceAddress || "Not provided"} wide />
@@ -229,22 +234,13 @@ export function PractitionerVisitWorkflow() {
 
               {completed ? (
                 <section
-                  aria-label="Completed appointment payment"
+                  aria-label="Completed appointment"
                   className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4"
                 >
-                  <p className="font-bold text-emerald-900">
-                    {paid
-                      ? "Appointment completed successfully · Payment confirmed"
-                      : "Treatment completed successfully"}
-                  </p>
-                  <p className="mt-1">Amount: {formatAmount(item.payment_amount_due)}</p>
-                  <p className="font-semibold">{paid ? "Payment confirmed" : "Payment pending"}</p>
-                  {item.payment_paid_at && (
-                    <p className="mt-1 text-sm text-slate-600">
-                      Confirmed {new Date(item.payment_paid_at).toLocaleString()}
-                    </p>
-                  )}
+                  <p className="font-bold text-emerald-900">Therapy completed</p>
                 </section>
+              ) : item.status === "IN_PROGRESS" && paid ? (
+                <button type="button" onClick={()=>{if(!completion.isPending&&!completionSubmissionRef.current){completionSubmissionRef.current=true;completion.mutate(item.id)}}} disabled={completion.isPending} className="button-primary mt-4 w-full">{completion.isPending?"Saving…":"Therapy Done"}</button>
               ) : (
                 <PaymentToOwner
                   item={item}
@@ -311,10 +307,10 @@ export function PractitionerVisitWorkflow() {
         <div role="dialog" aria-modal="true" aria-labelledby="completion-dialog-title" className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
             <h3 id="completion-dialog-title" className="text-xl font-bold">
-              Confirm completion and payment
+              Confirm therapy completion
             </h3>
             <p className="mt-2 text-slate-700">
-              Confirm that the therapy has been completed and the customer has shown successful payment.
+              This historical appointment uses the earlier visit-payment flow.
             </p>
             <div className="mt-5 grid gap-3">
               <label className="flex min-h-12 items-start gap-3 rounded-xl border p-3 font-semibold">
@@ -410,9 +406,9 @@ export function PractitionerVisitWorkflow() {
         </div>
       )}
 
-      {(respond.error || journey.error || lifecycle.error) && (
+      {(respond.error || journey.error || lifecycle.error || (confirming ? null : completion.error)) && (
         <p role="alert" className="mt-4 text-red-700">
-          {(respond.error || journey.error || lifecycle.error)?.message}
+          {(respond.error || journey.error || lifecycle.error || completion.error)?.message}
         </p>
       )}
     </section>

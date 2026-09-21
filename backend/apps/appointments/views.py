@@ -44,14 +44,17 @@ from apps.appointments.scheduling import (
     assign_physiotherapist,
     cancel_appointment,
     complete_and_confirm_payment,
+    provision_prepaid_appointment,
     record_rejected_lifecycle_action,
     reschedule_appointment,
     rebook_closed_appointment,
     respond_to_assignment,
     transition_status,
+    submit_customer_payment,
     update_journey,
     unassign_physiotherapist,
     validate_schedule,
+    verify_customer_payment,
     decide_appointment_request,
     ensure_request_practitioner_eligible,
 )
@@ -316,11 +319,16 @@ class AppointmentCreateView(HasTenant, generics.CreateAPIView):
     permission_classes = (IsEnabledAuthenticated, IsCustomer)
     serializer_class = AuthenticatedAppointmentRequestSerializer
 
-    def perform_create(self, serializer):
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         value = serializer.save()
-        from apps.appointments.notification_events import notify_booking_request
-
-        notify_booking_request(value)
+        provision_prepaid_appointment(value, actor=request.user)
+        return Response(
+            CustomerAppointmentRequestSerializer(value, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class QuickAppointmentCreateView(AppointmentCreateView):
@@ -382,7 +390,8 @@ class CustomerAppointmentListView(HasTenant, generics.ListAPIView):
         return AppointmentRequest.objects.filter(
             organization=self.request.organization, creator=self.request.user
         ).select_related(
-            "therapy", "family_member", "operational_appointment__physiotherapist__user",
+            "therapy", "family_member", "patient_profile", "creator",
+            "operational_appointment__physiotherapist__user",
             "operational_appointment__physiotherapist__practitioner_profile",
             "operational_appointment__payment", "operational_appointment__rating",
         ).prefetch_related(
@@ -400,7 +409,8 @@ class CustomerAppointmentDetailView(HasTenant, generics.RetrieveAPIView):
         return AppointmentRequest.objects.filter(
             organization=self.request.organization, creator=self.request.user
         ).select_related(
-            "therapy", "family_member", "operational_appointment__physiotherapist__user",
+            "therapy", "family_member", "patient_profile", "creator",
+            "operational_appointment__physiotherapist__user",
             "operational_appointment__physiotherapist__practitioner_profile",
             "operational_appointment__payment", "operational_appointment__rating",
         ).prefetch_related(
@@ -418,6 +428,26 @@ class CustomerAppointmentDetailView(HasTenant, generics.RetrieveAPIView):
             raise NotFound("Appointment is unavailable.")
         self.check_object_permissions(self.request, value)
         return value
+
+
+class CustomerPaymentSubmissionView(HasTenant, GenericAPIView):
+    permission_classes = (IsEnabledAuthenticated, IsCustomer)
+
+    def post(self, request, pk):
+        if request.data.get("acknowledged") is not True:
+            raise ValidationError("Accept the prepaid booking terms before submitting payment.")
+        appointment = Appointment.objects.filter(
+            pk=pk,
+            organization=request.organization,
+            originating_request__creator=request.user,
+        ).select_related("originating_request", "payment").first()
+        if appointment is None:
+            raise NotFound("Payment is unavailable.")
+        try:
+            appointment = submit_customer_payment(appointment, actor=request.user)
+        except DjangoValidationError as error:
+            raise ValidationError(error.messages) from error
+        return Response(CustomerAppointmentSerializer(appointment, context={"request": request}).data)
 
 
 class CustomerAppointmentCancelView(CustomerAppointmentDetailView, generics.UpdateAPIView):
@@ -658,10 +688,13 @@ class OperationalAppointmentListCreateView(OperationalScopeMixin, generics.ListC
                 queryset = queryset.filter(**{key: value})
         assignment_status = self.request.query_params.get("assignment_status")
         journey_status = self.request.query_params.get("journey_status")
+        payment_status = self.request.query_params.get("payment_status")
         if assignment_status:
             queryset = queryset.filter(assignment_status=assignment_status)
         if journey_status:
             queryset = queryset.filter(journey_status=journey_status)
+        if payment_status:
+            queryset = queryset.filter(payment__status=payment_status)
         search = self.request.query_params.get("search", "").strip()
         if search:
             queryset = queryset.filter(
@@ -1273,6 +1306,14 @@ class AppointmentCompletionPaymentView(HasTenant, GenericAPIView):
             raise NotFound("Appointment is unavailable.")
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        payment = getattr(appointment, "payment", None)
+        if (
+            (payment is None or payment.status != AppointmentPayment.Status.PAID)
+            and not serializer.validated_data.get("payment_received")
+        ):
+            raise ValidationError(
+                "Confirm customer payment for this historical post-service payment flow."
+            )
         try:
             appointment = complete_and_confirm_payment(appointment, actor=request.user)
         except DjangoValidationError as error:
@@ -1434,6 +1475,11 @@ class CustomerAppointmentChangeRequestView(HasTenant, generics.ListCreateAPIView
         ).filter(Q(originating_request__creator=self.request.user) | Q(patient__user=self.request.user)).first()
         if appointment is None:
             raise NotFound("Appointment change requests are unavailable.")
+        payment = getattr(appointment, "payment", None)
+        if payment is not None and payment.status == AppointmentPayment.Status.PAID:
+            raise ValidationError(
+                "Confirmed prepaid appointments cannot be cancelled or refunded through the booking flow."
+            )
         try:
             with transaction.atomic():
                 value = serializer.save(
@@ -1626,8 +1672,26 @@ class OperationsPaymentView(HasTenant, GenericAPIView):
 
     def post(self, request, pk):
         level, clinic_ids = actor_role_scope(request.user, request.organization)
-        appointment = Appointment.objects.select_related("originating_request").filter(pk=pk, organization=request.organization, status=Appointment.Status.COMPLETED, physiotherapist__isnull=False).first()
+        appointment = Appointment.objects.select_related("originating_request", "payment").filter(
+            pk=pk, organization=request.organization
+        ).first()
         if appointment is None or (level == Role.MANAGER and appointment.clinic_id not in (clinic_ids or ())):
+            raise NotFound("Payment is unavailable.")
+        existing_payment = getattr(appointment, "payment", None)
+        if existing_payment and existing_payment.status == AppointmentPayment.Status.VERIFICATION_PENDING:
+            if level != Role.OWNER:
+                raise PermissionDenied("Only an Owner may verify a customer payment.")
+            try:
+                appointment = verify_customer_payment(
+                    appointment,
+                    actor=request.user,
+                    reference=str(request.data.get("reference", "")),
+                    note=str(request.data.get("note", "")),
+                )
+            except DjangoValidationError as error:
+                raise ValidationError(error.messages) from error
+            return Response(self.get_serializer(appointment.payment).data)
+        if appointment.status != Appointment.Status.COMPLETED or appointment.physiotherapist_id is None:
             raise NotFound("Payment is unavailable.")
         source = appointment.originating_request
         amount_due = source.final_amount if source and source.final_amount is not None else 0

@@ -24,6 +24,7 @@ from apps.appointments.views import (
     CustomerAppointmentChangeRequestView,
     CustomerAppointmentDetailView,
     CustomerAppointmentListView,
+    CustomerPaymentSubmissionView,
     CustomerAppointmentRebookView,
     CustomerAppointmentRatingView,
     CustomerOperationalAppointmentListView,
@@ -159,6 +160,11 @@ urlpatterns = [
     ),
     path(
         "mine/<uuid:pk>/cancel/", CustomerAppointmentCancelView.as_view(), name="appointment-cancel"
+    ),
+    path(
+        "schedule/my-appointments/<uuid:pk>/payment-submission/",
+        CustomerPaymentSubmissionView.as_view(),
+        name="customer-payment-submission",
     ),
     path("schedule/my-appointments/<uuid:pk>/rebook/", CustomerAppointmentRebookView.as_view(), name="appointment-rebook"),
     path("owner/", OwnerAppointmentListView.as_view(), name="appointment-owner-list"),

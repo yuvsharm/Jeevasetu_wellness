@@ -148,9 +148,18 @@ def decide_appointment_request(
     customer_reason="", internal_note=""
 ):
     source = AppointmentRequest.objects.select_for_update(of=("self",)).select_related(
-        "organization", "creator", "patient_profile", "therapy", "family_member", "selected_package", "selected_offer"
+        "organization", "creator", "patient_profile", "therapy", "family_member", "selected_package", "selected_offer",
+        "operational_appointment__payment",
     ).get(pk=source.pk)
     previous_status = source.status
+    existing_appointment = getattr(source, "operational_appointment", None)
+    existing_payment = getattr(existing_appointment, "payment", None) if existing_appointment else None
+    if (
+        action != "REJECT"
+        and existing_payment is not None
+        and existing_payment.status != AppointmentPayment.Status.PAID
+    ):
+        raise ValidationError("Verify the customer payment before accepting or assigning this booking.")
     if action == "REJECT":
         if source.status != AppointmentRequest.Status.PENDING:
             raise ValidationError("Only a pending appointment request can be rejected.")
@@ -411,6 +420,9 @@ def assign_physiotherapist(
         or appointment.status == Appointment.Status.IN_PROGRESS
     ):
         raise ValidationError("This appointment can no longer be assigned or reassigned.")
+    payment = getattr(appointment, "payment", None)
+    if payment is not None and payment.status != AppointmentPayment.Status.PAID:
+        raise ValidationError("Verify the customer payment before assigning a therapist.")
     previous = appointment.physiotherapist
     ensure_practitioner_operationally_eligible(physiotherapist)
     ensure_no_overlap(
@@ -694,6 +706,15 @@ def complete_and_confirm_payment(appointment, *, actor):
     if appointment.status != Appointment.Status.IN_PROGRESS:
         raise ValidationError("Start the therapy before confirming completion and payment.")
 
+    payment = getattr(appointment, "payment", None)
+    if payment is not None and payment.status == AppointmentPayment.Status.PAID:
+        return transition_status(
+            appointment,
+            new_status=Appointment.Status.COMPLETED,
+            actor=actor,
+            reason="Therapy delivered for a prepaid appointment.",
+        )
+
     appointment = transition_status(
         appointment,
         new_status=Appointment.Status.COMPLETED,
@@ -718,9 +739,165 @@ def complete_and_confirm_payment(appointment, *, actor):
         new_status=payment.status,
         reason="Customer showed successful owner payment confirmation.",
     )
-    from apps.appointments.notification_events import notify_completion_and_payment
+    from apps.appointments.notification_events import notify_status_transition
 
-    notify_completion_and_payment(appointment)
+    notify_status_transition(appointment, new_status=Appointment.Status.COMPLETED)
+    return appointment
+
+
+@transaction.atomic
+def provision_prepaid_appointment(source, *, actor):
+    """Create the unassigned operational shell used by the online prepaid flow."""
+    source = AppointmentRequest.objects.select_for_update(of=("self",)).select_related(
+        "organization", "patient_profile__clinic", "therapy"
+    ).prefetch_related("requested_therapies").get(pk=source.pk)
+    try:
+        return source.operational_appointment
+    except Appointment.DoesNotExist:
+        pass
+    patient = source.patient_profile
+    if patient is None or patient.clinic_id is None:
+        raise ValidationError("A customer patient profile is required before payment.")
+    zone = ZoneInfo(patient.clinic.timezone or source.organization.timezone or "Asia/Kolkata")
+    start = datetime.combine(source.preferred_date, source.preferred_time, zone)
+    end = validate_schedule(
+        clinic=patient.clinic,
+        start=start,
+        duration_minutes=source.requested_duration_minutes,
+    )
+    appointment = Appointment.objects.create(
+        organization=source.organization,
+        clinic=patient.clinic,
+        originating_request=source,
+        patient=patient,
+        therapy=source.therapy,
+        scheduled_start=start,
+        scheduled_end=end,
+        duration_minutes=source.requested_duration_minutes,
+        status=Appointment.Status.PENDING_ASSIGNMENT,
+        address_line_1=source.address[:255],
+        landmark=source.landmark,
+        city=source.city,
+        region=source.region,
+        pin_code=source.pin_code,
+        service_latitude=source.latitude,
+        service_longitude=source.longitude,
+        service_location_accuracy_meters=source.location_accuracy_meters,
+        service_location_source=source.location_source,
+        assignment_status=Appointment.AssignmentStatus.UNASSIGNED,
+        created_by=actor,
+        updated_by=actor,
+    )
+    AppointmentPayment.objects.create(
+        appointment=appointment,
+        organization=source.organization,
+        amount_due=source.final_amount or 0,
+        status=AppointmentPayment.Status.PENDING,
+        updated_by=actor,
+    )
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=source.organization,
+        actor=actor,
+        event=AppointmentAuditEvent.Event.CONVERTED,
+        new_status=appointment.status,
+        new_start=start,
+        reason="Online booking prepared for prepaid payment verification.",
+    )
+    return appointment
+
+
+@transaction.atomic
+def submit_customer_payment(appointment, *, actor):
+    appointment = Appointment.objects.select_for_update(of=("self",)).select_related(
+        "originating_request", "payment"
+    ).get(pk=appointment.pk)
+    source = appointment.originating_request
+    if source is None or source.creator_id != actor.id:
+        raise ValidationError("This payment is unavailable.")
+    payment = AppointmentPayment.objects.select_for_update().get(appointment=appointment)
+    if payment.status == AppointmentPayment.Status.PAID:
+        return appointment
+    if payment.status == AppointmentPayment.Status.VERIFICATION_PENDING:
+        raise ValidationError("Payment verification is already pending.")
+    previous = payment.status
+    payment.status = AppointmentPayment.Status.VERIFICATION_PENDING
+    payment.updated_by = actor
+    payment.save(update_fields=("status", "updated_by", "updated_at"))
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
+        previous_status=previous,
+        new_status=payment.status,
+        reason="Customer acknowledged the prepaid terms and submitted payment for verification.",
+    )
+    from apps.appointments.notification_events import notify_payment_submitted
+
+    notify_payment_submitted(appointment)
+    return appointment
+
+
+@transaction.atomic
+def verify_customer_payment(appointment, *, actor, reference="", note=""):
+    appointment = Appointment.objects.select_for_update(of=("self",)).select_related(
+        "originating_request", "payment", "patient", "therapy", "clinic"
+    ).get(pk=appointment.pk)
+    payment = AppointmentPayment.objects.select_for_update().get(appointment=appointment)
+    if payment.status == AppointmentPayment.Status.PAID:
+        return appointment
+    if payment.status != AppointmentPayment.Status.VERIFICATION_PENDING:
+        raise ValidationError("The customer has not submitted this payment for verification.")
+    previous_payment_status = payment.status
+    payment.status = AppointmentPayment.Status.PAID
+    payment.paid_at = timezone.now()
+    payment.reference = reference.strip()[:120]
+    payment.note = note.strip()[:500]
+    payment.updated_by = actor
+    payment.save(update_fields=(
+        "status", "paid_at", "reference", "note", "updated_by", "updated_at",
+    ))
+    source = appointment.originating_request
+    if source is not None and source.status == AppointmentRequest.Status.PENDING:
+        previous_request_status = source.status
+        source.status = AppointmentRequest.Status.APPROVED
+        source.save(update_fields=("status", "updated_at"))
+        AppointmentRequestAuditEvent.objects.create(
+            appointment_request=source,
+            organization=appointment.organization,
+            actor=actor,
+            event=AppointmentRequestAuditEvent.Event.ACCEPTED,
+            previous_status=previous_request_status,
+            new_status=source.status,
+            internal_note="Payment verified by Owner.",
+        )
+    previous_appointment_status = appointment.status
+    if appointment.status == Appointment.Status.PENDING_ASSIGNMENT:
+        appointment.status = Appointment.Status.SCHEDULED
+        appointment.updated_by = actor
+        appointment.save(update_fields=("status", "updated_by", "updated_at"))
+        AppointmentAuditEvent.objects.create(
+            appointment=appointment,
+            organization=appointment.organization,
+            actor=actor,
+            event=AppointmentAuditEvent.Event.STATUS_CHANGED,
+            previous_status=previous_appointment_status,
+            new_status=appointment.status,
+            reason="Booking confirmed after Owner payment verification.",
+        )
+    AppointmentAuditEvent.objects.create(
+        appointment=appointment,
+        organization=appointment.organization,
+        actor=actor,
+        event=AppointmentAuditEvent.Event.PAYMENT_STATUS_CHANGED,
+        previous_status=previous_payment_status,
+        new_status=payment.status,
+        reason="Payment verified by Owner.",
+    )
+    from apps.appointments.notification_events import notify_payment_confirmed
+
+    notify_payment_confirmed(appointment)
     return appointment
 
 
