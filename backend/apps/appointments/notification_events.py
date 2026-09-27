@@ -258,6 +258,11 @@ def notify_payment_confirmed(appointment):
 
 
 def notify_payment_submitted(appointment):
+    request_id = appointment.originating_request_id
+    target_url = (
+        f"/owner?request={request_id}#appointment-requests"
+        if request_id else "/owner#appointment-requests"
+    )
     notify_owners(
         organization=appointment.organization,
         category=Notification.Category.PAYMENTS,
@@ -266,7 +271,7 @@ def notify_payment_submitted(appointment):
         message=f"{_context(appointment)}.",
         related_object_type="appointment",
         related_object_id=appointment.id,
-        target_url="/owner/payments",
+        target_url=target_url,
         action_required=True,
         dedupe_key=f"appointment:{appointment.id}:payment:verification-pending",
     )

@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.accounts.models import Notification, Role
 from apps.accounts.notification_services import notify_user
-from apps.appointments.models import Appointment, AppointmentRating, AppointmentReminder
+from apps.appointments.models import Appointment, AppointmentRating, AppointmentReminder, AppointmentRequest
 from apps.appointments.notification_events import (
     notify_cancelled,
     notify_payment_confirmed,
@@ -177,10 +177,20 @@ def test_assignment_and_response_emit_intended_role_notifications(api_client):
 
 def test_reschedule_cancel_status_payment_and_rating_event_notifications():
     values = setup_domain("notification-events")
-    organization, _, owner, _, _, physio, customer, *_ = values
+    organization, _, owner, _, _, physio, customer, _, _, therapy = values
     # Build through the tested API helper without hiding these event-specific assertions.
     from rest_framework.test import APIClient
     appointment = create_scheduled(APIClient(), values)
+    source = AppointmentRequest.objects.create(
+        organization=organization, creator=customer, therapy=therapy,
+        patient_name="Notification customer", age=30, gender="FEMALE", mobile_number="9876543210",
+        session_preference="SINGLE", preferred_date=timezone.localdate() + timedelta(days=1),
+        preferred_time=datetime.strptime("10:00", "%H:%M").time(), problem_description="Wellness support",
+        pain_area="Back", problem_duration="One week", address="Shastri Nagar", city="Meerut",
+        pin_code="250004", landmark="Near park", status=AppointmentRequest.Status.APPROVED,
+    )
+    appointment.originating_request = source
+    appointment.save(update_fields=("originating_request",))
     appointment.reschedule_count = 1
     notify_rescheduled(appointment)
     notify_cancelled(appointment)
@@ -198,7 +208,8 @@ def test_reschedule_cancel_status_payment_and_rating_event_notifications():
     assert Notification.objects.filter(recipient=customer, notification_type="APPOINTMENT_CANCELLED").exists()
     assert Notification.objects.filter(recipient=customer, notification_type="APPOINTMENT_IN_PROGRESS").exists()
     assert Notification.objects.filter(recipient=owner, notification_type="APPOINTMENT_COMPLETED").exists()
-    assert Notification.objects.filter(recipient=owner, notification_type="PAYMENT_SUBMITTED").exists()
+    payment_submitted = Notification.objects.get(recipient=owner, notification_type="PAYMENT_SUBMITTED")
+    assert payment_submitted.target_url == f"/owner?request={appointment.originating_request_id}#appointment-requests"
     assert Notification.objects.filter(recipient=customer, notification_type="PAYMENT_CONFIRMED").exists()
     assert not Notification.objects.filter(recipient=physio.user, notification_type="PAYMENT_CONFIRMED").exists()
     assert Notification.objects.filter(recipient=physio.user, notification_type="RATING_SUBMITTED").exists()

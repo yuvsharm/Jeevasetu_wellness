@@ -10,6 +10,9 @@ import type { NotificationItem, NotificationPage, NotificationSummary } from "@/
 const POLL_INTERVAL_MS = 45_000;
 
 function notificationTarget(item: NotificationItem) {
+  if (item.notification_type === "PAYMENT_SUBMITTED" && item.target_url === "/owner/payments") {
+    return "/owner#appointment-requests";
+  }
   if (item.notification_type === "RATING_REMINDER" && !item.target_url.includes("#")) {
     return `${item.target_url}#rating`;
   }

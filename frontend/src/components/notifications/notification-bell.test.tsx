@@ -79,6 +79,20 @@ describe("NotificationBell", () => {
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/customer/appointments/appointment-1#rating"));
   });
 
+  it("routes payment verification to the matching Owner appointment request", async () => {
+    const paymentNotification = { ...notification, notification_type: "PAYMENT_SUBMITTED", title: "Payment submitted for verification", target_url: "/owner?request=request-1#appointment-requests" };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => String(input).includes("/read?")
+      ? response({ ...paymentNotification, is_read: true })
+      : String(input).startsWith("/api/notifications?")
+        ? response({ ...summary, count: 1, next: null, previous: null, results: [paymentNotification] })
+        : response(summary));
+    render(<NotificationBell role="OWNER" onSummary={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Notifications, 1 unread/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Payment submitted for verification/i }));
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/owner?request=request-1#appointment-requests"));
+    expect(navigation.push).not.toHaveBeenCalledWith("/owner/payments");
+  });
+
   it("does not let an older count response restore the badge after a notification is read", async () => {
     let resolveStaleCount!: (value: Response) => void;
     const staleCount = new Promise<Response>((resolve) => { resolveStaleCount = resolve; });
