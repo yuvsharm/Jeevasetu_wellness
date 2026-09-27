@@ -51,8 +51,6 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   const [familyDraft, setFamilyDraft] = useState({ full_name: "", age: "", gender: "", relationship: "" });
   const [submitted, setSubmitted] = useState<AppointmentRequest | null>(null);
   const [stage, setStage] = useState<"details" | "review" | "payment" | "pending">("details");
-  const [paymentAcknowledged, setPaymentAcknowledged] = useState(false);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [differentAddress, setDifferentAddress] = useState(false);
   const [serviceAddress, setServiceAddress] = useState<ServiceAddress>(emptyServiceAddress());
   const [savePrimaryAddress, setSavePrimaryAddress] = useState(false);
@@ -172,19 +170,8 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
       }),
     }),
     onSuccess: (value) => {
-      setPaymentAcknowledged(false);
-      setCopyState("idle");
       setSubmitted(value);
       setStage("payment");
-    },
-  });
-  const paymentSubmission = useMutation({
-    mutationFn: (appointmentId: string) => requestJson<AppointmentRequest["appointment"]>(`/api/schedule/my-appointments/${appointmentId}/payment-submission`, {
-      method: "POST", body: JSON.stringify({ acknowledged: true }),
-    }),
-    onSuccess: (appointment) => {
-      setSubmitted((current) => current ? { ...current, appointment: appointment ?? current.appointment } : current);
-      setStage("pending");
     },
   });
   const confirmationQuery = useQuery({
@@ -216,11 +203,11 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
   const currentSubmission = confirmationQuery.data ?? submitted;
   if (currentSubmission?.appointment?.payment_status === "PAID") return <PaymentConfirmed request={currentSubmission} />;
   if (submitted && stage === "pending") return <PaymentDetailsReceived request={currentSubmission ?? submitted} />;
-  if (submitted && stage === "payment") return <section className="card mx-auto max-w-2xl overflow-hidden"><div className="max-h-[85vh] overflow-y-auto p-5 sm:p-8"><p className="eyebrow">Secure prepaid booking</p><h2 className="mt-2 font-serif text-3xl text-[#103c27]">Complete payment</h2><PaymentSummary request={submitted}/><div className="mx-auto mt-5 w-full max-w-72 overflow-hidden rounded-2xl bg-white"><div className="relative aspect-[1012/1181] w-full overflow-hidden"><Image src={OWNER_QR_PATH} alt="JeevaSetu owner UPI payment QR code" width={1012} height={1601} unoptimized className="absolute inset-x-0 h-auto w-full max-w-none" style={{top:"-35.56%"}}/></div></div><div className="mt-4 rounded-xl bg-slate-50 p-4"><span className="text-xs font-bold uppercase tracking-wide text-slate-500">UPI ID</span><div className="mt-1 flex flex-wrap items-center justify-between gap-2"><code className="break-all text-base font-bold">{OWNER_UPI_ID}</code><button type="button" onClick={async()=>{try{await navigator.clipboard.writeText(OWNER_UPI_ID);setCopyState("copied")}catch{setCopyState("error")}}} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">Copy</button></div>{copyState==="copied"&&<p role="status" className="mt-1 text-sm font-semibold text-emerald-800">UPI ID copied.</p>}{copyState==="error"&&<p role="alert" className="mt-1 text-sm text-red-700">Copy is unavailable. Select the UPI ID above.</p>}</div><PaymentTerms/><label className="mt-5 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 font-semibold"><input type="checkbox" checked={paymentAcknowledged} onChange={event=>setPaymentAcknowledged(event.target.checked)} className="mt-1 size-5"/>I understand and accept the payment and booking terms above.</label><button type="button" disabled={!paymentAcknowledged||paymentSubmission.isPending} onClick={()=>submitted.appointment&&paymentSubmission.mutate(submitted.appointment.id)} className="button-primary mt-4 w-full disabled:opacity-50">{paymentSubmission.isPending?"Submitting…":"I Have Paid"}</button>{paymentSubmission.isError&&<p role="alert" className="mt-3 text-red-700">{paymentSubmission.error.message}</p>}</div></section>;
+  if (submitted && stage === "payment") return <AppointmentPayment request={submitted} onSubmitted={(appointment)=>{setSubmitted(current=>current?{...current,appointment:appointment??current.appointment}:current);setStage("pending")}}/>;
   if (stage === "review") return <section className="card p-5 sm:p-8"><p className="eyebrow">Review booking</p><h2 className="mt-2 font-serif text-3xl text-[#103c27]">Check the visit before payment</h2><dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2"><ReviewInfo label="Recipient" value={familyQuery.data?.find(value=>value.id===familyMember)?.full_name||accountHolderName}/><ReviewInfo label="Therapies" value={selectedNames.join(", ")}/><ReviewInfo label="Date and time" value={customerDateTime(preferredDate,preferredTime)}/><ReviewInfo label="Amount" value={quoteQuery.data?`₹${Number(quoteQuery.data.final_amount).toLocaleString("en-IN")}`:"Unavailable"}/><ReviewInfo label="Service address" value={differentAddress?`${serviceAddress.address_line_1}, ${serviceAddress.city}, ${serviceAddress.region} ${serviceAddress.pin_code}`:profileQuery.data?.address?`${profileQuery.data.address.address_line_1}, ${profileQuery.data.address.city}, ${profileQuery.data.address.region} ${profileQuery.data.address.pin_code}`:"Unavailable"}/></dl><div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><button type="button" className="button-secondary" onClick={()=>setStage("details")}>Edit details</button><button type="button" disabled={submit.isPending} className="button-primary" onClick={()=>submit.mutate()}>{submit.isPending?"Preparing payment…":"Proceed to Payment"}</button></div>{submit.isError&&<p role="alert" className="mt-3 text-red-700">{submit.error.message}</p>}</section>;
 
   const error = submit.error instanceof Error ? submit.error.message : "";
-  return <form className="card space-y-7 p-5 sm:p-8" onSubmit={(event) => { event.preventDefault(); submit.reset(); paymentSubmission.reset(); setStage("review"); }}>
+  return <form className="card space-y-7 p-5 sm:p-8" onSubmit={(event) => { event.preventDefault(); submit.reset(); setStage("review"); }}>
     <div><p className="eyebrow">Authenticated booking</p><h2 className="mt-2 font-serif text-3xl text-[#103c27]">Choose care and a preferred slot</h2><p className="mt-2 text-sm text-[#5b6c63]">Your verified profile and primary service address will be used automatically.</p></div>
 
     <section className="rounded-2xl border border-slate-200 p-4" aria-label="Booking service address"><h3 className="font-semibold text-[#163c2a]">Service address</h3>{profileQuery.isPending?<p className="mt-2 text-sm text-slate-600">Loading your primary service address…</p>:profileQuery.data?.address?<p className="mt-2 text-sm">{profileQuery.data.address.address_line_1}, {profileQuery.data.address.city}, {profileQuery.data.address.region} {profileQuery.data.address.pin_code}</p>:<p className="mt-2 text-sm text-amber-800">Your primary address could not be loaded.</p>}<label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={differentAddress} onChange={event=>{const checked=event.target.checked;setDifferentAddress(checked);setServiceAddressConfirmed(false);if(checked)setServiceAddress(profileQuery.data?.address??emptyServiceAddress());else setSavePrimaryAddress(false)}}/>Use a different location for this booking</label></section>
@@ -254,6 +241,17 @@ export function BookingForm({ initialTherapy = "", initialPackage = "", initialO
     <button disabled={offerUnavailable || dateOutsideOfferWindow || !offerUnlocked || !effectiveTherapies.length || !preferredDate || !preferredTime || quoteQuery.isPending || quoteQuery.isError || (differentAddress&&!serviceAddressConfirmed)} className="button-primary w-full disabled:opacity-50">Review Booking</button>
     {submit.error instanceof ClientApiError && submit.error.fieldErrors && <ul className="text-sm text-red-700">{Object.values(submit.error.fieldErrors).map((value) => <li key={value}>{value}</li>)}</ul>}
   </form>;
+}
+
+export function AppointmentPayment({request,onSubmitted}:{request:AppointmentRequest;onSubmitted:(appointment:AppointmentRequest["appointment"])=>void}){
+  const [paymentAcknowledged,setPaymentAcknowledged]=useState(false);
+  const [copyState,setCopyState]=useState<"idle"|"copied"|"error">("idle");
+  const paymentSubmission=useMutation({
+    mutationFn:(appointmentId:string)=>requestJson<AppointmentRequest["appointment"]>(`/api/schedule/my-appointments/${appointmentId}/payment-submission`,{method:"POST",body:JSON.stringify({acknowledged:true})}),
+    onSuccess:onSubmitted,
+  });
+  const appointmentId=request.appointment?.id;
+  return <section className="card mx-auto max-w-2xl overflow-hidden"><div className="max-h-[85vh] overflow-y-auto p-5 sm:p-8"><p className="eyebrow">Secure prepaid booking</p><h2 className="mt-2 font-serif text-3xl text-[#103c27]">Complete payment</h2><PaymentSummary request={request}/><div className="mx-auto mt-5 w-full max-w-72 overflow-hidden rounded-2xl bg-white"><div className="relative aspect-[1012/1181] w-full overflow-hidden"><Image src={OWNER_QR_PATH} alt="JeevaSetu owner UPI payment QR code" width={1012} height={1601} unoptimized className="absolute inset-x-0 h-auto w-full max-w-none" style={{top:"-35.56%"}}/></div></div><div className="mt-4 rounded-xl bg-slate-50 p-4"><span className="text-xs font-bold uppercase tracking-wide text-slate-500">UPI ID</span><div className="mt-1 flex flex-wrap items-center justify-between gap-2"><code className="break-all text-base font-bold">{OWNER_UPI_ID}</code><button type="button" onClick={async()=>{try{await navigator.clipboard.writeText(OWNER_UPI_ID);setCopyState("copied")}catch{setCopyState("error")}}} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">Copy</button></div>{copyState==="copied"&&<p role="status" className="mt-1 text-sm font-semibold text-emerald-800">UPI ID copied.</p>}{copyState==="error"&&<p role="alert" className="mt-1 text-sm text-red-700">Copy is unavailable. Select the UPI ID above.</p>}</div><PaymentTerms/><label className="mt-5 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 font-semibold"><input type="checkbox" checked={paymentAcknowledged} onChange={event=>setPaymentAcknowledged(event.target.checked)} className="mt-1 size-5"/>I understand and accept the payment and booking terms above.</label><button type="button" disabled={!appointmentId||!paymentAcknowledged||paymentSubmission.isPending} onClick={()=>appointmentId&&paymentSubmission.mutate(appointmentId)} className="button-primary mt-4 w-full disabled:opacity-50">{paymentSubmission.isPending?"Submitting…":"I Have Paid"}</button>{paymentSubmission.isError&&<p role="alert" className="mt-3 text-red-700">{paymentSubmission.error.message}</p>}</div></section>;
 }
 
 function PaymentTerms(){return <aside className="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><h3 className="font-bold">Important payment terms</h3><ul className="mt-2 list-disc space-y-1 pl-5"><li>Payment is required to confirm booking.</li><li>Payment is non-refundable.</li><li>A confirmed appointment cannot be cancelled or refunded through the normal booking flow.</li><li>Slot and therapist confirmation follow payment verification.</li></ul></aside>}
