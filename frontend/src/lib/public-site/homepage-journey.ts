@@ -30,10 +30,10 @@ export const journeySteps: JourneyStep[] = [
   },
   {
     number: "04",
-    title: "JeevaSetu confirms your professional",
+    title: "NuriPain Ease confirms your professional",
     description: "Our team reviews your request and assigns a suitable verified professional.",
     image: "/images/journey/confirm-professional.webp",
-    imageAlt: "JeevaSetu coordinator confirming a suitable professional",
+    imageAlt: "NuriPain Ease coordinator confirming a suitable professional",
   },
   {
     number: "05",

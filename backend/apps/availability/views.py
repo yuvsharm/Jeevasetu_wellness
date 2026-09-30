@@ -162,7 +162,7 @@ class CustomerSlotDiscoveryView(GenericAPIView):
         hours = ClinicOperatingHours.objects.filter(clinic=profile.clinic, is_active=True).first()
         if hours is None:
             return Response({
-                "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu.",
+                "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact NuriPain Ease.",
                 "code": "OPERATING_HOURS_UNAVAILABLE",
             }, status=409)
         window = hours.window_for_weekday(data["date"].weekday())

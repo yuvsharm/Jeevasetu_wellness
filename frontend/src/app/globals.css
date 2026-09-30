@@ -153,7 +153,7 @@ input {
   .booking-entry { border-radius:1.5rem; }
 }
 
-/* Stage C: continuously moving JeevaSetu feature showcase */
+/* Stage C: continuously moving NuriPain Ease feature showcase */
 .showcase-section { background: linear-gradient(180deg,#fffdf8 0%,#eef4e9 100%); padding-block: clamp(7rem,10vw,10rem); }
 .showcase-viewport { overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; touch-action: pan-x; }
 .showcase-viewport::-webkit-scrollbar { display: none; }

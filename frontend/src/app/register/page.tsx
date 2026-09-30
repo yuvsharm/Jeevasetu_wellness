@@ -5,7 +5,7 @@ import { RegistrationForm } from "@/components/auth/auth-forms";
 
 export default function RegisterPage() {
   return (
-    <AuthCard title="Create your account" description="Register your identity. Organization access and roles remain controlled by JeevaSetu policy.">
+    <AuthCard title="Create your account" description="Register your identity. Organization access and roles remain controlled by NuriPain Ease policy.">
       <Suspense fallback={null}>
         <RegistrationForm />
       </Suspense>

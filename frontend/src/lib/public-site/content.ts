@@ -3,7 +3,8 @@ export const contact = {
   phoneHref: "tel:+919084401814",
   whatsapp: "https://wa.me/919084401814?text=Namaste%2C%20I%20would%20like%20to%20book%20an%20Ayurvedic%20home%20service.",
   email: "jeevasetu21@gmail.com",
-  address: "163 C Block, Shastri Nagar, Meerut, Uttar Pradesh",
+  emailLabel: "Email NuriPain Ease",
+  address: "Meerut",
 };
 
 export const therapies = [

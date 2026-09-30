@@ -30,7 +30,7 @@ class CompetencySerializer(serializers.ModelSerializer):
 
     def validate_therapy(self, value):
         if not value.is_active or value.organization_id != self.context["request"].organization.id:
-            raise serializers.ValidationError("Select an approved JeevaSetu service.")
+            raise serializers.ValidationError("Select an approved NuriPain Ease service.")
         return value
 
 
@@ -265,7 +265,7 @@ class PublicPractitionerSerializer(serializers.ModelSerializer):
         return derived_age(value)
 
     def get_availability_badge(self, value):
-        return "Available with JeevaSetu"
+        return "Available with NuriPain Ease"
 
     display_name = serializers.CharField(source="user.get_full_name", read_only=True)
     highest_qualification = serializers.SerializerMethodField()

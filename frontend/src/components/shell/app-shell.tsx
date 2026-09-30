@@ -24,7 +24,7 @@ export function AppShell({ session, role, title, children }: { session: Session;
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary>({ unread_count: 0, category_counts: {} });
   const pathname = usePathname();
   const router = useRouter();
-  const displayName = `${session.user.first_name} ${session.user.last_name}`.trim() || "JeevaSetu user";
+  const displayName = `${session.user.first_name} ${session.user.last_name}`.trim() || "NuriPain Ease user";
   useEffect(() => {
     if (role !== "PHYSIOTHERAPIST" && role !== "CUSTOMER") return;
     let live = true;

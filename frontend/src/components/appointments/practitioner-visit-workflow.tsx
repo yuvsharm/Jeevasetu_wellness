@@ -352,7 +352,7 @@ export function PractitionerVisitWorkflow() {
                 {completion.isPending ? "Confirming…" : "Confirm Completion & Payment"}
               </button>
             </div>
-            {completion.isError && <p role="alert" className="mt-3 text-red-700">{completion.error.message === "Something went wrong. Please try again." ? "Completion and payment could not be recorded. Please retry. If the problem continues, contact JeevaSetu support." : completion.error.message}</p>}
+            {completion.isError && <p role="alert" className="mt-3 text-red-700">{completion.error.message === "Something went wrong. Please try again." ? "Completion and payment could not be recorded. Please retry. If the problem continues, contact NuriPain Ease support." : completion.error.message}</p>}
           </div>
         </div>
       )}
@@ -374,14 +374,14 @@ export function PractitionerVisitWorkflow() {
             >
               <span aria-hidden="true">×</span>
             </button>
-            <h3 id="payment-qr-dialog-title" className="pr-12 text-xl font-bold">Payment to JeevaSetu / Owner</h3>
+            <h3 id="payment-qr-dialog-title" className="pr-12 text-xl font-bold">Payment to NuriPain Ease / Owner</h3>
             <p className="mt-2 text-sm text-slate-600">Scan only for this appointment.</p>
             <p className="mt-3 text-2xl font-black text-emerald-900">Amount: {formatAmount(paymentQrAppointment.payment_amount_due)}</p>
             <div className="mx-auto mt-4 w-full max-w-80 overflow-hidden rounded-2xl bg-white">
               <div className="relative aspect-[1012/1181] w-full overflow-hidden">
                 <Image
                   src={OWNER_QR_PATH}
-                  alt="JeevaSetu owner UPI payment QR code"
+                  alt="NuriPain Ease owner UPI payment QR code"
                   width={1012}
                   height={1601}
                   loading="eager"
@@ -428,7 +428,7 @@ function PaymentToOwner({
 }) {
   return (
     <section
-      aria-label="Payment to JeevaSetu owner"
+      aria-label="Payment to NuriPain Ease owner"
       className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-3 sm:p-5"
     >
       {item.payment_status === "PAID" ? <p className="font-bold text-emerald-900">Payment confirmed</p> : <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-lg font-black text-emerald-900">Payment pending · {formatAmount(item.payment_amount_due)}</p><button type="button" onClick={(event) => onShowQr(event.currentTarget)} className="min-h-11 rounded-xl border border-emerald-700 px-4 font-bold text-emerald-800">Show Payment QR</button></div>}

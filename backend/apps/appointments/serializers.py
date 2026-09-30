@@ -1347,7 +1347,7 @@ class AuthenticatedAppointmentRequestSerializer(serializers.Serializer):
         except DjangoValidationError as error:
             if "operating hours have not been configured" in " ".join(error.messages).lower():
                 raise serializers.ValidationError({
-                    "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu."
+                    "detail": "Online booking is temporarily unavailable because service hours have not been configured. Please contact NuriPain Ease."
                 }) from error
             raise serializers.ValidationError({"preferred_time": error.messages}) from error
         slots = discover_slots(

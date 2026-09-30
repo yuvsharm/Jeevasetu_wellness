@@ -22,8 +22,8 @@ pytestmark = pytest.mark.django_db
 
 def setup_identity(role):
     organization = Organization.objects.create(
-        legal_name="JeevaSetu",
-        display_name="JeevaSetu",
+        legal_name="NuriPain Ease",
+        display_name="NuriPain Ease",
         slug=f"org-{role.lower()}",
         timezone="Asia/Kolkata",
         default_currency="INR",
@@ -275,7 +275,7 @@ def test_authenticated_booking_fails_closed_without_operating_hours(api_client):
         format="json", **tenant(organization.slug),
     )
     assert response.status_code == 400
-    assert str(response.data["detail"][0]) == "Online booking is temporarily unavailable because service hours have not been configured. Please contact JeevaSetu."
+    assert str(response.data["detail"][0]) == "Online booking is temporarily unavailable because service hours have not been configured. Please contact NuriPain Ease."
 
 
 def test_direct_customer_request_inside_advance_notice_is_rejected(api_client):

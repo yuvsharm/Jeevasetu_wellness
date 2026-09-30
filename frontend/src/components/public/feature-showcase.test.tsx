@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { enabledPublicFeatures, publicFeatures } from "@/lib/public-site/features";
 import { FeatureShowcase } from "./feature-showcase";
 
-describe("JeevaSetu feature showcase", () => {
+describe("NuriPain Ease feature showcase", () => {
   it("renders enabled features in configured order and excludes disabled media", () => {
     render(<FeatureShowcase/>);
     const expected = enabledPublicFeatures();

@@ -393,7 +393,7 @@ export function EnrollmentForm() {
               Practitioner application
             </p>
             <h1 className="mt-2 text-2xl font-bold sm:text-3xl">
-              Build your JeevaSetu practitioner profile
+              Build your NuriPain Ease practitioner profile
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-emerald-50">
               Your private draft is visible only to you and authorized
@@ -1265,7 +1265,7 @@ function Review({
       <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
         <p className="text-sm text-emerald-950">
           Submitting sends this application and its private documents to
-          JeevaSetu for verification. Operational access is granted only after
+          NuriPain Ease for verification. Operational access is granted only after
           approval.
         </p>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row">
@@ -1296,7 +1296,7 @@ function SubmittedStatus({
   application: PractitionerApplication;
 }) {
   const title = application.status === "APPROVED"
-    ? "Congratulations — You are now approved to work with JeevaSetu."
+    ? "Congratulations — You are now approved to work with NuriPain Ease."
     : application.status === "REJECTED"
       ? "Application rejected"
       : application.status === "UNDER_REVIEW"
@@ -1313,7 +1313,7 @@ function SubmittedStatus({
         <h1 className="mt-2 text-3xl font-bold">{title}</h1>
         <p className="mt-3 text-emerald-50">
           Thank you. Your application is securely saved and is now available to
-          JeevaSetu reviewers.
+          NuriPain Ease reviewers.
         </p>
       </div>
       <div className="p-6 sm:p-9">
@@ -1345,7 +1345,7 @@ function SubmittedStatus({
           <p className="mt-5 rounded-xl bg-red-50 p-4 text-red-900"><strong>Rejection reason:</strong> {application.rejection_reason}</p>
         )}
         {application.status === "UNDER_REVIEW" && (
-          <p className="mt-5 rounded-xl bg-emerald-50 p-4 text-emerald-900">JeevaSetu is reviewing your application.</p>
+          <p className="mt-5 rounded-xl bg-emerald-50 p-4 text-emerald-900">NuriPain Ease is reviewing your application.</p>
         )}
         {application.status === "APPROVED" && (
           <a href="/physiotherapist" className="mt-5 grid min-h-12 place-items-center rounded-xl bg-emerald-700 px-5 font-bold text-white">Open Practitioner Dashboard</a>

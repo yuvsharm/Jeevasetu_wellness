@@ -113,7 +113,7 @@ describe("offer booking", () => {
     expect(screen.queryByText("Payment is non-refundable.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Proceed to Payment" }));
     expect(await screen.findByRole("heading", { name: "Complete payment" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "JeevaSetu owner UPI payment QR code" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "NuriPain Ease owner UPI payment QR code" })).toBeInTheDocument();
     expect(screen.getByText("7351150555@ptsbi")).toBeInTheDocument();
     expect(screen.getByText("Payment is non-refundable.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));

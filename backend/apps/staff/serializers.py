@@ -478,6 +478,6 @@ class StaffCreateSerializer(StaffProfileSerializer):
         except (IntegrityError, DjangoValidationError) as error:
             if User.objects.filter(mobile_number=mobile).exists():
                 raise serializers.ValidationError({
-                    "mobile": "This mobile number is already registered with JeevaSetu."
+                    "mobile": "This mobile number is already registered with NuriPain Ease."
                 }) from error
             raise serializers.ValidationError("Email already exists, or the staff profile is invalid.") from error

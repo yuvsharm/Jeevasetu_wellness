@@ -7,7 +7,7 @@ describe("homepage customer journey", () => {
       "Choose your therapy",
       "Select date & time",
       "Login/Register & request booking",
-      "JeevaSetu confirms your professional",
+      "NuriPain Ease confirms your professional",
       "Professional visits your home",
       "Verify & complete",
     ]);

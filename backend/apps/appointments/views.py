@@ -145,7 +145,7 @@ class OwnerAnalyticsCsvView(OwnerAnalyticsView):
             f'attachment; filename="owner-business-summary-{data["scope"]["start_date"]}-to-{data["scope"]["end_date"]}.csv"'
         )
         writer = csv.writer(response)
-        writer.writerow(("JeevaSetu Owner Business Summary", request.organization.display_name))
+        writer.writerow(("NuriPain Ease Owner Business Summary", request.organization.display_name))
         writer.writerow(("Date scope", data["scope"]["start_date"], data["scope"]["end_date"], data["scope"]["timezone"]))
         writer.writerow(())
         writer.writerow(("KPI", "Value"))

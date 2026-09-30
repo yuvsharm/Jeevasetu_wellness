@@ -520,16 +520,16 @@ class PractitionerRegistrationView(APIView):
             )
             if not owner_created:
                 raise ValidationError({
-                    "mobile_number": "This mobile number is already registered with JeevaSetu. Please sign in to continue."
+                    "mobile_number": "This mobile number is already registered with NuriPain Ease. Please sign in to continue."
                 })
             activated = True
         else:
             if self.activation_only:
                 raise ValidationError({
-                    "mobile_number": "No activation-pending therapist account was found. Apply to join JeevaSetu instead."
+                    "mobile_number": "No activation-pending therapist account was found. Apply to join NuriPain Ease instead."
                 })
             if data.get("email") and User.objects.filter(email__iexact=data["email"]).exists():
-                raise ValidationError({"email": "This email is already registered with JeevaSetu."})
+                raise ValidationError({"email": "This email is already registered with NuriPain Ease."})
             if not data.get("date_of_birth"):
                 raise ValidationError({"date_of_birth": "Date of birth is required."})
             names = data["full_name"].strip().split(maxsplit=1)

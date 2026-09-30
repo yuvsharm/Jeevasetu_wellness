@@ -51,7 +51,7 @@ describe("public website", () => {
     }
     expect(screen.queryByText(/Runtime OTP Primary Therapy/i)).not.toBeInTheDocument();
     expect(screen.getByRole("heading",{name:"Login/Register & request booking"})).toBeInTheDocument();
-    expect(screen.getByRole("heading",{name:"JeevaSetu confirms your professional"})).toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"NuriPain Ease confirms your professional"})).toBeInTheDocument();
     expect(screen.queryByRole("heading",{name:"Manager confirms therapist"})).not.toBeInTheDocument();
   });
 
@@ -74,13 +74,13 @@ describe("public website", () => {
     const therapistsHeading=screen.getByRole("heading",{name:"Available Therapists"});
     expect(screen.getByRole("heading",{name:"Kati Basti"}).compareDocumentPosition(therapistsHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(therapistsHeading.compareDocumentPosition(screen.getByRole("heading",{name:"7 Session Plan"}))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const professionalHeading=screen.getByRole("heading",{name:"Grow your practice with JeevaSetu"});
+    const professionalHeading=screen.getByRole("heading",{name:"Grow your practice with NuriPain Ease"});
     const journeyHeading=screen.getByRole("heading",{name:"From your first choice to a verified home visit"});
     expect(professionalHeading.compareDocumentPosition(journeyHeading)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("img",{name:"JeevaSetu physiotherapist preparing for a professional home-care visit"})).toBeInTheDocument();
+    expect(screen.getByRole("img",{name:"NuriPain Ease physiotherapist preparing for a professional home-care visit"})).toBeInTheDocument();
     expect(screen.getByRole("link",{name:"Apply to Join"})).toHaveAttribute("href","/work-with-us");
     expect(screen.getByRole("link",{name:"Professional Login"})).toHaveAttribute("href","/login");
-    expect(screen.queryByRole("heading",{name:"Join JeevaSetu as a Professional"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading",{name:"Join NuriPain Ease as a Professional"})).not.toBeInTheDocument();
     expect(screen.getByRole("heading",{name:"Questions before you book?"})).toBeInTheDocument();
     expect(screen.getByText("Appointment slots are available during configured service hours.")).toBeInTheDocument();
     expect(screen.queryByText("Appointment slots are coordinated between 9 AM and 6 PM.")).not.toBeInTheDocument();
@@ -89,7 +89,7 @@ describe("public website", () => {
   it("shows real contact information and a safe enquiry acknowledgement", async () => {
     render(<ContactPage />);
     expect(screen.getAllByText("9084401814").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("jeevasetu21@gmail.com").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Email NuriPain Ease").length).toBeGreaterThan(0);
     await userEvent.type(screen.getByLabelText("Name"), "Test Guest");
     await userEvent.type(screen.getByLabelText("Phone"), "9999999999");
     await userEvent.type(screen.getByLabelText(/how can we help/i), "Please share availability.");
