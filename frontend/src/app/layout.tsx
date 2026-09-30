@@ -16,9 +16,9 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: [{ url: "/icons/nuripain-ease-mark.svg", type: "image/svg+xml", sizes: "any" }],
-    shortcut: [{ url: "/icons/nuripain-ease-mark.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/icons/nuripain-ease-mark.svg", type: "image/svg+xml" }],
+    icon: [{ url: "/favicon.ico", sizes: "any" }, { url: "/icons/icon-192.png", type: "image/png", sizes: "192x192" }],
+    shortcut: [{ url: "/favicon.ico", sizes: "any" }],
+    apple: [{ url: "/apple-icon.png", type: "image/png", sizes: "180x180" }],
   },
 };
 
